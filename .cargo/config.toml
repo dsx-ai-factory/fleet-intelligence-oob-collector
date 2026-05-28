@@ -1,0 +1,9 @@
+[target.'cfg(all())']
+rustflags = [
+  "--cfg",
+  "tokio_unstable",
+  "-A",
+  "dependency-on-unit-never-type-fallback",
+  "-A",
+  "unknown_lints",
+]
