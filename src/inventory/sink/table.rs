@@ -2,13 +2,15 @@ use std::error::Error;
 use std::fmt;
 
 use super::InventorySink;
-use crate::inventory::types::NodeInventory;
+use crate::inventory::types::{ChassisInventory, FirmwareInventory, NodeInventory};
 
 #[derive(Default)]
-pub struct TableSink;
+pub struct TableSink {
+    detail: bool,
+}
 
 #[derive(Debug)]
-struct Row {
+struct SummaryRow {
     target: String,
     address: String,
     vendor: String,
@@ -19,39 +21,76 @@ struct Row {
     error: String,
 }
 
+#[derive(Debug)]
+struct NodeDetailRow {
+    target: String,
+    address: String,
+    vendor: String,
+    manager_id: String,
+    manager_ifaces: String,
+    system_id: String,
+    manufacturer: String,
+    model: String,
+    serial: String,
+    power: String,
+    system_ifaces: String,
+    pcie_devices: String,
+}
+
+#[derive(Debug)]
+struct ChassisDetailRow {
+    id: String,
+    manufacturer: String,
+    model: String,
+    serial: String,
+    adapters: String,
+}
+
+#[derive(Debug)]
+struct FirmwareDetailRow {
+    service: String,
+    id: String,
+    version: String,
+    release_date: String,
+}
+
+impl TableSink {
+    pub fn new(detail: bool) -> Self {
+        Self { detail }
+    }
+}
+
 impl InventorySink for TableSink {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        let rows = inventories.iter().map(Row::from).collect::<Vec<_>>();
-        print_table(&rows);
+        let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
+        print_table(
+            &[
+                "Target", "Address", "Vendor", "Manager", "System", "Chassis", "Firmware", "Error",
+            ],
+            rows.iter().map(SummaryRow::values),
+        );
+
+        if self.detail {
+            for inventory in inventories {
+                print_node_details(inventory);
+            }
+        }
+
         Ok(())
     }
 }
 
-impl From<&NodeInventory> for Row {
+impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         let manager = inventory
             .manager
             .as_ref()
-            .map(|manager| format!("{} ({})", manager.id, manager.interface_count))
+            .map(|manager| manager.id.clone())
             .unwrap_or_default();
         let system = inventory
             .system
             .as_ref()
-            .map(|system| {
-                format!(
-                    "{} {} {} {} state={} if={} pcie={}",
-                    system.id,
-                    system.manufacturer.as_deref().unwrap_or(""),
-                    system.model.as_deref().unwrap_or(""),
-                    system.serial_number.as_deref().unwrap_or(""),
-                    system.power_state,
-                    system.interface_count,
-                    system.pcie_device_count
-                )
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-            })
+            .map(|system| system.id.clone())
             .unwrap_or_default();
 
         Self {
@@ -60,49 +99,14 @@ impl From<&NodeInventory> for Row {
             vendor: inventory.vendor.clone().unwrap_or_default(),
             manager,
             system,
-            chassis: summarize_chassis(inventory),
-            firmware: summarize_firmware(inventory),
+            chassis: inventory.chassis.len().to_string(),
+            firmware: inventory.firmware.len().to_string(),
             error: inventory.error.clone().unwrap_or_else(|| "0".to_string()),
         }
     }
 }
 
-fn summarize_chassis(inventory: &NodeInventory) -> String {
-    let Some(chassis) = inventory.chassis.first() else {
-        return "0".to_string();
-    };
-    format!(
-        "{} {} {} {} {} adapters={}",
-        inventory.chassis.len(),
-        chassis.id,
-        chassis.manufacturer.as_deref().unwrap_or(""),
-        chassis.model.as_deref().unwrap_or(""),
-        chassis.serial_number.as_deref().unwrap_or(""),
-        chassis.network_adapter_count
-    )
-    .split_whitespace()
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn summarize_firmware(inventory: &NodeInventory) -> String {
-    let Some(firmware) = inventory.firmware.first() else {
-        return "0".to_string();
-    };
-    format!(
-        "{} {} {} {} {}",
-        inventory.firmware.len(),
-        firmware.service_id,
-        firmware.id,
-        firmware.version.as_deref().unwrap_or(""),
-        firmware.release_date.as_deref().unwrap_or("")
-    )
-    .split_whitespace()
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-impl Row {
+impl SummaryRow {
     fn values(&self) -> [String; 8] {
         [
             self.target.clone(),
@@ -117,23 +121,183 @@ impl Row {
     }
 }
 
-fn print_table(rows: &[Row]) {
-    let headers = [
-        "Target", "Address", "Vendor", "Manager", "System", "Chassis", "Firmware", "Error",
-    ];
+impl From<&NodeInventory> for NodeDetailRow {
+    fn from(inventory: &NodeInventory) -> Self {
+        Self {
+            target: inventory.target.clone(),
+            address: inventory.address.clone(),
+            vendor: inventory.vendor.clone().unwrap_or_default(),
+            manager_id: inventory
+                .manager
+                .as_ref()
+                .map(|manager| manager.id.clone())
+                .unwrap_or_default(),
+            manager_ifaces: inventory
+                .manager
+                .as_ref()
+                .map(|manager| manager.interface_count.to_string())
+                .unwrap_or_default(),
+            system_id: inventory
+                .system
+                .as_ref()
+                .map(|system| system.id.clone())
+                .unwrap_or_default(),
+            manufacturer: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.manufacturer.clone())
+                .unwrap_or_default(),
+            model: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.model.clone())
+                .unwrap_or_default(),
+            serial: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.serial_number.clone())
+                .unwrap_or_default(),
+            power: inventory
+                .system
+                .as_ref()
+                .map(|system| system.power_state.clone())
+                .unwrap_or_default(),
+            system_ifaces: inventory
+                .system
+                .as_ref()
+                .map(|system| system.interface_count.to_string())
+                .unwrap_or_default(),
+            pcie_devices: inventory
+                .system
+                .as_ref()
+                .map(|system| system.pcie_device_count.to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl NodeDetailRow {
+    fn values(&self) -> [String; 12] {
+        [
+            self.target.clone(),
+            self.address.clone(),
+            self.vendor.clone(),
+            self.manager_id.clone(),
+            self.manager_ifaces.clone(),
+            self.system_id.clone(),
+            self.manufacturer.clone(),
+            self.model.clone(),
+            self.serial.clone(),
+            self.power.clone(),
+            self.system_ifaces.clone(),
+            self.pcie_devices.clone(),
+        ]
+    }
+}
+
+impl From<&ChassisInventory> for ChassisDetailRow {
+    fn from(chassis: &ChassisInventory) -> Self {
+        Self {
+            id: chassis.id.clone(),
+            manufacturer: chassis.manufacturer.clone().unwrap_or_default(),
+            model: chassis.model.clone().unwrap_or_default(),
+            serial: chassis.serial_number.clone().unwrap_or_default(),
+            adapters: chassis.network_adapter_count.to_string(),
+        }
+    }
+}
+
+impl ChassisDetailRow {
+    fn values(&self) -> [String; 5] {
+        [
+            self.id.clone(),
+            self.manufacturer.clone(),
+            self.model.clone(),
+            self.serial.clone(),
+            self.adapters.clone(),
+        ]
+    }
+}
+
+impl From<&FirmwareInventory> for FirmwareDetailRow {
+    fn from(firmware: &FirmwareInventory) -> Self {
+        Self {
+            service: firmware.service_id.clone(),
+            id: firmware.id.clone(),
+            version: firmware.version.clone().unwrap_or_default(),
+            release_date: firmware.release_date.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl FirmwareDetailRow {
+    fn values(&self) -> [String; 4] {
+        [
+            self.service.clone(),
+            self.id.clone(),
+            self.version.clone(),
+            self.release_date.clone(),
+        ]
+    }
+}
+
+fn print_node_details(inventory: &NodeInventory) {
+    println!();
+    println!("Node: {} ({})", inventory.target, inventory.address);
+
+    let node_row = NodeDetailRow::from(inventory);
+    print_table(
+        &[
+            "Target",
+            "Address",
+            "Vendor",
+            "Manager",
+            "Mgr Ifaces",
+            "System",
+            "Manufacturer",
+            "Model",
+            "Serial",
+            "Power",
+            "Sys Ifaces",
+            "PCIe",
+        ],
+        std::iter::once(node_row.values()),
+    );
+
+    let chassis_rows = inventory
+        .chassis
+        .iter()
+        .map(ChassisDetailRow::from)
+        .map(|row| row.values());
+    println!("Chassis");
+    print_table(
+        &["ID", "Manufacturer", "Model", "Serial", "Adapters"],
+        chassis_rows,
+    );
+
+    let firmware_rows = inventory
+        .firmware
+        .iter()
+        .map(FirmwareDetailRow::from)
+        .map(|row| row.values());
+    println!("Firmware");
+    print_table(&["Service", "ID", "Version", "Release Date"], firmware_rows);
+}
+
+fn print_table<const N: usize>(headers: &[&str; N], rows: impl IntoIterator<Item = [String; N]>) {
+    let rows = rows.into_iter().collect::<Vec<_>>();
     let mut widths = headers.map(str::len);
-    for row in rows {
-        let values = row.values();
-        for (idx, value) in values.iter().enumerate() {
+    for row in &rows {
+        for (idx, value) in row.iter().enumerate() {
             widths[idx] = widths[idx].max(value.len());
         }
     }
 
     print_separator(&widths);
-    print_row(&headers, &widths);
+    print_row(headers.as_slice(), &widths);
     print_separator(&widths);
-    for row in rows {
-        print_row(&row.values(), &widths);
+    for row in &rows {
+        print_row(row, &widths);
     }
     print_separator(&widths);
 }

@@ -33,6 +33,9 @@ struct InventoryArgs {
 
     #[arg(long)]
     insecure_tls: bool,
+
+    #[arg(long)]
+    detail: bool,
 }
 
 #[tokio::main]
@@ -52,6 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 port: args.port,
                 boot_mac: args.boot_mac,
                 insecure_tls: args.insecure_tls,
+                detail: args.detail,
             })
             .await?
         }

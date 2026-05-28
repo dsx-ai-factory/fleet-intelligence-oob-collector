@@ -56,6 +56,7 @@ cargo build --release
 ```bash
 cargo run -- inventory --config /path/to/.config --insecure-tls
 target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls
+target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls --detail
 ```
 
 The config format matches the Go POC:

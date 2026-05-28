@@ -14,6 +14,7 @@ pub struct InventoryOptions {
     pub port: u16,
     pub boot_mac: Option<MacAddress>,
     pub insecure_tls: bool,
+    pub detail: bool,
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
@@ -27,7 +28,7 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 
     let source = RedfishSource::new(options.port, options.insecure_tls, options.boot_mac);
     let mapper = NicoMapper::default();
-    let sink = TableSink::default();
+    let sink = TableSink::new(options.detail);
 
     let mut inventories = Vec::with_capacity(targets.len());
     for target in targets {
