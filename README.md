@@ -11,12 +11,16 @@ schema.
 ## Structure
 
 ```text
-src/main.rs               CLI entry point
-src/config.rs             target config loading
-src/inventory/source.rs   Redfish/NICo source
-src/inventory/mapper.rs   NICo report to FI inventory mapper
-src/inventory/types.rs    FI inventory model
-src/inventory/sink.rs     CLI table sink
+src/main.rs                    CLI entry point
+src/lib.rs                     library orchestration
+src/config.rs                  target config loading
+src/inventory/types.rs         FI inventory model
+src/inventory/source/mod.rs    source trait
+src/inventory/source/redfish.rs Redfish/NICo source
+src/inventory/mapper/mod.rs    mapper trait
+src/inventory/mapper/nico.rs   NICo report to FI inventory mapper
+src/inventory/sink/mod.rs      sink trait
+src/inventory/sink/table.rs    CLI table sink
 ```
 
 Pipeline:

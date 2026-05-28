@@ -1,6 +1,8 @@
+use std::error::Error;
 use std::fmt;
 
-use super::types::NodeInventory;
+use super::InventorySink;
+use crate::inventory::types::NodeInventory;
 
 #[derive(Default)]
 pub struct TableSink;
@@ -17,10 +19,11 @@ struct Row {
     error: String,
 }
 
-impl TableSink {
-    pub fn write(&self, inventories: &[NodeInventory]) {
+impl InventorySink for TableSink {
+    fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
         let rows = inventories.iter().map(Row::from).collect::<Vec<_>>();
         print_table(&rows);
+        Ok(())
     }
 }
 

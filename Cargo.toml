@@ -9,6 +9,7 @@ name = "bmc-collector"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
 bmc-explorer = { git = "https://github.com/NVIDIA/infra-controller.git", tag = "v0.9.0" }
 clap = { version = "4", features = ["derive", "env"] }
 mac_address = "1.1"

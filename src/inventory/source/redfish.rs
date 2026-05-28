@@ -2,6 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bmc_explorer::{ErrorClass, nv_generate_exploration_report};
 use mac_address::MacAddress;
 use model::site_explorer::EndpointExplorationReport;
@@ -9,6 +10,7 @@ use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
 use nv_redfish::{Bmc, ServiceRoot};
 use url::Url;
 
+use super::{InventorySource, SourceRecord};
 use crate::config::Target;
 
 type RedfishBmc = HttpBmc<nv_redfish::bmc_http::reqwest::Client>;
@@ -19,11 +21,6 @@ pub struct RedfishSource {
     boot_mac: Option<MacAddress>,
 }
 
-pub struct RedfishRecord {
-    pub target: Target,
-    pub result: Result<EndpointExplorationReport, String>,
-}
-
 impl RedfishSource {
     pub fn new(port: u16, insecure_tls: bool, boot_mac: Option<MacAddress>) -> Self {
         Self {
@@ -31,11 +28,6 @@ impl RedfishSource {
             insecure_tls,
             boot_mac,
         }
-    }
-
-    pub async fn collect(&self, target: Target) -> RedfishRecord {
-        let result = self.collect_report(&target).await;
-        RedfishRecord { target, result }
     }
 
     async fn collect_report(&self, target: &Target) -> Result<EndpointExplorationReport, String> {
@@ -50,6 +42,14 @@ impl RedfishSource {
         nv_generate_exploration_report(root, &config)
             .await
             .map_err(|err| err.to_string())
+    }
+}
+
+#[async_trait]
+impl InventorySource for RedfishSource {
+    async fn collect(&self, target: Target) -> SourceRecord {
+        let result = self.collect_report(&target).await;
+        SourceRecord { target, result }
     }
 }
 

@@ -1,15 +1,16 @@
 use model::site_explorer::EndpointExplorationReport;
 
-use super::source::RedfishRecord;
-use super::types::{
+use super::InventoryMapper;
+use crate::inventory::source::SourceRecord;
+use crate::inventory::types::{
     ChassisInventory, FirmwareInventory, ManagerInventory, NodeInventory, SystemInventory,
 };
 
 #[derive(Default)]
 pub struct NicoMapper;
 
-impl NicoMapper {
-    pub fn map(&self, record: RedfishRecord) -> NodeInventory {
+impl InventoryMapper for NicoMapper {
+    fn map(&self, record: SourceRecord) -> NodeInventory {
         let target = record.target;
         match record.result {
             Ok(report) => map_report(target.name, target.address, report),
