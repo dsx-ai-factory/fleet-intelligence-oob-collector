@@ -6,7 +6,7 @@ use mac_address::MacAddress;
 
 #[derive(Debug, Parser)]
 #[command(name = "fleet-intelligence-oob")]
-#[command(about = "Path A OOB collector prototype backed by NICo crates")]
+#[command(about = "Fleet Intelligence OOB collector prototype backed by nv-redfish")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

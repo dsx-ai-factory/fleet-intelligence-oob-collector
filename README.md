@@ -2,11 +2,11 @@
 
 Standalone Rust OOB inventory collector for Fleet Intelligence.
 
-The current MVP collects BMC inventory through Redfish using NICo's
-`bmc-explorer` abstraction pinned to the stable `infra-controller` `v0.9.0`
-tag. The collector keeps a Fleet Intelligence owned inventory model between the
-source and sink so NICo remains the Redfish compatibility layer, not the product
-schema.
+The current MVP collects BMC inventory through Redfish using `nv-redfish`
+directly. NICo's `bmc-explorer` remains useful as a reference implementation,
+but it is not linked into this collector. The collector keeps a Fleet
+Intelligence owned inventory model between the source and sink so Redfish data
+does not become the product schema.
 
 ## Structure
 
@@ -16,9 +16,9 @@ src/lib.rs                     library orchestration
 src/config.rs                  target config loading
 src/inventory/types.rs         FI inventory model
 src/inventory/source/mod.rs    source trait
-src/inventory/source/redfish.rs Redfish/NICo source
+src/inventory/source/redfish.rs nv-redfish source
 src/inventory/mapper/mod.rs    mapper trait
-src/inventory/mapper/nico.rs   NICo report to FI inventory mapper
+src/inventory/mapper/redfish.rs Redfish report to FI inventory mapper
 src/inventory/sink/mod.rs      sink trait
 src/inventory/sink/table.rs    CLI table sink
 ```
@@ -28,7 +28,7 @@ Pipeline:
 ```text
 config targets
   -> RedfishSource
-  -> NicoMapper
+  -> RedfishMapper
   -> NodeInventory
   -> TableSink
 ```

@@ -13,9 +13,12 @@ pub struct TableSink {
 struct SummaryRow {
     target: String,
     address: String,
+    redfish: String,
+    service_uuid: String,
     vendor: String,
     manager: String,
     system: String,
+    system_uuid: String,
     chassis: String,
     firmware: String,
     error: String,
@@ -26,23 +29,34 @@ struct NodeDetailRow {
     target: String,
     address: String,
     vendor: String,
+    redfish: String,
+    service_uuid: String,
     manager_id: String,
+    manager_uuid: String,
+    manager_type: String,
+    manager_model: String,
+    manager_firmware: String,
     manager_ifaces: String,
     system_id: String,
+    system_uuid: String,
     manufacturer: String,
     model: String,
     serial: String,
+    bios: String,
     power: String,
+    cpu: String,
+    memory_gib: String,
     system_ifaces: String,
-    pcie_devices: String,
 }
 
 #[derive(Debug)]
 struct ChassisDetailRow {
     id: String,
+    chassis_type: String,
     manufacturer: String,
     model: String,
     serial: String,
+    part: String,
     adapters: String,
 }
 
@@ -50,6 +64,7 @@ struct ChassisDetailRow {
 struct FirmwareDetailRow {
     service: String,
     id: String,
+    name: String,
     version: String,
     release_date: String,
 }
@@ -65,7 +80,17 @@ impl InventorySink for TableSink {
         let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
         print_table(
             &[
-                "Target", "Address", "Vendor", "Manager", "System", "Chassis", "Firmware", "Error",
+                "Target",
+                "Address",
+                "Redfish",
+                "Service UUID",
+                "Vendor",
+                "Manager",
+                "System",
+                "System UUID",
+                "Chassis",
+                "Firmware",
+                "Error",
             ],
             rows.iter().map(SummaryRow::values),
         );
@@ -92,13 +117,21 @@ impl From<&NodeInventory> for SummaryRow {
             .as_ref()
             .map(|system| system.id.clone())
             .unwrap_or_default();
+        let system_uuid = inventory
+            .system
+            .as_ref()
+            .and_then(|system| system.uuid.clone())
+            .unwrap_or_default();
 
         Self {
             target: inventory.target.clone(),
             address: inventory.address.clone(),
+            redfish: inventory.redfish_version.clone().unwrap_or_default(),
+            service_uuid: inventory.service_uuid.clone().unwrap_or_default(),
             vendor: inventory.vendor.clone().unwrap_or_default(),
             manager,
             system,
+            system_uuid,
             chassis: inventory.chassis.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
             error: inventory.error.clone().unwrap_or_else(|| "0".to_string()),
@@ -107,13 +140,16 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 8] {
+    fn values(&self) -> [String; 11] {
         [
             self.target.clone(),
             self.address.clone(),
+            self.redfish.clone(),
+            self.service_uuid.clone(),
             self.vendor.clone(),
             self.manager.clone(),
             self.system.clone(),
+            self.system_uuid.clone(),
             self.chassis.clone(),
             self.firmware.clone(),
             self.error.clone(),
@@ -127,10 +163,32 @@ impl From<&NodeInventory> for NodeDetailRow {
             target: inventory.target.clone(),
             address: inventory.address.clone(),
             vendor: inventory.vendor.clone().unwrap_or_default(),
+            redfish: inventory.redfish_version.clone().unwrap_or_default(),
+            service_uuid: inventory.service_uuid.clone().unwrap_or_default(),
             manager_id: inventory
                 .manager
                 .as_ref()
                 .map(|manager| manager.id.clone())
+                .unwrap_or_default(),
+            manager_uuid: inventory
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.uuid.clone())
+                .unwrap_or_default(),
+            manager_type: inventory
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.manager_type.clone())
+                .unwrap_or_default(),
+            manager_model: inventory
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.model.clone())
+                .unwrap_or_default(),
+            manager_firmware: inventory
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.firmware_version.clone())
                 .unwrap_or_default(),
             manager_ifaces: inventory
                 .manager
@@ -141,6 +199,11 @@ impl From<&NodeInventory> for NodeDetailRow {
                 .system
                 .as_ref()
                 .map(|system| system.id.clone())
+                .unwrap_or_default(),
+            system_uuid: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.uuid.clone())
                 .unwrap_or_default(),
             manufacturer: inventory
                 .system
@@ -157,40 +220,60 @@ impl From<&NodeInventory> for NodeDetailRow {
                 .as_ref()
                 .and_then(|system| system.serial_number.clone())
                 .unwrap_or_default(),
+            bios: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.bios_version.clone())
+                .unwrap_or_default(),
             power: inventory
                 .system
                 .as_ref()
                 .map(|system| system.power_state.clone())
+                .unwrap_or_default(),
+            cpu: inventory
+                .system
+                .as_ref()
+                .map(format_cpu)
+                .unwrap_or_default(),
+            memory_gib: inventory
+                .system
+                .as_ref()
+                .and_then(|system| system.memory_gib)
+                .map(|memory| memory.to_string())
                 .unwrap_or_default(),
             system_ifaces: inventory
                 .system
                 .as_ref()
                 .map(|system| system.interface_count.to_string())
                 .unwrap_or_default(),
-            pcie_devices: inventory
-                .system
-                .as_ref()
-                .map(|system| system.pcie_device_count.to_string())
-                .unwrap_or_default(),
         }
     }
 }
 
 impl NodeDetailRow {
-    fn values(&self) -> [String; 12] {
-        [
-            self.target.clone(),
-            self.address.clone(),
-            self.vendor.clone(),
-            self.manager_id.clone(),
-            self.manager_ifaces.clone(),
-            self.system_id.clone(),
-            self.manufacturer.clone(),
-            self.model.clone(),
-            self.serial.clone(),
-            self.power.clone(),
-            self.system_ifaces.clone(),
-            self.pcie_devices.clone(),
+    fn values(&self) -> Vec<[String; 2]> {
+        vec![
+            ["Target".to_string(), self.target.clone()],
+            ["Address".to_string(), self.address.clone()],
+            ["Vendor".to_string(), self.vendor.clone()],
+            ["Redfish".to_string(), self.redfish.clone()],
+            ["Service UUID".to_string(), self.service_uuid.clone()],
+            ["Manager".to_string(), self.manager_id.clone()],
+            ["Manager UUID".to_string(), self.manager_uuid.clone()],
+            ["Manager Type".to_string(), self.manager_type.clone()],
+            ["Manager Model".to_string(), self.manager_model.clone()],
+            ["BMC FW".to_string(), self.manager_firmware.clone()],
+            ["Mgr Ifaces".to_string(), self.manager_ifaces.clone()],
+            ["System".to_string(), self.system_id.clone()],
+            ["System UUID".to_string(), self.system_uuid.clone()],
+            ["Manufacturer".to_string(), self.manufacturer.clone()],
+            ["Model".to_string(), self.model.clone()],
+            ["Serial".to_string(), self.serial.clone()],
+            ["BIOS".to_string(), self.bios.clone()],
+            ["Power".to_string(), self.power.clone()],
+            ["CPU".to_string(), self.cpu.clone()],
+            ["Mem GiB".to_string(), self.memory_gib.clone()],
+            ["Sys Ifaces".to_string(), self.system_ifaces.clone()],
         ]
     }
 }
@@ -199,21 +282,25 @@ impl From<&ChassisInventory> for ChassisDetailRow {
     fn from(chassis: &ChassisInventory) -> Self {
         Self {
             id: chassis.id.clone(),
+            chassis_type: chassis.chassis_type.clone().unwrap_or_default(),
             manufacturer: chassis.manufacturer.clone().unwrap_or_default(),
             model: chassis.model.clone().unwrap_or_default(),
             serial: chassis.serial_number.clone().unwrap_or_default(),
+            part: chassis.part_number.clone().unwrap_or_default(),
             adapters: chassis.network_adapter_count.to_string(),
         }
     }
 }
 
 impl ChassisDetailRow {
-    fn values(&self) -> [String; 5] {
+    fn values(&self) -> [String; 7] {
         [
             self.id.clone(),
+            self.chassis_type.clone(),
             self.manufacturer.clone(),
             self.model.clone(),
             self.serial.clone(),
+            self.part.clone(),
             self.adapters.clone(),
         ]
     }
@@ -224,6 +311,7 @@ impl From<&FirmwareInventory> for FirmwareDetailRow {
         Self {
             service: firmware.service_id.clone(),
             id: firmware.id.clone(),
+            name: firmware.name.clone(),
             version: firmware.version.clone().unwrap_or_default(),
             release_date: firmware.release_date.clone().unwrap_or_default(),
         }
@@ -231,10 +319,11 @@ impl From<&FirmwareInventory> for FirmwareDetailRow {
 }
 
 impl FirmwareDetailRow {
-    fn values(&self) -> [String; 4] {
+    fn values(&self) -> [String; 5] {
         [
             self.service.clone(),
             self.id.clone(),
+            self.name.clone(),
             self.version.clone(),
             self.release_date.clone(),
         ]
@@ -246,23 +335,7 @@ fn print_node_details(inventory: &NodeInventory) {
     println!("Node: {} ({})", inventory.target, inventory.address);
 
     let node_row = NodeDetailRow::from(inventory);
-    print_table(
-        &[
-            "Target",
-            "Address",
-            "Vendor",
-            "Manager",
-            "Mgr Ifaces",
-            "System",
-            "Manufacturer",
-            "Model",
-            "Serial",
-            "Power",
-            "Sys Ifaces",
-            "PCIe",
-        ],
-        std::iter::once(node_row.values()),
-    );
+    print_table(&["Attribute", "Value"], node_row.values());
 
     let chassis_rows = inventory
         .chassis
@@ -271,7 +344,15 @@ fn print_node_details(inventory: &NodeInventory) {
         .map(|row| row.values());
     println!("Chassis");
     print_table(
-        &["ID", "Manufacturer", "Model", "Serial", "Adapters"],
+        &[
+            "ID",
+            "Type",
+            "Manufacturer",
+            "Model",
+            "Serial",
+            "Part",
+            "Adapters",
+        ],
         chassis_rows,
     );
 
@@ -281,7 +362,19 @@ fn print_node_details(inventory: &NodeInventory) {
         .map(FirmwareDetailRow::from)
         .map(|row| row.values());
     println!("Firmware");
-    print_table(&["Service", "ID", "Version", "Release Date"], firmware_rows);
+    print_table(
+        &["Service", "ID", "Name", "Version", "Release Date"],
+        firmware_rows,
+    );
+}
+
+fn format_cpu(system: &crate::inventory::types::SystemInventory) -> String {
+    match (system.cpu_count, system.cpu_core_count) {
+        (Some(count), Some(cores)) => format!("{count}/{cores}"),
+        (Some(count), None) => count.to_string(),
+        (None, Some(cores)) => format!("?/{cores}"),
+        (None, None) => String::new(),
+    }
 }
 
 fn print_table<const N: usize>(headers: &[&str; N], rows: impl IntoIterator<Item = [String; N]>) {

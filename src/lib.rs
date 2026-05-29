@@ -3,7 +3,7 @@ pub mod inventory;
 
 use std::error::Error;
 
-use inventory::mapper::{InventoryMapper, NicoMapper};
+use inventory::mapper::{InventoryMapper, RedfishMapper};
 use inventory::sink::{InventorySink, TableSink};
 use inventory::source::{InventorySource, RedfishSource};
 use mac_address::MacAddress;
@@ -27,7 +27,7 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
     }
 
     let source = RedfishSource::new(options.port, options.insecure_tls, options.boot_mac);
-    let mapper = NicoMapper::default();
+    let mapper = RedfishMapper;
     let sink = TableSink::new(options.detail);
 
     let mut inventories = Vec::with_capacity(targets.len());
