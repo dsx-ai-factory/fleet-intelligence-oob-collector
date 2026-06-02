@@ -3,18 +3,25 @@ pub mod inventory;
 
 use std::error::Error;
 
+use futures::stream::{self, StreamExt};
 use inventory::mapper::{InventoryMapper, RedfishMapper};
-use inventory::sink::{InventorySink, TableSink};
+use inventory::sink::{InventorySink, JsonSink, TableSink};
 use inventory::source::{InventorySource, RedfishSource};
-use mac_address::MacAddress;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InventoryFormat {
+    Table,
+    Json,
+}
 
 pub struct InventoryOptions {
     pub config: String,
     pub target: Option<String>,
     pub port: u16,
-    pub boot_mac: Option<MacAddress>,
     pub insecure_tls: bool,
     pub detail: bool,
+    pub format: InventoryFormat,
+    pub concurrency: usize,
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
@@ -26,16 +33,22 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
         }
     }
 
-    let source = RedfishSource::new(options.port, options.insecure_tls, options.boot_mac);
+    let source = RedfishSource::new(options.port, options.insecure_tls)?;
     let mapper = RedfishMapper;
-    let sink = TableSink::new(options.detail);
+    let concurrency = options.concurrency.max(1);
 
-    let mut inventories = Vec::with_capacity(targets.len());
-    for target in targets {
-        let source_record = source.collect(target).await;
-        inventories.push(mapper.map(source_record));
+    let inventories: Vec<_> = stream::iter(targets)
+        .map(|target| async {
+            let record = source.collect(target).await;
+            mapper.map(record)
+        })
+        .buffered(concurrency)
+        .collect()
+        .await;
+
+    match options.format {
+        InventoryFormat::Table => TableSink::new(options.detail).write(&inventories)?,
+        InventoryFormat::Json => JsonSink.write(&inventories)?,
     }
-
-    sink.write(&inventories)?;
     Ok(())
 }

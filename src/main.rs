@@ -1,8 +1,8 @@
 use std::error::Error;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
-use fleet_intelligence_oob::{InventoryOptions, run_inventory};
-use mac_address::MacAddress;
+use fleet_intelligence_oob::{InventoryFormat, InventoryOptions, run_inventory};
 
 #[derive(Debug, Parser)]
 #[command(name = "fleet-intelligence-oob")]
@@ -29,13 +29,45 @@ struct InventoryArgs {
     port: u16,
 
     #[arg(long)]
-    boot_mac: Option<MacAddress>,
-
-    #[arg(long)]
     insecure_tls: bool,
 
     #[arg(long)]
     detail: bool,
+
+    #[arg(long, default_value = "table")]
+    format: CliInventoryFormat,
+
+    #[arg(long, default_value_t = 16)]
+    concurrency: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CliInventoryFormat {
+    Table,
+    Json,
+}
+
+impl From<CliInventoryFormat> for InventoryFormat {
+    fn from(format: CliInventoryFormat) -> Self {
+        match format {
+            CliInventoryFormat::Table => Self::Table,
+            CliInventoryFormat::Json => Self::Json,
+        }
+    }
+}
+
+impl FromStr for CliInventoryFormat {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
+            _ => Err(format!(
+                "unsupported inventory format {value:?}; use table or json"
+            )),
+        }
+    }
 }
 
 #[tokio::main]
@@ -53,9 +85,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 config: args.config,
                 target: args.target,
                 port: args.port,
-                boot_mac: args.boot_mac,
                 insecure_tls: args.insecure_tls,
                 detail: args.detail,
+                format: args.format.into(),
+                concurrency: args.concurrency,
             })
             .await?
         }

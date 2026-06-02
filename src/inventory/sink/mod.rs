@@ -1,9 +1,13 @@
+mod backend;
+mod json;
 mod table;
 
 use std::error::Error;
 
 use super::types::NodeInventory;
 
+pub use backend::{BackendClient, BackendSink, HttpBackendClient};
+pub use json::JsonSink;
 pub use table::TableSink;
 
 pub trait InventorySink {

@@ -8,6 +8,7 @@ pub use redfish::RedfishSource;
 
 pub struct SourceRecord {
     pub target: Target,
+    pub collected_at: String,
     pub result: Result<RedfishReport, String>,
 }
 
@@ -22,7 +23,9 @@ pub struct RedfishReport {
     pub managers: Vec<ManagerData>,
     pub systems: Vec<SystemData>,
     pub chassis: Vec<ChassisData>,
+    pub devices: Vec<DeviceData>,
     pub firmware: Vec<FirmwareData>,
+    pub errors: Vec<InventoryErrorData>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -36,46 +39,94 @@ pub struct ServiceRootData {
 #[derive(Clone, Debug)]
 pub struct ManagerData {
     pub id: String,
+    pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub manager_type: Option<String>,
     pub model: Option<String>,
     pub firmware_version: Option<String>,
-    pub interface_count: usize,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SystemData {
     pub id: String,
+    pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
+    pub sku: Option<String>,
     pub serial_number: Option<String>,
     pub bios_version: Option<String>,
+    pub host_name: Option<String>,
+    pub asset_tag: Option<String>,
     pub power_state: Option<String>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
     pub cpu_count: Option<i64>,
     pub cpu_core_count: Option<i64>,
     pub cpu_model: Option<String>,
     pub memory_gib: Option<f64>,
-    pub interface_count: usize,
-    pub pcie_device_count: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct ChassisData {
     pub id: String,
+    pub odata_id: Option<String>,
     pub chassis_type: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
+    pub sku: Option<String>,
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
-    pub network_adapter_count: usize,
+    pub asset_tag: Option<String>,
+    pub power_state: Option<String>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
+    pub location: Option<ChassisLocationData>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChassisLocationData {
+    pub service_label: Option<String>,
+    pub rack: Option<String>,
+    pub row: Option<String>,
+    pub room: Option<String>,
+    pub rack_offset: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceData {
+    pub id: String,
+    pub odata_id: Option<String>,
+    pub uuid: Option<String>,
+    pub source: String,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub device_type: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub sku: Option<String>,
+    pub serial_number: Option<String>,
+    pub part_number: Option<String>,
+    pub firmware_version: Option<String>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FirmwareData {
     pub service_id: String,
     pub id: String,
+    pub odata_id: Option<String>,
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InventoryErrorData {
+    pub domain: String,
+    pub resource: Option<String>,
+    pub message: String,
 }
