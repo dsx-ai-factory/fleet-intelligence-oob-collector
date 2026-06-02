@@ -16,7 +16,7 @@ pub trait InventorySource {
     async fn collect(&self, target: Target) -> SourceRecord;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RedfishReport {
     pub service_root: ServiceRootData,
     pub managers: Vec<ManagerData>,
@@ -25,7 +25,7 @@ pub struct RedfishReport {
     pub firmware: Vec<FirmwareData>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ServiceRootData {
     pub redfish_version: Option<String>,
     pub uuid: Option<String>,
@@ -33,7 +33,7 @@ pub struct ServiceRootData {
     pub product: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ManagerData {
     pub id: String,
     pub uuid: Option<String>,
@@ -43,7 +43,7 @@ pub struct ManagerData {
     pub interface_count: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SystemData {
     pub id: String,
     pub uuid: Option<String>,
@@ -60,7 +60,7 @@ pub struct SystemData {
     pub pcie_device_count: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ChassisData {
     pub id: String,
     pub chassis_type: Option<String>,
@@ -71,7 +71,7 @@ pub struct ChassisData {
     pub network_adapter_count: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FirmwareData {
     pub service_id: String,
     pub id: String,

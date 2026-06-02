@@ -77,32 +77,37 @@ impl TableSink {
 
 impl InventorySink for TableSink {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
-        print_table(
-            &[
-                "Target",
-                "Address",
-                "Redfish",
-                "Service UUID",
-                "Vendor",
-                "Manager",
-                "System",
-                "System UUID",
-                "Chassis",
-                "Firmware",
-                "Error",
-            ],
-            rows.iter().map(SummaryRow::values),
-        );
-
-        if self.detail {
-            for inventory in inventories {
-                print_node_details(inventory);
-            }
-        }
-
+        print!("{}", render_inventory_tables(inventories, self.detail));
         Ok(())
     }
+}
+
+fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> String {
+    let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
+    let mut out = render_table(
+        &[
+            "Target",
+            "Address",
+            "Redfish",
+            "Service UUID",
+            "Vendor",
+            "Manager",
+            "System",
+            "System UUID",
+            "Chassis",
+            "Firmware",
+            "Error",
+        ],
+        rows.iter().map(SummaryRow::values),
+    );
+
+    if detail {
+        for inventory in inventories {
+            write_node_details(&mut out, inventory);
+        }
+    }
+
+    out
 }
 
 impl From<&NodeInventory> for SummaryRow {
@@ -120,7 +125,7 @@ impl From<&NodeInventory> for SummaryRow {
         let system_uuid = inventory
             .system
             .as_ref()
-            .and_then(|system| system.uuid.clone())
+            .and_then(|system| system.uuid.as_ref().map(ToString::to_string))
             .unwrap_or_default();
 
         Self {
@@ -203,7 +208,7 @@ impl From<&NodeInventory> for NodeDetailRow {
             system_uuid: inventory
                 .system
                 .as_ref()
-                .and_then(|system| system.uuid.clone())
+                .and_then(|system| system.uuid.as_ref().map(ToString::to_string))
                 .unwrap_or_default(),
             manufacturer: inventory
                 .system
@@ -285,7 +290,11 @@ impl From<&ChassisInventory> for ChassisDetailRow {
             chassis_type: chassis.chassis_type.clone().unwrap_or_default(),
             manufacturer: chassis.manufacturer.clone().unwrap_or_default(),
             model: chassis.model.clone().unwrap_or_default(),
-            serial: chassis.serial_number.clone().unwrap_or_default(),
+            serial: chassis
+                .serial_number
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             part: chassis.part_number.clone().unwrap_or_default(),
             adapters: chassis.network_adapter_count.to_string(),
         }
@@ -330,20 +339,23 @@ impl FirmwareDetailRow {
     }
 }
 
-fn print_node_details(inventory: &NodeInventory) {
-    println!();
-    println!("Node: {} ({})", inventory.target, inventory.address);
+fn write_node_details(out: &mut String, inventory: &NodeInventory) {
+    out.push('\n');
+    out.push_str(&format!(
+        "Node: {} ({})\n",
+        inventory.target, inventory.address
+    ));
 
     let node_row = NodeDetailRow::from(inventory);
-    print_table(&["Attribute", "Value"], node_row.values());
+    out.push_str(&render_table(&["Attribute", "Value"], node_row.values()));
 
     let chassis_rows = inventory
         .chassis
         .iter()
         .map(ChassisDetailRow::from)
         .map(|row| row.values());
-    println!("Chassis");
-    print_table(
+    out.push_str("Chassis\n");
+    out.push_str(&render_table(
         &[
             "ID",
             "Type",
@@ -354,18 +366,18 @@ fn print_node_details(inventory: &NodeInventory) {
             "Adapters",
         ],
         chassis_rows,
-    );
+    ));
 
     let firmware_rows = inventory
         .firmware
         .iter()
         .map(FirmwareDetailRow::from)
         .map(|row| row.values());
-    println!("Firmware");
-    print_table(
+    out.push_str("Firmware\n");
+    out.push_str(&render_table(
         &["Service", "ID", "Name", "Version", "Release Date"],
         firmware_rows,
-    );
+    ));
 }
 
 fn format_cpu(system: &crate::inventory::types::SystemInventory) -> String {
@@ -377,7 +389,10 @@ fn format_cpu(system: &crate::inventory::types::SystemInventory) -> String {
     }
 }
 
-fn print_table<const N: usize>(headers: &[&str; N], rows: impl IntoIterator<Item = [String; N]>) {
+fn render_table<const N: usize>(
+    headers: &[&str; N],
+    rows: impl IntoIterator<Item = [String; N]>,
+) -> String {
     let rows = rows.into_iter().collect::<Vec<_>>();
     let mut widths = headers.map(str::len);
     for row in &rows {
@@ -386,27 +401,189 @@ fn print_table<const N: usize>(headers: &[&str; N], rows: impl IntoIterator<Item
         }
     }
 
-    print_separator(&widths);
-    print_row(headers.as_slice(), &widths);
-    print_separator(&widths);
+    let mut out = String::new();
+    write_separator(&mut out, &widths);
+    write_row(&mut out, headers.as_slice(), &widths);
+    write_separator(&mut out, &widths);
     for row in &rows {
-        print_row(row, &widths);
+        write_row(&mut out, row, &widths);
     }
-    print_separator(&widths);
+    write_separator(&mut out, &widths);
+    out
 }
 
-fn print_separator(widths: &[usize]) {
-    print!("+");
+fn write_separator(out: &mut String, widths: &[usize]) {
+    out.push('+');
     for width in widths {
-        print!("{}+", "-".repeat(width + 2));
+        out.push_str(&"-".repeat(width + 2));
+        out.push('+');
     }
-    println!();
+    out.push('\n');
 }
 
-fn print_row<T: fmt::Display>(values: &[T], widths: &[usize]) {
-    print!("|");
+fn write_row<T: fmt::Display>(out: &mut String, values: &[T], widths: &[usize]) {
+    out.push('|');
     for (value, width) in values.iter().zip(widths) {
-        print!(" {value:<width$} |");
+        out.push_str(&format!(" {value:<width$} |"));
     }
-    println!();
+    out.push('\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inventory::types::{ManagerInventory, SystemInventory, SystemUuid};
+
+    #[test]
+    fn render_table_sizes_columns_from_headers_and_rows() {
+        let rendered = render_table(
+            &["Name", "Value"],
+            [
+                ["BMC".to_string(), "3.19.00".to_string()],
+                ["LongerName".to_string(), "ok".to_string()],
+            ],
+        );
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "+------------+---------+\n",
+                "| Name       | Value   |\n",
+                "+------------+---------+\n",
+                "| BMC        | 3.19.00 |\n",
+                "| LongerName | ok      |\n",
+                "+------------+---------+\n",
+            )
+        );
+    }
+
+    #[test]
+    fn render_table_handles_empty_rows() {
+        let rendered = render_table(&["ID"], std::iter::empty::<[String; 1]>());
+
+        assert_eq!(
+            rendered,
+            concat!("+----+\n", "| ID |\n", "+----+\n", "+----+\n",)
+        );
+    }
+
+    #[test]
+    fn summary_row_formats_error_and_counts() {
+        let mut inventory = full_inventory();
+        inventory.error = Some("timeout".to_string());
+
+        let row = SummaryRow::from(&inventory);
+
+        assert_eq!(row.chassis, "1");
+        assert_eq!(row.firmware, "1");
+        assert_eq!(row.error, "timeout");
+    }
+
+    #[test]
+    fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
+        let rendered = render_inventory_tables(&[full_inventory()], false);
+
+        assert!(rendered.contains("| node-a | 10.0.0.1 | 1.15.1"));
+        assert!(rendered.contains("| NVIDIA | BMC_0"));
+        assert!(!rendered.contains("Node: node-a"));
+        assert!(!rendered.contains("Firmware\n"));
+    }
+
+    #[test]
+    fn render_inventory_tables_includes_node_chassis_and_firmware_details() {
+        let rendered = render_inventory_tables(&[full_inventory()], true);
+
+        assert!(rendered.contains("Node: node-a (10.0.0.1)"));
+        assert!(rendered.contains("Manager Type"));
+        assert!(rendered.contains("bmc"));
+        assert!(rendered.contains("CPU"));
+        assert!(rendered.contains("1/72"));
+        assert!(rendered.contains("Chassis\n"));
+        assert!(rendered.contains("| BMC_0 | module"));
+        assert!(rendered.contains("Firmware\n"));
+        assert!(rendered.contains("| FirmwareInventory | BMC"));
+    }
+
+    #[test]
+    fn table_sink_write_accepts_empty_inventory() {
+        let sink = TableSink::new(false);
+
+        sink.write(&[]).expect("write");
+    }
+
+    #[test]
+    fn format_cpu_handles_partial_summary() {
+        assert_eq!(format_cpu(&system(Some(1), Some(72))), "1/72");
+        assert_eq!(format_cpu(&system(Some(1), None)), "1");
+        assert_eq!(format_cpu(&system(None, Some(72))), "?/72");
+        assert_eq!(format_cpu(&system(None, None)), "");
+    }
+
+    fn full_inventory() -> NodeInventory {
+        NodeInventory {
+            target: "node-a".to_string(),
+            address: "10.0.0.1".to_string(),
+            redfish_version: Some("1.15.1".to_string()),
+            service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
+            vendor: Some("NVIDIA".to_string()),
+            manager: Some(ManagerInventory {
+                id: "BMC_0".to_string(),
+                uuid: Some("manager-uuid".to_string()),
+                manager_type: Some("bmc".to_string()),
+                model: Some("OpenBMC".to_string()),
+                firmware_version: Some("3.19.00".to_string()),
+                interface_count: 2,
+            }),
+            system: Some(SystemInventory {
+                id: "System".to_string(),
+                uuid: SystemUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+                manufacturer: Some("NVIDIA".to_string()),
+                model: Some("GB200".to_string()),
+                serial_number: Some("SN123".to_string()),
+                bios_version: Some("3A21".to_string()),
+                power_state: "on".to_string(),
+                cpu_count: Some(1),
+                cpu_core_count: Some(72),
+                cpu_model: None,
+                memory_gib: Some(480.0),
+                interface_count: 5,
+                pcie_device_count: 0,
+            }),
+            chassis: vec![ChassisInventory {
+                id: "BMC_0".to_string(),
+                chassis_type: Some("module".to_string()),
+                manufacturer: Some("NVIDIA".to_string()),
+                model: Some("BMC".to_string()),
+                serial_number: None,
+                part_number: Some("PN123".to_string()),
+                network_adapter_count: 1,
+            }],
+            firmware: vec![FirmwareInventory {
+                service_id: "FirmwareInventory".to_string(),
+                id: "BMC".to_string(),
+                name: "BMC".to_string(),
+                version: Some("3.19.00".to_string()),
+                release_date: Some("2026-01-01T00:00:00Z".to_string()),
+            }],
+            error: None,
+        }
+    }
+
+    fn system(cpu_count: Option<i64>, cpu_core_count: Option<i64>) -> SystemInventory {
+        SystemInventory {
+            id: "System".to_string(),
+            uuid: SystemUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+            manufacturer: None,
+            model: None,
+            serial_number: None,
+            bios_version: None,
+            power_state: String::new(),
+            cpu_count,
+            cpu_core_count,
+            cpu_model: None,
+            memory_gib: None,
+            interface_count: 0,
+            pcie_device_count: 0,
+        }
+    }
 }

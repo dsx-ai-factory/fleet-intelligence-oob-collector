@@ -42,28 +42,7 @@ impl RedfishSource {
         let root_session = service_root(target, self.port, self.insecure_tls)
             .await
             .map_err(|err| err.to_string())?;
-        let root = &root_session.root;
-        let raw_root = &root_session.raw;
-
-        let service_root = ServiceRootData {
-            redfish_version: raw_root.redfish_version.clone(),
-            uuid: raw_root.uuid.flatten().map(|uuid| uuid.to_string()),
-            vendor: raw_root.vendor.clone().flatten(),
-            product: raw_root.product.clone().flatten(),
-        };
-
-        let managers = collect_managers(&root).await?;
-        let systems = collect_systems(&root).await?;
-        let chassis = collect_chassis(&root).await?;
-        let firmware = collect_firmware(&root).await?;
-
-        Ok(RedfishReport {
-            service_root,
-            managers,
-            systems,
-            chassis,
-            firmware,
-        })
+        collect_report_from_root(&root_session.root, &root_session.raw).await
     }
 }
 
@@ -75,7 +54,32 @@ impl InventorySource for RedfishSource {
     }
 }
 
-async fn collect_managers(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<ManagerData>, String> {
+async fn collect_report_from_root<B: Bmc>(
+    root: &ServiceRoot<B>,
+    raw_root: &ServiceRootSchema,
+) -> Result<RedfishReport, String> {
+    let service_root = ServiceRootData {
+        redfish_version: raw_root.redfish_version.clone(),
+        uuid: raw_root.uuid.flatten().map(|uuid| uuid.to_string()),
+        vendor: raw_root.vendor.clone().flatten(),
+        product: raw_root.product.clone().flatten(),
+    };
+
+    let managers = collect_managers(root).await?;
+    let systems = collect_systems(root).await?;
+    let chassis = collect_chassis(root).await?;
+    let firmware = collect_firmware(root).await?;
+
+    Ok(RedfishReport {
+        service_root,
+        managers,
+        systems,
+        chassis,
+        firmware,
+    })
+}
+
+async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerData>, String> {
     let Some(collection) = root
         .managers()
         .await
@@ -109,7 +113,7 @@ async fn collect_managers(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<ManagerD
     Ok(out)
 }
 
-async fn collect_systems(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<SystemData>, String> {
+async fn collect_systems<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<SystemData>, String> {
     let Some(collection) = root
         .systems()
         .await
@@ -167,7 +171,7 @@ async fn collect_systems(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<SystemDat
     Ok(out)
 }
 
-async fn collect_chassis(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<ChassisData>, String> {
+async fn collect_chassis<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ChassisData>, String> {
     let Some(collection) = root
         .chassis()
         .await
@@ -200,7 +204,7 @@ async fn collect_chassis(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<ChassisDa
     Ok(out)
 }
 
-async fn collect_firmware(root: &ServiceRoot<RedfishBmc>) -> Result<Vec<FirmwareData>, String> {
+async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareData>, String> {
     let Some(update_service) = root
         .update_service()
         .await
@@ -260,4 +264,252 @@ fn bmc_url(address: &str, default_port: u16) -> Result<Url, Box<dyn Error>> {
         return Ok(address.parse()?);
     }
     Ok(format!("https://{address}:{default_port}").parse()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use super::*;
+    use nv_redfish_bmc_mock::Expect;
+
+    #[test]
+    fn redfish_source_records_constructor_options() {
+        let boot_mac = "00:11:22:33:44:55".parse().expect("mac");
+        let source = RedfishSource::new(8443, true, Some(boot_mac));
+
+        assert_eq!(source.port, 8443);
+        assert!(source.insecure_tls);
+        assert_eq!(source._boot_mac, Some(boot_mac));
+    }
+
+    #[test]
+    fn bmc_url_adds_https_and_default_port_to_bare_address() {
+        let url = bmc_url("10.0.0.1", 443).expect("url");
+
+        assert_eq!(url.as_str(), "https://10.0.0.1/");
+        assert_eq!(url.port_or_known_default(), Some(443));
+    }
+
+    #[test]
+    fn bmc_url_preserves_explicit_https_url() {
+        let url = bmc_url("https://bmc.example.com:8443", 443).expect("url");
+
+        assert_eq!(url.as_str(), "https://bmc.example.com:8443/");
+    }
+
+    #[test]
+    fn bmc_url_preserves_explicit_http_url() {
+        let url = bmc_url("http://bmc.example.com", 443).expect("url");
+
+        assert_eq!(url.as_str(), "http://bmc.example.com/");
+    }
+
+    #[test]
+    fn bmc_url_rejects_invalid_explicit_url() {
+        let error = bmc_url("https://", 443).expect_err("invalid url");
+
+        assert!(!error.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_report_from_mock_bmc_traverses_inventory() {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            FIRMWARE,
+        ));
+
+        let raw_root = bmc
+            .get::<ServiceRootSchema>(&ODataId::service_root())
+            .await
+            .expect("raw service root");
+        let root = ServiceRoot::new(Arc::clone(&bmc))
+            .await
+            .expect("service root wrapper");
+
+        let report = collect_report_from_root(&root, &raw_root)
+            .await
+            .expect("report");
+
+        assert_eq!(
+            report.service_root.redfish_version.as_deref(),
+            Some("1.15.1")
+        );
+        assert_eq!(report.service_root.uuid.as_deref(), Some(SERVICE_UUID));
+        assert_eq!(report.service_root.vendor.as_deref(), Some("NVIDIA"));
+        assert_eq!(report.service_root.product.as_deref(), Some("Mock BMC"));
+
+        assert_eq!(report.managers.len(), 1);
+        assert_eq!(report.managers[0].id, "BMC_0");
+        assert_eq!(report.managers[0].manager_type.as_deref(), Some("bmc"));
+        assert_eq!(
+            report.managers[0].firmware_version.as_deref(),
+            Some("3.19.00")
+        );
+
+        assert_eq!(report.systems.len(), 1);
+        assert_eq!(report.systems[0].id, "System");
+        assert_eq!(report.systems[0].uuid.as_deref(), Some(SYSTEM_UUID));
+        assert_eq!(report.systems[0].manufacturer.as_deref(), Some("NVIDIA"));
+        assert_eq!(report.systems[0].model.as_deref(), Some("GB200"));
+        assert_eq!(report.systems[0].serial_number.as_deref(), Some("SN123"));
+        assert_eq!(report.systems[0].bios_version.as_deref(), Some("3A21"));
+        assert_eq!(report.systems[0].power_state.as_deref(), Some("on"));
+        assert_eq!(report.systems[0].cpu_count, Some(1));
+        assert_eq!(report.systems[0].cpu_core_count, Some(72));
+        assert_eq!(report.systems[0].cpu_model.as_deref(), Some("Grace"));
+        assert_eq!(report.systems[0].memory_gib, Some(480.0));
+
+        assert_eq!(report.chassis.len(), 1);
+        assert_eq!(report.chassis[0].id, "BMC_0");
+        assert_eq!(report.chassis[0].chassis_type.as_deref(), Some("module"));
+        assert_eq!(report.chassis[0].manufacturer.as_deref(), Some("NVIDIA"));
+        assert_eq!(report.chassis[0].model.as_deref(), Some("BMC"));
+        assert_eq!(report.chassis[0].serial_number.as_deref(), Some("CH123"));
+        assert_eq!(report.chassis[0].part_number.as_deref(), Some("PN123"));
+
+        assert_eq!(report.firmware.len(), 1);
+        assert_eq!(report.firmware[0].service_id, "FirmwareInventory");
+        assert_eq!(report.firmware[0].id, "BMC");
+        assert_eq!(report.firmware[0].name, "BMC");
+        assert_eq!(report.firmware[0].version.as_deref(), Some("3.19.00"));
+        assert_eq!(
+            report.firmware[0].release_date.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
+    }
+
+    const SERVICE_UUID: &str = "870155dd-d474-aca8-11ee-6e809af87c0c";
+    const SYSTEM_UUID: &str = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
+
+    const SERVICE_ROOT: &str = r##"{
+        "@odata.id": "/redfish/v1",
+        "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
+        "Id": "RootService",
+        "Name": "Root Service",
+        "RedfishVersion": "1.15.1",
+        "UUID": "870155dd-d474-aca8-11ee-6e809af87c0c",
+        "Links": {
+            "Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}
+        },
+        "Vendor": "NVIDIA",
+        "Product": "Mock BMC",
+        "Managers": {"@odata.id": "/redfish/v1/Managers"},
+        "Systems": {"@odata.id": "/redfish/v1/Systems"},
+        "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
+        "UpdateService": {"@odata.id": "/redfish/v1/UpdateService"}
+    }"##;
+
+    const MANAGERS_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/Managers",
+        "@odata.type": "#ManagerCollection.ManagerCollection",
+        "Id": "Managers",
+        "Name": "Managers",
+        "Members@odata.count": 1,
+        "Members": [{"@odata.id": "/redfish/v1/Managers/BMC_0"}]
+    }"##;
+
+    const MANAGER: &str = r##"{
+        "@odata.id": "/redfish/v1/Managers/BMC_0",
+        "@odata.type": "#Manager.v1_15_0.Manager",
+        "Id": "BMC_0",
+        "Name": "BMC",
+        "ManagerType": "BMC",
+        "UUID": "11111111-2222-3333-4444-555555555555",
+        "Model": "OpenBMC",
+        "FirmwareVersion": "3.19.00"
+    }"##;
+
+    const SYSTEMS_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems",
+        "@odata.type": "#ComputerSystemCollection.ComputerSystemCollection",
+        "Id": "Systems",
+        "Name": "Systems",
+        "Members@odata.count": 1,
+        "Members": [{"@odata.id": "/redfish/v1/Systems/System"}]
+    }"##;
+
+    const SYSTEM: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System",
+        "@odata.type": "#ComputerSystem.v1_15_0.ComputerSystem",
+        "Id": "System",
+        "Name": "System",
+        "UUID": "9AEE71E4-6E80-11EE-A8AC-74D4DD550187",
+        "Manufacturer": "NVIDIA",
+        "Model": "GB200",
+        "SerialNumber": "SN123",
+        "BiosVersion": "3A21",
+        "PowerState": "On",
+        "ProcessorSummary": {
+            "Count": 1,
+            "CoreCount": 72,
+            "Model": "Grace"
+        },
+        "MemorySummary": {
+            "TotalSystemMemoryGiB": 480
+        }
+    }"##;
+
+    const CHASSIS_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/Chassis",
+        "@odata.type": "#ChassisCollection.ChassisCollection",
+        "Id": "Chassis",
+        "Name": "Chassis",
+        "Members@odata.count": 1,
+        "Members": [{"@odata.id": "/redfish/v1/Chassis/BMC_0"}]
+    }"##;
+
+    const CHASSIS: &str = r##"{
+        "@odata.id": "/redfish/v1/Chassis/BMC_0",
+        "@odata.type": "#Chassis.v1_25_0.Chassis",
+        "Id": "BMC_0",
+        "Name": "BMC Chassis",
+        "ChassisType": "Module",
+        "Manufacturer": "NVIDIA",
+        "Model": "BMC",
+        "SerialNumber": "CH123",
+        "PartNumber": "PN123"
+    }"##;
+
+    const UPDATE_SERVICE: &str = r##"{
+        "@odata.id": "/redfish/v1/UpdateService",
+        "@odata.type": "#UpdateService.v1_14_0.UpdateService",
+        "Id": "UpdateService",
+        "Name": "Update Service",
+        "FirmwareInventory": {"@odata.id": "/redfish/v1/UpdateService/FirmwareInventory"}
+    }"##;
+
+    const FIRMWARE_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory",
+        "@odata.type": "#SoftwareInventoryCollection.SoftwareInventoryCollection",
+        "Id": "FirmwareInventory",
+        "Name": "Firmware Inventory",
+        "Members@odata.count": 1,
+        "Members": [{"@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/BMC"}]
+    }"##;
+
+    const FIRMWARE: &str = r##"{
+        "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+        "@odata.type": "#SoftwareInventory.v1_8_0.SoftwareInventory",
+        "Id": "BMC",
+        "Name": "BMC",
+        "Version": "3.19.00",
+        "ReleaseDate": "2026-01-01T00:00:00Z"
+    }"##;
 }

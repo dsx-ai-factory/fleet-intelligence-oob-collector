@@ -224,9 +224,11 @@ dependencies = [
  "clap",
  "mac_address",
  "nv-redfish",
+ "nv-redfish-bmc-mock",
  "tokio",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -750,6 +752,19 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nv-redfish-bmc-mock"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88ac2c5acde37d33d4ad21aad3ef4d0f1c44bdd22ee74738cba714931eee8931"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "nv-redfish-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

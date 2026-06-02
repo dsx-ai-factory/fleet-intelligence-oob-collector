@@ -80,3 +80,115 @@ fn validate_target(target: &Target) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn loads_multiple_targets_and_ignores_comments() {
+        let path = write_config(
+            "valid",
+            r#"
+            # lab BMCs
+            [node-a]
+            address = 10.0.0.1
+            username = admin
+            password = secret
+
+            ; second target
+            [node-b]
+            address = https://bmc.example.com
+            username = root
+            password = pass
+            "#,
+        );
+
+        let targets = load_targets(path.to_str().expect("path")).expect("targets");
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].name, "node-a");
+        assert_eq!(targets[0].address, "10.0.0.1");
+        assert_eq!(targets[1].name, "node-b");
+        assert_eq!(targets[1].address, "https://bmc.example.com");
+    }
+
+    #[test]
+    fn rejects_key_outside_section() {
+        let path = write_config("key-outside-section", "address = 10.0.0.1\n");
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("key outside section should fail")
+            .to_string();
+
+        assert!(error.contains("key outside section"));
+    }
+
+    #[test]
+    fn rejects_unknown_key() {
+        let path = write_config(
+            "unknown-key",
+            r#"
+            [node-a]
+            address = 10.0.0.1
+            username = admin
+            password = secret
+            token = nope
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("unknown key should fail")
+            .to_string();
+
+        assert!(error.contains("unknown key"));
+    }
+
+    #[test]
+    fn rejects_missing_required_target_field() {
+        let path = write_config(
+            "missing-password",
+            r#"
+            [node-a]
+            address = 10.0.0.1
+            username = admin
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("missing password should fail")
+            .to_string();
+
+        assert!(error.contains("password is required"));
+    }
+
+    #[test]
+    fn rejects_empty_config() {
+        let path = write_config("empty", "# no targets\n");
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("empty config should fail")
+            .to_string();
+
+        assert!(error.contains("no BMC targets found"));
+    }
+
+    fn write_config(name: &str, content: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "fleet-intelligence-oob-{name}-{}.config",
+            std::process::id()
+        ));
+        fs::write(&path, unindent(content)).expect("write config");
+        path
+    }
+
+    fn unindent(content: &str) -> String {
+        content
+            .lines()
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}

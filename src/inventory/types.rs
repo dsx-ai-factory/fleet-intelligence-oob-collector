@@ -1,3 +1,42 @@
+use std::fmt;
+
+use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemUuid(Uuid);
+
+impl SystemUuid {
+    pub fn parse(value: &str) -> Option<Self> {
+        Uuid::parse_str(value.trim()).ok().map(Self)
+    }
+}
+
+impl fmt::Display for SystemUuid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChassisSerial(String);
+
+impl ChassisSerial {
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(Self(value.to_string()))
+        }
+    }
+}
+
+impl fmt::Display for ChassisSerial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug)]
 pub struct NodeInventory {
     pub target: String,
@@ -25,7 +64,7 @@ pub struct ManagerInventory {
 #[derive(Debug)]
 pub struct SystemInventory {
     pub id: String,
-    pub uuid: Option<String>,
+    pub uuid: Option<SystemUuid>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
     pub serial_number: Option<String>,
@@ -45,7 +84,7 @@ pub struct ChassisInventory {
     pub chassis_type: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
-    pub serial_number: Option<String>,
+    pub serial_number: Option<ChassisSerial>,
     pub part_number: Option<String>,
     pub network_adapter_count: usize,
 }
