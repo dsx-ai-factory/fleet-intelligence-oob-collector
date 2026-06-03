@@ -1,4 +1,4 @@
 pub mod mapper;
+pub mod models;
 pub mod sink;
 pub mod source;
-pub mod types;

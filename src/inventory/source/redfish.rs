@@ -11,12 +11,20 @@ use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::{
-    ChassisData, ChassisLocationData, DeviceData, FirmwareData, InventoryErrorData,
-    InventorySource, ManagerData, RedfishReport, ServiceRootData, SourceRecord, SystemData,
+    ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource,
+    ManagerData, PcieDeviceData, RedfishReport, ServiceRootData, SourceRecord, SystemData,
 };
 use crate::config::Target;
 
 type RedfishBmc = HttpBmc<nv_redfish::bmc_http::reqwest::Client>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PcieTraversalPolicy {
+    Viking,
+    SystemId(String),
+    LenovoGb300,
+    None,
+}
 
 pub struct RedfishSource {
     port: u16,
@@ -96,22 +104,20 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
             Vec::new()
         }
     };
-    let systems = match collect_systems(root).await {
+    let systems = match collect_systems(root, &mut errors).await {
         Ok(systems) => systems,
         Err(err) => {
             push_inventory_error(&mut errors, "systems", None, err);
             Vec::new()
         }
     };
-    let chassis = match collect_chassis(root).await {
+    let chassis = match collect_chassis(root, &service_root, &systems, &mut errors).await {
         Ok(chassis) => chassis,
         Err(err) => {
             push_inventory_error(&mut errors, "chassis", None, err);
             Vec::new()
         }
     };
-    let (devices, device_errors) = collect_devices(root).await;
-    errors.extend(device_errors);
     let firmware = match collect_firmware(root).await {
         Ok(firmware) => firmware,
         Err(err) => {
@@ -125,7 +131,6 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
         managers,
         systems,
         chassis,
-        devices,
         firmware,
         errors,
     })
@@ -158,12 +163,16 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
             firmware_version: raw.firmware_version.clone().flatten(),
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
+            health_rollup: status_health_rollup(raw.status.as_ref()),
         });
     }
     Ok(out)
 }
 
-async fn collect_systems<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<SystemData>, String> {
+async fn collect_systems<B: Bmc>(
+    root: &ServiceRoot<B>,
+    errors: &mut Vec<InventoryErrorData>,
+) -> Result<Vec<SystemData>, String> {
     let Some(collection) = root
         .systems()
         .await
@@ -178,9 +187,10 @@ async fn collect_systems<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<SystemData
         .map_err(|err| format!("system members: {err}"))?;
     let mut out = Vec::with_capacity(systems.len());
     for system in systems {
+        let system_id = system.id().to_string();
         let raw = system.raw();
         out.push(SystemData {
-            id: system.id().to_string(),
+            id: system_id.clone(),
             odata_id: Some(system.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             manufacturer: raw.manufacturer.clone().flatten(),
@@ -196,6 +206,7 @@ async fn collect_systems<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<SystemData
                 .map(|power_state| power_state.to_snake_case().to_string()),
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
+            health_rollup: status_health_rollup(raw.status.as_ref()),
             cpu_count: raw
                 .processor_summary
                 .as_ref()
@@ -216,12 +227,18 @@ async fn collect_systems<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<SystemData
                 .as_ref()
                 .and_then(|summary| summary.total_system_memory_gi_b)
                 .flatten(),
+            secure_boot_enabled: collect_secure_boot_enabled(&system, &system_id, errors).await,
         });
     }
     Ok(out)
 }
 
-async fn collect_chassis<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ChassisData>, String> {
+async fn collect_chassis<B: Bmc>(
+    root: &ServiceRoot<B>,
+    service_root: &ServiceRootData,
+    systems: &[SystemData],
+    errors: &mut Vec<InventoryErrorData>,
+) -> Result<Vec<ChassisData>, String> {
     let Some(collection) = root
         .chassis()
         .await
@@ -234,11 +251,13 @@ async fn collect_chassis<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ChassisDat
         .members()
         .await
         .map_err(|err| format!("chassis members: {err}"))?;
+    let pcie_traversal_policy = pcie_traversal_policy(service_root, systems, &chassis);
     let mut out = Vec::with_capacity(chassis.len());
     for chassis in chassis {
+        let chassis_id = chassis.id().to_string();
         let raw = chassis.raw();
         out.push(ChassisData {
-            id: chassis.id().to_string(),
+            id: chassis_id.clone(),
             odata_id: Some(chassis.odata_id().to_string()),
             chassis_type: Some(raw.chassis_type.to_snake_case().to_string()),
             manufacturer: raw.manufacturer.clone().flatten(),
@@ -253,10 +272,127 @@ async fn collect_chassis<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ChassisDat
                 .map(|power_state| power_state.to_snake_case().to_string()),
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
+            health_rollup: status_health_rollup(raw.status.as_ref()),
             location: chassis_location(raw.location.as_ref()),
+            pcie_devices: if should_collect_pcie_devices_for_chassis(
+                &pcie_traversal_policy,
+                &chassis_id,
+            ) {
+                collect_pcie_devices(&chassis, &chassis_id, errors).await
+            } else {
+                Vec::new()
+            },
         });
     }
     Ok(out)
+}
+
+fn pcie_traversal_policy<B: Bmc>(
+    service_root: &ServiceRootData,
+    systems: &[SystemData],
+    chassis: &[nv_redfish::chassis::Chassis<B>],
+) -> PcieTraversalPolicy {
+    let vendor = service_root.vendor.as_deref();
+    let product = service_root.product.as_deref();
+    let selected_system_id =
+        selected_system_for_pcie_traversal(systems).map(|system| system.id.clone());
+
+    if vendor_matches(vendor, "AMI") && selected_system_id.as_deref() == Some("DGX") {
+        return PcieTraversalPolicy::Viking;
+    }
+    if vendor_matches(vendor, "AMI") && is_lenovo_gb300_chassis_set(chassis) {
+        return PcieTraversalPolicy::LenovoGb300;
+    }
+    if vendor_matches(vendor, "AMI") {
+        return selected_system_id
+            .map(PcieTraversalPolicy::SystemId)
+            .unwrap_or(PcieTraversalPolicy::None);
+    }
+    if vendor_matches(vendor, "Dell")
+        || vendor_matches(vendor, "HPE")
+        || vendor_matches(vendor, "Supermicro")
+        || vendor_matches(vendor, "Lenovo")
+    {
+        return selected_system_id
+            .map(PcieTraversalPolicy::SystemId)
+            .unwrap_or(PcieTraversalPolicy::None);
+    }
+    if vendor_matches(vendor, "Nvidia") && selected_system_id.as_deref() == Some("Bluefield") {
+        return PcieTraversalPolicy::None;
+    }
+    if (vendor_matches(vendor, "WIWYNN") || vendor_matches(vendor, "NVIDIA"))
+        && matches!(product, Some("GB200 NVL" | "GB BMC"))
+    {
+        return PcieTraversalPolicy::None;
+    }
+    if vendor_matches(vendor, "NVIDIA") && product == Some("P3809") {
+        return PcieTraversalPolicy::None;
+    }
+    if is_liteon_powershelf_chassis_set(chassis) {
+        return PcieTraversalPolicy::None;
+    }
+
+    PcieTraversalPolicy::None
+}
+
+fn selected_system_for_pcie_traversal(systems: &[SystemData]) -> Option<&SystemData> {
+    systems
+        .iter()
+        .find(|system| system.bios_version.is_some())
+        .or_else(|| systems.first())
+}
+
+fn should_collect_pcie_devices_for_chassis(policy: &PcieTraversalPolicy, chassis_id: &str) -> bool {
+    match policy {
+        PcieTraversalPolicy::Viking => {
+            chassis_id.starts_with("HGX_GPU_SXM") || chassis_id.starts_with("HGX_NVSwitch")
+        }
+        PcieTraversalPolicy::SystemId(system_id) => chassis_id == system_id,
+        PcieTraversalPolicy::LenovoGb300 => chassis_id.starts_with("HGX_GPU_"),
+        PcieTraversalPolicy::None => false,
+    }
+}
+
+fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
+    vendor.is_some_and(|vendor| vendor.eq_ignore_ascii_case(expected))
+}
+
+fn is_lenovo_gb300_chassis_set<B: Bmc>(chassis: &[nv_redfish::chassis::Chassis<B>]) -> bool {
+    let has_gb300 = chassis.iter().any(|chassis| {
+        let raw = chassis.raw();
+        raw.manufacturer
+            .as_ref()
+            .and_then(|manufacturer| manufacturer.as_deref())
+            .is_some_and(|manufacturer| manufacturer == "NVIDIA")
+            && raw
+                .model
+                .as_ref()
+                .and_then(|model| model.as_deref())
+                .is_some_and(|model| model == "NVIDIA GB300")
+    });
+    let has_lenovo = chassis.iter().any(|chassis| {
+        chassis
+            .raw()
+            .manufacturer
+            .as_ref()
+            .and_then(|manufacturer| manufacturer.as_deref())
+            .is_some_and(|manufacturer| manufacturer == "Lenovo")
+    });
+    has_gb300 && has_lenovo
+}
+
+fn is_liteon_powershelf_chassis_set<B: Bmc>(chassis: &[nv_redfish::chassis::Chassis<B>]) -> bool {
+    chassis.iter().any(|chassis| {
+        let raw = chassis.raw();
+        let chassis_id = chassis.id().to_string();
+        chassis_id == "powershelf"
+            || (chassis_id == "chassis"
+                && raw
+                    .manufacturer
+                    .as_ref()
+                    .and_then(|manufacturer| manufacturer.as_deref())
+                    .is_some_and(|manufacturer| manufacturer.to_lowercase().contains("lite-on")))
+    })
 }
 
 fn chassis_location(
@@ -284,139 +420,78 @@ fn chassis_location(
     }
 }
 
-async fn collect_devices<B: Bmc>(
-    root: &ServiceRoot<B>,
-) -> (Vec<DeviceData>, Vec<InventoryErrorData>) {
-    let mut out = Vec::new();
-    let mut errors = Vec::new();
-    collect_processor_devices(root, &mut out, &mut errors).await;
-    collect_pcie_devices(root, &mut out, &mut errors).await;
-    (out, errors)
-}
-
-async fn collect_processor_devices<B: Bmc>(
-    root: &ServiceRoot<B>,
-    out: &mut Vec<DeviceData>,
+async fn collect_secure_boot_enabled<B: Bmc>(
+    system: &nv_redfish::computer_system::ComputerSystem<B>,
+    system_id: &str,
     errors: &mut Vec<InventoryErrorData>,
-) {
-    let Some(collection) = (match root.systems().await {
-        Ok(collection) => collection,
+) -> Option<bool> {
+    let secure_boot = match system.secure_boot().await {
+        Ok(secure_boot) => secure_boot?,
         Err(err) => {
-            push_inventory_error(errors, "devices.processors", None, err);
-            None
-        }
-    }) else {
-        return;
-    };
-    let systems = match collection.members().await {
-        Ok(systems) => systems,
-        Err(err) => {
-            push_inventory_error(errors, "devices.processors", None, err);
-            return;
+            push_inventory_error(
+                errors,
+                "systems.secure_boot",
+                Some(system_id.to_string()),
+                err,
+            );
+            return None;
         }
     };
-
-    for system in systems {
-        let system_id = system.id().to_string();
-        let processors = match system.processors().await {
-            Ok(Some(processors)) => processors,
-            Ok(None) => Vec::new(),
-            Err(err) => {
-                push_inventory_error(errors, "devices.processors", Some(system_id.clone()), err);
-                continue;
-            }
-        };
-        for processor in processors {
-            let raw = processor.raw();
-            let device_type = raw
-                .processor_type
-                .flatten()
-                .map(|processor_type| processor_type.to_snake_case().to_string());
-            if !matches!(device_type.as_deref(), Some("gpu" | "accelerator")) {
-                continue;
-            }
-            out.push(DeviceData {
-                id: processor.id().to_string(),
-                odata_id: Some(processor.odata_id().to_string()),
-                uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
-                source: "processor".to_string(),
-                parent_type: Some("system".to_string()),
-                parent_id: Some(system_id.clone()),
-                device_type,
-                manufacturer: raw.manufacturer.clone().flatten(),
-                model: raw.model.clone().flatten(),
-                sku: None,
-                serial_number: raw.serial_number.clone().flatten(),
-                part_number: raw.part_number.clone().flatten(),
-                firmware_version: raw.firmware_version.clone(),
-                status_state: status_state(raw.status.as_ref()),
-                health: status_health(raw.status.as_ref()),
-            });
-        }
-    }
+    secure_boot.secure_boot_enable()
 }
 
 async fn collect_pcie_devices<B: Bmc>(
-    root: &ServiceRoot<B>,
-    out: &mut Vec<DeviceData>,
+    chassis: &nv_redfish::chassis::Chassis<B>,
+    chassis_id: &str,
     errors: &mut Vec<InventoryErrorData>,
-) {
-    let Some(collection) = (match root.chassis().await {
-        Ok(collection) => collection,
+) -> Vec<PcieDeviceData> {
+    let devices = match chassis.pcie_devices().await {
+        Ok(Some(collection)) => match collection.members().await {
+            Ok(devices) => devices,
+            Err(err) => {
+                push_inventory_error(
+                    errors,
+                    "chassis.pcie_devices",
+                    Some(chassis_id.to_string()),
+                    err,
+                );
+                Vec::new()
+            }
+        },
+        Ok(None) => Vec::new(),
         Err(err) => {
-            push_inventory_error(errors, "devices.pcie", None, err);
-            None
-        }
-    }) else {
-        return;
-    };
-    let chassis = match collection.members().await {
-        Ok(chassis) => chassis,
-        Err(err) => {
-            push_inventory_error(errors, "devices.pcie", None, err);
-            return;
+            push_inventory_error(
+                errors,
+                "chassis.pcie_devices",
+                Some(chassis_id.to_string()),
+                err,
+            );
+            return Vec::new();
         }
     };
 
-    for chassis in chassis {
-        let chassis_id = chassis.id().to_string();
-        let devices = match chassis.pcie_devices().await {
-            Ok(Some(collection)) => match collection.members().await {
-                Ok(devices) => devices,
-                Err(err) => {
-                    push_inventory_error(errors, "devices.pcie", Some(chassis_id.clone()), err);
-                    Vec::new()
-                }
-            },
-            Ok(None) => Vec::new(),
-            Err(err) => {
-                push_inventory_error(errors, "devices.pcie", Some(chassis_id.clone()), err);
-                continue;
-            }
-        };
-        for device in devices {
-            let raw = device.raw();
-            out.push(DeviceData {
-                id: device.id().to_string(),
-                odata_id: Some(device.odata_id().to_string()),
-                uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
-                source: "pcie_device".to_string(),
-                parent_type: Some("chassis".to_string()),
-                parent_id: Some(chassis_id.clone()),
-                device_type: raw
-                    .device_type
-                    .map(|device_type| device_type.to_snake_case().to_string()),
-                manufacturer: raw.manufacturer.clone().flatten(),
-                model: raw.model.clone().flatten(),
-                sku: raw.sku.clone().flatten(),
-                serial_number: raw.serial_number.clone().flatten(),
-                part_number: raw.part_number.clone().flatten(),
-                firmware_version: raw.firmware_version.clone().flatten(),
-                status_state: status_state(raw.status.as_ref()),
-                health: status_health(raw.status.as_ref()),
-            });
-        }
+    let mut out = Vec::with_capacity(devices.len());
+    for device in devices {
+        let raw = device.raw();
+        out.push(PcieDeviceData {
+            id: device.id().to_string(),
+            odata_id: Some(device.odata_id().to_string()),
+            uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
+            device_type: raw
+                .device_type
+                .map(|device_type| device_type.to_snake_case().to_string()),
+            manufacturer: raw.manufacturer.clone().flatten(),
+            model: raw.model.clone().flatten(),
+            sku: raw.sku.clone().flatten(),
+            serial_number: raw.serial_number.clone().flatten(),
+            part_number: raw.part_number.clone().flatten(),
+            firmware_version: raw.firmware_version.clone().flatten(),
+            status_state: status_state(raw.status.as_ref()),
+            health: status_health(raw.status.as_ref()),
+            health_rollup: status_health_rollup(raw.status.as_ref()),
+        });
     }
+    out
 }
 
 async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareData>, String> {
@@ -452,13 +527,34 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
 fn status_state(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
     status
         .and_then(|status| status.state.flatten())
-        .map(|state| state.to_snake_case().to_string())
+        .and_then(redfish_enum_string)
 }
 
 fn status_health(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
     status
-        .and_then(|status| status.health_rollup.flatten().or(status.health.flatten()))
-        .map(|health| health.to_snake_case().to_string())
+        .and_then(|status| status.health.flatten())
+        .and_then(redfish_health_string)
+}
+
+fn status_health_rollup(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
+    status
+        .and_then(|status| status.health_rollup.flatten())
+        .and_then(redfish_health_string)
+}
+
+fn redfish_health_string(health: nv_redfish::schema::resource::Health) -> Option<String> {
+    match health {
+        nv_redfish::schema::resource::Health::Ok => Some("OK".to_string()),
+        nv_redfish::schema::resource::Health::Warning => Some("Warning".to_string()),
+        nv_redfish::schema::resource::Health::Critical => Some("Critical".to_string()),
+        nv_redfish::schema::resource::Health::UnsupportedValue => None,
+    }
+}
+
+fn redfish_enum_string<T: serde::Serialize>(value: T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToString::to_string))
 }
 
 fn push_inventory_error(
@@ -525,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn bmc_url_preserves_explicit_port() {
+    fn bmc_url_keeps_explicit_port() {
         let url = bmc_url("https://bmc.example.com:8443", 443).expect("url");
 
         assert_eq!(url.as_str(), "https://bmc.example.com:8443/");
@@ -545,6 +641,44 @@ mod tests {
         assert!(!error.to_string().is_empty());
     }
 
+    #[test]
+    fn pcie_traversal_policy_controls_selected_chassis() {
+        assert!(should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::Viking,
+            "HGX_GPU_SXM_0"
+        ));
+        assert!(should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::Viking,
+            "HGX_NVSwitch_0"
+        ));
+        assert!(!should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::Viking,
+            "HGX_GPU_PCIE_0"
+        ));
+
+        assert!(should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::SystemId("System".to_string()),
+            "System"
+        ));
+        assert!(!should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::SystemId("System".to_string()),
+            "BMC_0"
+        ));
+
+        assert!(should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::LenovoGb300,
+            "HGX_GPU_PCIE_0"
+        ));
+        assert!(!should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::LenovoGb300,
+            "HGX_NVSwitch_0"
+        ));
+        assert!(!should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::None,
+            "HGX_GPU_SXM_0"
+        ));
+    }
+
     #[tokio::test]
     async fn collect_report_from_mock_bmc_traverses_inventory() {
         type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
@@ -556,25 +690,13 @@ mod tests {
         bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
         bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
         bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/GPU0",
-            GPU_PROCESSOR,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
             PCIE_DEVICES_COLLECTION,
         ));
         bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
             PCIE_DEVICE,
         ));
         bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
@@ -598,7 +720,7 @@ mod tests {
             Some("1.15.1")
         );
         assert_eq!(report.service_root.uuid.as_deref(), Some(SERVICE_UUID));
-        assert_eq!(report.service_root.vendor.as_deref(), Some("NVIDIA"));
+        assert_eq!(report.service_root.vendor.as_deref(), Some("AMI"));
         assert_eq!(report.service_root.product.as_deref(), Some("Mock BMC"));
 
         assert_eq!(report.managers.len(), 1);
@@ -609,7 +731,7 @@ mod tests {
         );
 
         assert_eq!(report.systems.len(), 1);
-        assert_eq!(report.systems[0].id, "System");
+        assert_eq!(report.systems[0].id, "DGX");
         assert_eq!(report.systems[0].uuid.as_deref(), Some(SYSTEM_UUID));
         assert_eq!(report.systems[0].manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(report.systems[0].model.as_deref(), Some("GB200"));
@@ -629,10 +751,13 @@ mod tests {
         assert_eq!(report.systems[0].cpu_core_count, Some(72));
         assert_eq!(report.systems[0].cpu_model.as_deref(), Some("Grace"));
         assert_eq!(report.systems[0].memory_gib, Some(480.0));
-        assert_eq!(report.systems[0].health.as_deref(), Some("warning"));
+        assert_eq!(report.systems[0].secure_boot_enabled, None);
+        assert_eq!(report.systems[0].status_state.as_deref(), Some("Enabled"));
+        assert_eq!(report.systems[0].health.as_deref(), Some("OK"));
+        assert_eq!(report.systems[0].health_rollup.as_deref(), Some("Warning"));
 
         assert_eq!(report.chassis.len(), 1);
-        assert_eq!(report.chassis[0].id, "BMC_0");
+        assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
         assert_eq!(report.chassis[0].chassis_type.as_deref(), Some("module"));
         assert_eq!(report.chassis[0].manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(report.chassis[0].model.as_deref(), Some("BMC"));
@@ -647,27 +772,10 @@ mod tests {
         assert_eq!(location.row.as_deref(), Some("A"));
         assert_eq!(location.rack_offset, Some(7));
 
-        assert_eq!(report.devices.len(), 2);
-        assert_eq!(report.devices[0].id, "GPU0");
-        assert_eq!(report.devices[0].source, "processor");
-        assert_eq!(report.devices[0].parent_id.as_deref(), Some("System"));
-        assert_eq!(report.devices[0].device_type.as_deref(), Some("gpu"));
-        assert_eq!(report.devices[0].manufacturer.as_deref(), Some("NVIDIA"));
-        assert_eq!(report.devices[0].model.as_deref(), Some("B200"));
+        assert_eq!(report.chassis[0].pcie_devices.len(), 1);
+        assert_eq!(report.chassis[0].pcie_devices[0].id, "GPU1");
         assert_eq!(
-            report.devices[0].serial_number.as_deref(),
-            Some("GPU-SN123")
-        );
-        assert_eq!(
-            report.devices[0].firmware_version.as_deref(),
-            Some("96.00.5E.00.01")
-        );
-        assert_eq!(report.devices[0].health.as_deref(), Some("ok"));
-        assert_eq!(report.devices[1].id, "GPU1");
-        assert_eq!(report.devices[1].source, "pcie_device");
-        assert_eq!(report.devices[1].parent_id.as_deref(), Some("BMC_0"));
-        assert_eq!(
-            report.devices[1].serial_number.as_deref(),
+            report.chassis[0].pcie_devices[0].serial_number.as_deref(),
             Some("GPU-SN456")
         );
 
@@ -683,40 +791,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_processor_device_does_not_fail_inventory_report() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT_WITH_SYSTEM_ONLY));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/GPU0",
-            MALFORMED_GPU_PROCESSOR,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
-
-        assert_eq!(report.systems.len(), 1);
-        assert_eq!(report.systems[0].id, "System");
-        assert!(report.devices.is_empty());
-        assert_eq!(report.errors.len(), 1);
-        assert_eq!(report.errors[0].domain, "devices.processors");
-        assert_eq!(report.errors[0].resource.as_deref(), Some("System"));
-        assert!(!report.errors[0].message.is_empty());
-    }
-
-    #[tokio::test]
     async fn manager_collection_failure_is_partial_and_keeps_other_inventory() {
         type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
 
@@ -727,25 +801,13 @@ mod tests {
         bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
         bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
         bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/GPU0",
-            GPU_PROCESSOR,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
             PCIE_DEVICES_COLLECTION,
         ));
         bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
             PCIE_DEVICE,
         ));
         bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
@@ -767,7 +829,7 @@ mod tests {
         assert!(report.managers.is_empty());
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.chassis.len(), 1);
-        assert_eq!(report.devices.len(), 2);
+        assert_eq!(report.chassis[0].pcie_devices.len(), 1);
         assert_eq!(report.firmware.len(), 1);
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].domain, "managers");
@@ -786,25 +848,13 @@ mod tests {
         bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
         bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
         bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/GPU0",
-            GPU_PROCESSOR,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
             PCIE_DEVICES_COLLECTION,
         ));
         bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
             PCIE_DEVICE,
         ));
         bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
@@ -826,7 +876,7 @@ mod tests {
         assert_eq!(report.managers.len(), 1);
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.chassis.len(), 1);
-        assert_eq!(report.devices.len(), 2);
+        assert_eq!(report.chassis[0].pcie_devices.len(), 1);
         assert!(report.firmware.is_empty());
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].domain, "firmware");
@@ -847,24 +897,12 @@ mod tests {
         "Links": {
             "Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}
         },
-        "Vendor": "NVIDIA",
+        "Vendor": "AMI",
         "Product": "Mock BMC",
         "Managers": {"@odata.id": "/redfish/v1/Managers"},
         "Systems": {"@odata.id": "/redfish/v1/Systems"},
         "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
         "UpdateService": {"@odata.id": "/redfish/v1/UpdateService"}
-    }"##;
-
-    const SERVICE_ROOT_WITH_SYSTEM_ONLY: &str = r##"{
-        "@odata.id": "/redfish/v1",
-        "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
-        "Id": "RootService",
-        "Name": "Root Service",
-        "RedfishVersion": "1.15.1",
-        "Links": {
-            "Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}
-        },
-        "Systems": {"@odata.id": "/redfish/v1/Systems"}
     }"##;
 
     const MANAGERS_COLLECTION: &str = r##"{
@@ -907,7 +945,7 @@ mod tests {
     const SYSTEM: &str = r##"{
         "@odata.id": "/redfish/v1/Systems/System",
         "@odata.type": "#ComputerSystem.v1_15_0.ComputerSystem",
-        "Id": "System",
+        "Id": "DGX",
         "Name": "System",
         "UUID": "9AEE71E4-6E80-11EE-A8AC-74D4DD550187",
         "Manufacturer": "NVIDIA",
@@ -926,7 +964,6 @@ mod tests {
         "MemorySummary": {
             "TotalSystemMemoryGiB": 480
         },
-        "Processors": {"@odata.id": "/redfish/v1/Systems/System/Processors"},
         "Status": {
             "State": "Enabled",
             "Health": "OK",
@@ -940,75 +977,37 @@ mod tests {
         "Id": "Chassis",
         "Name": "Chassis",
         "Members@odata.count": 1,
-        "Members": [{"@odata.id": "/redfish/v1/Chassis/BMC_0"}]
+        "Members": [{"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0"}]
     }"##;
 
     const CHASSIS: &str = r##"{
-        "@odata.id": "/redfish/v1/Chassis/BMC_0",
+        "@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0",
         "@odata.type": "#Chassis.v1_25_0.Chassis",
-        "Id": "BMC_0",
+        "Id": "HGX_GPU_SXM_0",
         "Name": "BMC Chassis",
         "ChassisType": "Module",
         "Manufacturer": "NVIDIA",
         "Model": "BMC",
         "SerialNumber": "CH123",
         "PartNumber": "PN123",
-        "PCIeDevices": {"@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices"},
+        "PCIeDevices": {"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices"},
         "Location": {
             "PartLocation": {"ServiceLabel": "Bay 1"},
             "Placement": {"Rack": "R12", "Row": "A", "RackOffset": 7}
         }
     }"##;
 
-    const PROCESSORS_COLLECTION: &str = r##"{
-        "@odata.id": "/redfish/v1/Systems/System/Processors",
-        "@odata.type": "#ProcessorCollection.ProcessorCollection",
-        "Id": "Processors",
-        "Name": "Processors",
-        "Members@odata.count": 1,
-        "Members": [{"@odata.id": "/redfish/v1/Systems/System/Processors/GPU0"}]
-    }"##;
-
-    const GPU_PROCESSOR: &str = r##"{
-        "@odata.id": "/redfish/v1/Systems/System/Processors/GPU0",
-        "@odata.type": "#Processor.v1_20_0.Processor",
-        "Id": "GPU0",
-        "Name": "GPU 0",
-        "ProcessorType": "GPU",
-        "Manufacturer": "NVIDIA",
-        "Model": "B200",
-        "SerialNumber": "GPU-SN123",
-        "PartNumber": "GPU-PN123",
-        "FirmwareVersion": "96.00.5E.00.01",
-        "Status": {
-            "State": "Enabled",
-            "Health": "OK"
-        }
-    }"##;
-
-    const MALFORMED_GPU_PROCESSOR: &str = r##"{
-        "@odata.id": "/redfish/v1/Systems/System/Processors/GPU0",
-        "@odata.type": "#Processor.v1_20_0.Processor",
-        "Id": "GPU0",
-        "Name": "GPU 0",
-        "ProcessorType": "GPU",
-        "Manufacturer": "NVIDIA",
-        "Model": "B200",
-        "SerialNumber": "GPU-SN123",
-        "TotalCores": "0x01"
-    }"##;
-
     const PCIE_DEVICES_COLLECTION: &str = r##"{
-        "@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+        "@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
         "@odata.type": "#PCIeDeviceCollection.PCIeDeviceCollection",
         "Id": "PCIeDevices",
         "Name": "PCIe Devices",
         "Members@odata.count": 1,
-        "Members": [{"@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1"}]
+        "Members": [{"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1"}]
     }"##;
 
     const PCIE_DEVICE: &str = r##"{
-        "@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+        "@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
         "@odata.type": "#PCIeDevice.v1_16_0.PCIeDevice",
         "Id": "GPU1",
         "Name": "GPU 1",

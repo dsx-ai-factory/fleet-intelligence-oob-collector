@@ -2,8 +2,9 @@ use std::error::Error;
 use std::fmt;
 
 use super::InventorySink;
-use crate::inventory::types::{
-    ChassisInventory, ChassisLocation, DeviceInventory, FirmwareInventory, NodeInventory,
+use crate::inventory::models::{
+    ChassisInventory, ChassisLocation, FirmwareInventory, NodeInventory, PcieDeviceInventory,
+    SystemInventory,
 };
 
 #[derive(Default)]
@@ -13,35 +14,29 @@ pub struct TableSink {
 
 #[derive(Debug)]
 struct SummaryRow {
-    target: String,
     address: String,
-    redfish: String,
-    service_uuid: String,
-    vendor: String,
-    manager: String,
-    system: String,
-    system_uuid: String,
-    health: String,
+    managers: String,
+    systems: String,
     chassis: String,
-    devices: String,
     firmware: String,
     domain_errors: String,
     error: String,
 }
 
 #[derive(Debug)]
-struct NodeDetailRow {
-    target: String,
-    address: String,
-    vendor: String,
-    redfish: String,
-    service_uuid: String,
+struct ManagerDetailRow {
     manager_id: String,
     manager_uuid: String,
     manager_model: String,
     manager_type: String,
     manager_firmware: String,
     manager_status: String,
+    manager_health: String,
+    manager_health_rollup: String,
+}
+
+#[derive(Debug)]
+struct SystemDetailRow {
     system_id: String,
     system_uuid: String,
     manufacturer: String,
@@ -54,8 +49,11 @@ struct NodeDetailRow {
     power: String,
     status: String,
     health: String,
+    health_rollup: String,
     cpu: String,
+    cpu_model: String,
     memory_gib: String,
+    secure_boot_enabled: String,
 }
 
 #[derive(Debug)]
@@ -71,6 +69,7 @@ struct ChassisDetailRow {
     power: String,
     status: String,
     health: String,
+    health_rollup: String,
     location: String,
 }
 
@@ -78,8 +77,6 @@ struct ChassisDetailRow {
 struct DeviceDetailRow {
     id: String,
     source: String,
-    parent_type: String,
-    parent: String,
     uuid: String,
     device_type: String,
     manufacturer: String,
@@ -90,6 +87,7 @@ struct DeviceDetailRow {
     firmware: String,
     status: String,
     health: String,
+    health_rollup: String,
 }
 
 #[derive(Debug)]
@@ -118,17 +116,10 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
     let mut out = render_table(
         &[
-            "Target",
             "Address",
-            "Redfish",
-            "Service UUID",
-            "Vendor",
-            "Manager",
-            "System",
-            "System UUID",
-            "Health",
+            "Managers",
+            "Systems",
             "Chassis",
-            "Devices",
             "Firmware",
             "Domain Errors",
             "Target Error",
@@ -147,39 +138,11 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
 
 impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
-        let manager = inventory
-            .manager
-            .as_ref()
-            .map(|manager| manager.id.clone())
-            .unwrap_or_default();
-        let system = inventory
-            .node
-            .as_ref()
-            .map(|node| node.system_id.clone())
-            .unwrap_or_default();
-        let system_uuid = inventory
-            .node
-            .as_ref()
-            .and_then(|node| node.system_uuid.as_ref().map(ToString::to_string))
-            .unwrap_or_default();
-        let health = inventory
-            .node
-            .as_ref()
-            .and_then(|node| node.health.clone())
-            .unwrap_or_default();
-
         Self {
-            target: inventory.source.target.clone(),
             address: inventory.source.address.clone(),
-            redfish: inventory.source.redfish_version.clone().unwrap_or_default(),
-            service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
-            vendor: inventory.source.vendor.clone().unwrap_or_default(),
-            manager,
-            system,
-            system_uuid,
-            health,
+            managers: usize::from(inventory.manager.is_some()).to_string(),
+            systems: usize::from(inventory.system.is_some()).to_string(),
             chassis: inventory.chassis.len().to_string(),
-            devices: inventory.devices.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
             domain_errors: inventory.domain_errors.len().to_string(),
             error: inventory.target_error.clone().unwrap_or_default(),
@@ -188,19 +151,12 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 14] {
+    fn values(&self) -> [String; 7] {
         [
-            self.target.clone(),
             self.address.clone(),
-            self.redfish.clone(),
-            self.service_uuid.clone(),
-            self.vendor.clone(),
-            self.manager.clone(),
-            self.system.clone(),
-            self.system_uuid.clone(),
-            self.health.clone(),
+            self.managers.clone(),
+            self.systems.clone(),
             self.chassis.clone(),
-            self.devices.clone(),
             self.firmware.clone(),
             self.domain_errors.clone(),
             self.error.clone(),
@@ -208,14 +164,9 @@ impl SummaryRow {
     }
 }
 
-impl From<&NodeInventory> for NodeDetailRow {
+impl From<&NodeInventory> for ManagerDetailRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
-            target: inventory.source.target.clone(),
-            address: inventory.source.address.clone(),
-            vendor: inventory.source.vendor.clone().unwrap_or_default(),
-            redfish: inventory.source.redfish_version.clone().unwrap_or_default(),
-            service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
             manager_id: inventory
                 .manager
                 .as_ref()
@@ -246,91 +197,75 @@ impl From<&NodeInventory> for NodeDetailRow {
                 .as_ref()
                 .and_then(|manager| manager.status_state.clone())
                 .unwrap_or_default(),
-            system_id: inventory
-                .node
+            manager_health: inventory
+                .manager
                 .as_ref()
-                .map(|node| node.system_id.clone())
+                .and_then(|manager| manager.health.clone())
                 .unwrap_or_default(),
-            system_uuid: inventory
-                .node
+            manager_health_rollup: inventory
+                .manager
                 .as_ref()
-                .and_then(|node| node.system_uuid.as_ref().map(ToString::to_string))
-                .unwrap_or_default(),
-            manufacturer: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.manufacturer.clone())
-                .unwrap_or_default(),
-            model: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.model.clone())
-                .unwrap_or_default(),
-            sku: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.sku.clone())
-                .unwrap_or_default(),
-            serial: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.serial_number.clone())
-                .unwrap_or_default(),
-            bios: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.bios_version.clone())
-                .unwrap_or_default(),
-            host_name: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.host_name.clone())
-                .unwrap_or_default(),
-            asset_tag: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.asset_tag.clone())
-                .unwrap_or_default(),
-            power: inventory
-                .node
-                .as_ref()
-                .map(|node| node.power_state.clone())
-                .unwrap_or_default(),
-            status: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.status_state.clone())
-                .unwrap_or_default(),
-            health: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.health.clone())
-                .unwrap_or_default(),
-            cpu: inventory.node.as_ref().map(format_cpu).unwrap_or_default(),
-            memory_gib: inventory
-                .node
-                .as_ref()
-                .and_then(|node| node.memory_gib)
-                .map(|memory| memory.to_string())
+                .and_then(|manager| manager.health_rollup.clone())
                 .unwrap_or_default(),
         }
     }
 }
 
-impl NodeDetailRow {
+impl ManagerDetailRow {
     fn values(&self) -> Vec<[String; 2]> {
         vec![
-            ["Target".to_string(), self.target.clone()],
-            ["Address".to_string(), self.address.clone()],
-            ["Vendor".to_string(), self.vendor.clone()],
-            ["Redfish".to_string(), self.redfish.clone()],
-            ["Service UUID".to_string(), self.service_uuid.clone()],
             ["Manager".to_string(), self.manager_id.clone()],
             ["Manager UUID".to_string(), self.manager_uuid.clone()],
             ["Manager Model".to_string(), self.manager_model.clone()],
             ["Manager Type".to_string(), self.manager_type.clone()],
             ["BMC FW".to_string(), self.manager_firmware.clone()],
             ["Manager Status".to_string(), self.manager_status.clone()],
+            ["Manager Health".to_string(), self.manager_health.clone()],
+            [
+                "Manager Health Rollup".to_string(),
+                self.manager_health_rollup.clone(),
+            ],
+        ]
+    }
+}
+
+impl From<&SystemInventory> for SystemDetailRow {
+    fn from(system: &SystemInventory) -> Self {
+        Self {
+            system_id: system.id.clone(),
+            system_uuid: system
+                .uuid
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            manufacturer: system.manufacturer.clone().unwrap_or_default(),
+            model: system.model.clone().unwrap_or_default(),
+            sku: system.sku.clone().unwrap_or_default(),
+            serial: system.serial_number.clone().unwrap_or_default(),
+            bios: system.bios_version.clone().unwrap_or_default(),
+            host_name: system.host_name.clone().unwrap_or_default(),
+            asset_tag: system.asset_tag.clone().unwrap_or_default(),
+            power: system.power_state.clone().unwrap_or_default(),
+            status: system.status_state.clone().unwrap_or_default(),
+            health: system.health.clone().unwrap_or_default(),
+            health_rollup: system.health_rollup.clone().unwrap_or_default(),
+            cpu: format_cpu(system),
+            cpu_model: system.cpu_model.clone().unwrap_or_default(),
+            memory_gib: system
+                .memory_gib
+                .map(|memory| memory.to_string())
+                .unwrap_or_default(),
+            secure_boot_enabled: system
+                .secure_boot_enabled
+                .map(|enabled| enabled.to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl SystemDetailRow {
+    fn values(&self) -> Vec<[String; 2]> {
+        vec![
             ["System".to_string(), self.system_id.clone()],
             ["System UUID".to_string(), self.system_uuid.clone()],
             ["Manufacturer".to_string(), self.manufacturer.clone()],
@@ -343,8 +278,14 @@ impl NodeDetailRow {
             ["Power".to_string(), self.power.clone()],
             ["Status".to_string(), self.status.clone()],
             ["Health".to_string(), self.health.clone()],
+            ["Health Rollup".to_string(), self.health_rollup.clone()],
             ["CPU".to_string(), self.cpu.clone()],
+            ["CPU Model".to_string(), self.cpu_model.clone()],
             ["Mem GiB".to_string(), self.memory_gib.clone()],
+            [
+                "Secure Boot Enabled".to_string(),
+                self.secure_boot_enabled.clone(),
+            ],
         ]
     }
 }
@@ -367,6 +308,7 @@ impl From<&ChassisInventory> for ChassisDetailRow {
             power: chassis.power_state.clone().unwrap_or_default(),
             status: chassis.status_state.clone().unwrap_or_default(),
             health: chassis.health.clone().unwrap_or_default(),
+            health_rollup: chassis.health_rollup.clone().unwrap_or_default(),
             location: chassis
                 .location
                 .as_ref()
@@ -377,7 +319,7 @@ impl From<&ChassisInventory> for ChassisDetailRow {
 }
 
 impl ChassisDetailRow {
-    fn values(&self) -> [String; 12] {
+    fn values(&self) -> [String; 13] {
         [
             self.id.clone(),
             self.chassis_type.clone(),
@@ -390,6 +332,7 @@ impl ChassisDetailRow {
             self.power.clone(),
             self.status.clone(),
             self.health.clone(),
+            self.health_rollup.clone(),
             self.location.clone(),
         ]
     }
@@ -417,13 +360,11 @@ fn format_location(location: &ChassisLocation) -> String {
     parts.join(", ")
 }
 
-impl From<&DeviceInventory> for DeviceDetailRow {
-    fn from(device: &DeviceInventory) -> Self {
+impl DeviceDetailRow {
+    fn from_pcie_device(device: &PcieDeviceInventory) -> Self {
         Self {
             id: device.id.clone(),
-            source: device.source.clone(),
-            parent_type: device.parent_type.clone().unwrap_or_default(),
-            parent: device.parent_id.clone().unwrap_or_default(),
+            source: "pcie_device".to_string(),
             uuid: device.uuid.clone().unwrap_or_default(),
             device_type: device.device_type.clone().unwrap_or_default(),
             manufacturer: device.manufacturer.clone().unwrap_or_default(),
@@ -434,17 +375,14 @@ impl From<&DeviceInventory> for DeviceDetailRow {
             firmware: device.firmware_version.clone().unwrap_or_default(),
             status: device.status_state.clone().unwrap_or_default(),
             health: device.health.clone().unwrap_or_default(),
+            health_rollup: device.health_rollup.clone().unwrap_or_default(),
         }
     }
-}
 
-impl DeviceDetailRow {
-    fn values(&self) -> [String; 14] {
+    fn values(&self) -> [String; 13] {
         [
             self.id.clone(),
             self.source.clone(),
-            self.parent_type.clone(),
-            self.parent.clone(),
             self.uuid.clone(),
             self.device_type.clone(),
             self.manufacturer.clone(),
@@ -455,6 +393,7 @@ impl DeviceDetailRow {
             self.firmware.clone(),
             self.status.clone(),
             self.health.clone(),
+            self.health_rollup.clone(),
         ]
     }
 }
@@ -485,13 +424,21 @@ impl FirmwareDetailRow {
 
 fn write_node_details(out: &mut String, inventory: &NodeInventory) {
     out.push('\n');
-    out.push_str(&format!(
-        "Node: {} ({})\n",
-        inventory.source.target, inventory.source.address
-    ));
+    out.push_str(&format!("Node: {}\n", inventory.source.address));
 
-    let node_row = NodeDetailRow::from(inventory);
-    out.push_str(&render_table(&["Attribute", "Value"], node_row.values()));
+    let manager_row = ManagerDetailRow::from(inventory);
+    out.push_str("Manager Information\n");
+    out.push_str(&render_table(&["Attribute", "Value"], manager_row.values()));
+
+    let system_row = inventory.system.as_ref().map(SystemDetailRow::from);
+    out.push_str("System Information\n");
+    out.push_str(&render_table(
+        &["Attribute", "Value"],
+        system_row
+            .as_ref()
+            .map(SystemDetailRow::values)
+            .unwrap_or_default(),
+    ));
 
     let chassis_rows = inventory
         .chassis
@@ -512,23 +459,23 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
             "Power",
             "Status",
             "Health",
+            "Health Rollup",
             "Location",
         ],
         chassis_rows,
     ));
 
-    let device_rows = inventory
-        .devices
+    let pcie_device_rows = inventory
+        .chassis
         .iter()
-        .map(DeviceDetailRow::from)
+        .flat_map(|chassis| chassis.pcie_devices.iter())
+        .map(DeviceDetailRow::from_pcie_device)
         .map(|row| row.values());
-    out.push_str("Devices\n");
+    out.push_str("PCIe Devices\n");
     out.push_str(&render_table(
         &[
             "ID",
             "Source",
-            "Parent Type",
-            "Parent",
             "UUID",
             "Type",
             "Manufacturer",
@@ -539,8 +486,9 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
             "Firmware",
             "Status",
             "Health",
+            "Health Rollup",
         ],
-        device_rows,
+        pcie_device_rows,
     ));
 
     let firmware_rows = inventory
@@ -555,8 +503,8 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
     ));
 }
 
-fn format_cpu(node: &crate::inventory::types::NodeInfo) -> String {
-    match (node.cpu_count, node.cpu_core_count) {
+fn format_cpu(system: &SystemInventory) -> String {
+    match (system.cpu_count, system.cpu_core_count) {
         (Some(count), Some(cores)) => format!("{count}/{cores}"),
         (Some(count), None) => count.to_string(),
         (None, Some(cores)) => format!("?/{cores}"),
@@ -607,8 +555,9 @@ fn write_row<T: fmt::Display>(out: &mut String, values: &[T], widths: &[usize]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::types::{
-        INVENTORY_SCHEMA_VERSION, InventorySourceInfo, ManagerInventory, NodeInfo, SystemUuid,
+    use crate::inventory::models::{
+        INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, ManagerInventory,
+        PcieDeviceInventory, SystemInventory,
     };
 
     #[test]
@@ -617,7 +566,7 @@ mod tests {
             &["Name", "Value"],
             [
                 ["BMC".to_string(), "3.19.00".to_string()],
-                ["LongerName".to_string(), "ok".to_string()],
+                ["LongerName".to_string(), "x".to_string()],
             ],
         );
 
@@ -628,7 +577,7 @@ mod tests {
                 "| Name       | Value   |\n",
                 "+------------+---------+\n",
                 "| BMC        | 3.19.00 |\n",
-                "| LongerName | ok      |\n",
+                "| LongerName | x       |\n",
                 "+------------+---------+\n",
             )
         );
@@ -651,8 +600,9 @@ mod tests {
 
         let row = SummaryRow::from(&inventory);
 
+        assert_eq!(row.managers, "1");
+        assert_eq!(row.systems, "1");
         assert_eq!(row.chassis, "1");
-        assert_eq!(row.devices, "1");
         assert_eq!(row.firmware, "1");
         assert_eq!(row.domain_errors, "0");
         assert_eq!(row.error, "timeout");
@@ -669,9 +619,9 @@ mod tests {
     fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
-        assert!(rendered.contains("| node-a | 10.0.0.1 | 1.15.1"));
-        assert!(rendered.contains("| NVIDIA | BMC_0"));
-        assert!(!rendered.contains("Node: node-a"));
+        assert!(rendered.contains("| Address  | Managers | Systems | Chassis | Firmware"));
+        assert!(rendered.contains("| 10.0.0.1 | 1        | 1       | 1       | 1"));
+        assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }
 
@@ -679,17 +629,33 @@ mod tests {
     fn render_inventory_tables_includes_node_chassis_and_firmware_details() {
         let rendered = render_inventory_tables(&[full_inventory()], true);
 
-        assert!(rendered.contains("Node: node-a (10.0.0.1)"));
+        assert!(rendered.contains("Node: 10.0.0.1"));
+        assert!(rendered.contains("Manager Information\n"));
         assert!(rendered.contains("Manager Model"));
         assert!(rendered.contains("OpenBMC"));
+        assert!(rendered.contains("System Information\n"));
         assert!(rendered.contains("CPU"));
         assert!(rendered.contains("1/72"));
+        assert!(rendered.contains("CPU Model"));
+        assert!(rendered.contains("Grace CPU"));
+        assert!(rendered.contains("Secure Boot Enabled"));
+        assert!(rendered.contains("Health Rollup"));
         assert!(rendered.contains("Chassis\n"));
         assert!(rendered.contains("| BMC_0 | module"));
-        assert!(rendered.contains("Devices\n"));
-        assert!(rendered.contains("| GPU0"));
+        assert!(rendered.contains("PCIe Devices\n"));
+        assert!(rendered.contains("| GPU1"));
         assert!(rendered.contains("Firmware\n"));
         assert!(rendered.contains("| FirmwareInventory | BMC"));
+
+        let manager = rendered.find("Manager Information\n").expect("manager");
+        let system = rendered.find("System Information\n").expect("system");
+        let chassis = rendered.find("Chassis\n").expect("chassis");
+        let pcie = rendered.find("PCIe Devices\n").expect("pcie");
+        let firmware = rendered.find("Firmware\n").expect("firmware");
+        assert!(manager < system);
+        assert!(system < chassis);
+        assert!(chassis < pcie);
+        assert!(pcie < firmware);
     }
 
     #[test]
@@ -711,18 +677,18 @@ mod tests {
         NodeInventory {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
+            uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
-                target: "node-a".to_string(),
                 address: "10.0.0.1".to_string(),
                 redfish_version: Some("1.15.1".to_string()),
                 service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
                 vendor: Some("NVIDIA".to_string()),
             },
-            node: Some(NodeInfo {
-                system_id: "System".to_string(),
+            system: Some(SystemInventory {
+                id: "System".to_string(),
                 odata_id: Some("/redfish/v1/Systems/System".to_string()),
-                system_uuid: SystemUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+                uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
                 manufacturer: Some("NVIDIA".to_string()),
                 model: Some("GB200".to_string()),
                 sku: Some("SKU-GB200".to_string()),
@@ -730,13 +696,15 @@ mod tests {
                 bios_version: Some("3A21".to_string()),
                 host_name: Some("node-a.example.com".to_string()),
                 asset_tag: Some("rack-12-tray-3".to_string()),
-                power_state: "on".to_string(),
-                status_state: Some("enabled".to_string()),
-                health: Some("ok".to_string()),
+                power_state: Some("on".to_string()),
+                status_state: Some("Enabled".to_string()),
+                health: Some("OK".to_string()),
+                health_rollup: Some("Warning".to_string()),
                 cpu_count: Some(1),
                 cpu_core_count: Some(72),
-                cpu_model: None,
+                cpu_model: Some("Grace CPU".to_string()),
                 memory_gib: Some(480.0),
+                secure_boot_enabled: Some(true),
             }),
             manager: Some(ManagerInventory {
                 id: "BMC_0".to_string(),
@@ -745,8 +713,9 @@ mod tests {
                 manager_type: Some("bmc".to_string()),
                 model: Some("OpenBMC".to_string()),
                 firmware_version: Some("3.19.00".to_string()),
-                status_state: Some("enabled".to_string()),
-                health: Some("ok".to_string()),
+                status_state: Some("Enabled".to_string()),
+                health: Some("OK".to_string()),
+                health_rollup: Some("OK".to_string()),
             }),
             chassis: vec![ChassisInventory {
                 id: "BMC_0".to_string(),
@@ -759,26 +728,25 @@ mod tests {
                 part_number: Some("PN123".to_string()),
                 asset_tag: Some("rack-12".to_string()),
                 power_state: Some("on".to_string()),
-                status_state: Some("enabled".to_string()),
-                health: Some("ok".to_string()),
+                status_state: Some("Enabled".to_string()),
+                health: Some("OK".to_string()),
+                health_rollup: Some("OK".to_string()),
                 location: None,
-            }],
-            devices: vec![DeviceInventory {
-                id: "GPU0".to_string(),
-                odata_id: Some("/redfish/v1/Systems/System/Processors/GPU0".to_string()),
-                uuid: Some("device-uuid".to_string()),
-                source: "processor".to_string(),
-                parent_type: Some("system".to_string()),
-                parent_id: Some("System".to_string()),
-                device_type: Some("gpu".to_string()),
-                manufacturer: Some("NVIDIA".to_string()),
-                model: Some("B200".to_string()),
-                sku: None,
-                serial_number: Some("GPU-SN123".to_string()),
-                part_number: Some("GPU-PN123".to_string()),
-                firmware_version: Some("96.00.5E.00.01".to_string()),
-                status_state: Some("enabled".to_string()),
-                health: Some("ok".to_string()),
+                pcie_devices: vec![PcieDeviceInventory {
+                    id: "GPU1".to_string(),
+                    odata_id: Some("/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1".to_string()),
+                    uuid: None,
+                    device_type: Some("single_function".to_string()),
+                    manufacturer: Some("NVIDIA".to_string()),
+                    model: Some("B200".to_string()),
+                    sku: Some("B200-SXM".to_string()),
+                    serial_number: Some("GPU-SN456".to_string()),
+                    part_number: Some("GPU-PN456".to_string()),
+                    firmware_version: Some("96.00.5E.00.02".to_string()),
+                    status_state: Some("Enabled".to_string()),
+                    health: Some("OK".to_string()),
+                    health_rollup: Some("OK".to_string()),
+                }],
             }],
             firmware: vec![FirmwareInventory {
                 service_id: "FirmwareInventory".to_string(),
@@ -793,11 +761,11 @@ mod tests {
         }
     }
 
-    fn system(cpu_count: Option<i64>, cpu_core_count: Option<i64>) -> NodeInfo {
-        NodeInfo {
-            system_id: "System".to_string(),
+    fn system(cpu_count: Option<i64>, cpu_core_count: Option<i64>) -> SystemInventory {
+        SystemInventory {
+            id: "System".to_string(),
             odata_id: None,
-            system_uuid: SystemUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+            uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             manufacturer: None,
             model: None,
             sku: None,
@@ -805,13 +773,15 @@ mod tests {
             bios_version: None,
             host_name: None,
             asset_tag: None,
-            power_state: String::new(),
+            power_state: None,
             status_state: None,
             health: None,
+            health_rollup: None,
             cpu_count,
             cpu_core_count,
             cpu_model: None,
             memory_gib: None,
+            secure_boot_enabled: None,
         }
     }
 }

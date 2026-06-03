@@ -4,7 +4,7 @@ mod table;
 
 use std::error::Error;
 
-use super::types::NodeInventory;
+use super::models::NodeInventory;
 
 pub use backend::{BackendClient, BackendSink, HttpBackendClient};
 pub use json::JsonSink;

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::inventory::types::NodeInventory;
+use crate::inventory::models::NodeInventory;
 
 use super::InventorySink;
 
@@ -72,14 +72,14 @@ mod tests {
             put_batches: Rc::clone(&put_batches),
         });
 
-        sink.write(&[inventory("node-a"), inventory("node-b")])
+        sink.write(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
             .expect("write");
 
         let put_batches = put_batches.borrow();
         assert_eq!(put_batches.len(), 1);
         assert_eq!(put_batches[0].len(), 2);
-        assert_eq!(put_batches[0][0], "node-a");
-        assert_eq!(put_batches[0][1], "node-b");
+        assert_eq!(put_batches[0][0], "10.0.0.1");
+        assert_eq!(put_batches[0][1], "10.0.0.2");
     }
 
     #[derive(Clone)]
@@ -92,29 +92,28 @@ mod tests {
             self.put_batches.borrow_mut().push(
                 inventories
                     .iter()
-                    .map(|inventory| inventory.source.target.clone())
+                    .map(|inventory| inventory.source.address.clone())
                     .collect(),
             );
             Ok(())
         }
     }
 
-    fn inventory(target: &str) -> NodeInventory {
+    fn inventory(address: &str) -> NodeInventory {
         NodeInventory {
-            schema_version: crate::inventory::types::INVENTORY_SCHEMA_VERSION.to_string(),
+            schema_version: crate::inventory::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
-            source: crate::inventory::types::InventorySourceInfo {
+            uuid: None,
+            source: crate::inventory::models::InventorySourceInfo {
                 source_type: "redfish".to_string(),
-                target: target.to_string(),
-                address: "10.0.0.1".to_string(),
+                address: address.to_string(),
                 redfish_version: None,
                 service_uuid: None,
                 vendor: None,
             },
-            node: None,
             manager: None,
+            system: None,
             chassis: Vec::new(),
-            devices: Vec::new(),
             firmware: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,

@@ -1,7 +1,7 @@
 mod redfish;
 
+use super::models::NodeInventory;
 use super::source::SourceRecord;
-use super::types::NodeInventory;
 
 pub use redfish::RedfishMapper;
 

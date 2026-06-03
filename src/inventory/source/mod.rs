@@ -23,7 +23,6 @@ pub struct RedfishReport {
     pub managers: Vec<ManagerData>,
     pub systems: Vec<SystemData>,
     pub chassis: Vec<ChassisData>,
-    pub devices: Vec<DeviceData>,
     pub firmware: Vec<FirmwareData>,
     pub errors: Vec<InventoryErrorData>,
 }
@@ -46,6 +45,7 @@ pub struct ManagerData {
     pub firmware_version: Option<String>,
     pub status_state: Option<String>,
     pub health: Option<String>,
+    pub health_rollup: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,10 +63,12 @@ pub struct SystemData {
     pub power_state: Option<String>,
     pub status_state: Option<String>,
     pub health: Option<String>,
+    pub health_rollup: Option<String>,
     pub cpu_count: Option<i64>,
     pub cpu_core_count: Option<i64>,
     pub cpu_model: Option<String>,
     pub memory_gib: Option<f64>,
+    pub secure_boot_enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +85,9 @@ pub struct ChassisData {
     pub power_state: Option<String>,
     pub status_state: Option<String>,
     pub health: Option<String>,
+    pub health_rollup: Option<String>,
     pub location: Option<ChassisLocationData>,
+    pub pcie_devices: Vec<PcieDeviceData>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -96,13 +100,10 @@ pub struct ChassisLocationData {
 }
 
 #[derive(Clone, Debug)]
-pub struct DeviceData {
+pub struct PcieDeviceData {
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
-    pub source: String,
-    pub parent_type: Option<String>,
-    pub parent_id: Option<String>,
     pub device_type: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
@@ -112,6 +113,7 @@ pub struct DeviceData {
     pub firmware_version: Option<String>,
     pub status_state: Option<String>,
     pub health: Option<String>,
+    pub health_rollup: Option<String>,
 }
 
 #[derive(Clone, Debug)]
