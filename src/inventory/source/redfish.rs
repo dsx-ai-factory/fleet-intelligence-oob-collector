@@ -24,11 +24,19 @@ pub struct RedfishSource {
 }
 
 impl RedfishSource {
-    pub fn new(port: u16, insecure_tls: bool) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        port: u16,
+        insecure_tls: bool,
+        request_timeout: Duration,
+    ) -> Result<Self, Box<dyn Error>> {
+        if request_timeout.is_zero() {
+            return Err("request timeout must be greater than zero".into());
+        }
+        let connect_timeout = request_timeout.min(Duration::from_secs(10));
         let client = nv_redfish::bmc_http::reqwest::Client::with_params(
             nv_redfish::bmc_http::reqwest::ClientParams::new()
-                .timeout(Duration::from_secs(10))
-                .connect_timeout(Duration::from_secs(5))
+                .timeout(request_timeout)
+                .connect_timeout(connect_timeout)
                 .accept_invalid_certs(insecure_tls)
                 .max_redirects(0),
         )?;
@@ -80,11 +88,37 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
         product: raw_root.product.clone().flatten(),
     };
 
-    let managers = collect_managers(root).await?;
-    let systems = collect_systems(root).await?;
-    let chassis = collect_chassis(root).await?;
-    let (devices, errors) = collect_devices(root).await;
-    let firmware = collect_firmware(root).await?;
+    let mut errors = Vec::new();
+    let managers = match collect_managers(root).await {
+        Ok(managers) => managers,
+        Err(err) => {
+            push_inventory_error(&mut errors, "managers", None, err);
+            Vec::new()
+        }
+    };
+    let systems = match collect_systems(root).await {
+        Ok(systems) => systems,
+        Err(err) => {
+            push_inventory_error(&mut errors, "systems", None, err);
+            Vec::new()
+        }
+    };
+    let chassis = match collect_chassis(root).await {
+        Ok(chassis) => chassis,
+        Err(err) => {
+            push_inventory_error(&mut errors, "chassis", None, err);
+            Vec::new()
+        }
+    };
+    let (devices, device_errors) = collect_devices(root).await;
+    errors.extend(device_errors);
+    let firmware = match collect_firmware(root).await {
+        Ok(firmware) => firmware,
+        Err(err) => {
+            push_inventory_error(&mut errors, "firmware", None, err);
+            Vec::new()
+        }
+    };
 
     Ok(RedfishReport {
         service_root,
@@ -468,9 +502,18 @@ mod tests {
 
     #[test]
     fn redfish_source_builds_client() {
-        let source = RedfishSource::new(8443, true).expect("source");
+        let source = RedfishSource::new(8443, true, Duration::from_secs(30)).expect("source");
 
         assert_eq!(source.port, 8443);
+    }
+
+    #[test]
+    fn redfish_source_rejects_zero_timeout() {
+        let Err(error) = RedfishSource::new(8443, true, Duration::ZERO) else {
+            panic!("zero timeout should fail");
+        };
+
+        assert!(!error.to_string().is_empty());
     }
 
     #[test]
@@ -673,6 +716,124 @@ mod tests {
         assert!(!report.errors[0].message.is_empty());
     }
 
+    #[tokio::test]
+    async fn manager_collection_failure_is_partial_and_keeps_other_inventory() {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MALFORMED_MANAGER));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors",
+            PROCESSORS_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors/GPU0",
+            GPU_PROCESSOR,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+            PCIE_DEVICES_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+            PCIE_DEVICE,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            FIRMWARE,
+        ));
+
+        let root = ServiceRoot::new(Arc::clone(&bmc))
+            .await
+            .expect("service root wrapper");
+
+        let report = collect_report_from_root(&root).await.expect("report");
+
+        assert!(report.managers.is_empty());
+        assert_eq!(report.systems.len(), 1);
+        assert_eq!(report.chassis.len(), 1);
+        assert_eq!(report.devices.len(), 2);
+        assert_eq!(report.firmware.len(), 1);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].domain, "managers");
+        assert!(report.errors[0].resource.is_none());
+        assert!(!report.errors[0].message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn firmware_collection_failure_is_partial_and_keeps_other_inventory() {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors",
+            PROCESSORS_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors/GPU0",
+            GPU_PROCESSOR,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/BMC_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/BMC_0/PCIeDevices",
+            PCIE_DEVICES_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+            PCIE_DEVICE,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            MALFORMED_FIRMWARE,
+        ));
+
+        let root = ServiceRoot::new(Arc::clone(&bmc))
+            .await
+            .expect("service root wrapper");
+
+        let report = collect_report_from_root(&root).await.expect("report");
+
+        assert_eq!(report.managers.len(), 1);
+        assert_eq!(report.systems.len(), 1);
+        assert_eq!(report.chassis.len(), 1);
+        assert_eq!(report.devices.len(), 2);
+        assert!(report.firmware.is_empty());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].domain, "firmware");
+        assert!(report.errors[0].resource.is_none());
+        assert!(!report.errors[0].message.is_empty());
+    }
+
     const SERVICE_UUID: &str = "870155dd-d474-aca8-11ee-6e809af87c0c";
     const SYSTEM_UUID: &str = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
 
@@ -724,6 +885,14 @@ mod tests {
         "UUID": "11111111-2222-3333-4444-555555555555",
         "Model": "OpenBMC",
         "FirmwareVersion": "3.19.00"
+    }"##;
+
+    const MALFORMED_MANAGER: &str = r##"{
+        "@odata.id": "/redfish/v1/Managers/BMC_0",
+        "@odata.type": "#Manager.v1_15_0.Manager",
+        "Id": "BMC_0",
+        "Name": "BMC",
+        "ManagerType": 1
     }"##;
 
     const SYSTEMS_COLLECTION: &str = r##"{
@@ -880,5 +1049,12 @@ mod tests {
         "Name": "BMC",
         "Version": "3.19.00",
         "ReleaseDate": "2026-01-01T00:00:00Z"
+    }"##;
+
+    const MALFORMED_FIRMWARE: &str = r##"{
+        "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+        "@odata.type": "#SoftwareInventory.v1_8_0.SoftwareInventory",
+        "Id": 1,
+        "Name": "BMC"
     }"##;
 }

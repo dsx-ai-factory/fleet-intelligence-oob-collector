@@ -25,7 +25,7 @@ struct SummaryRow {
     chassis: String,
     devices: String,
     firmware: String,
-    partial_errors: String,
+    domain_errors: String,
     error: String,
 }
 
@@ -130,8 +130,8 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "Chassis",
             "Devices",
             "Firmware",
-            "Partial Errors",
-            "Error",
+            "Domain Errors",
+            "Target Error",
         ],
         rows.iter().map(SummaryRow::values),
     );
@@ -181,8 +181,8 @@ impl From<&NodeInventory> for SummaryRow {
             chassis: inventory.chassis.len().to_string(),
             devices: inventory.devices.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
-            partial_errors: inventory.errors.len().to_string(),
-            error: inventory.collection_error.clone().unwrap_or_default(),
+            domain_errors: inventory.domain_errors.len().to_string(),
+            error: inventory.target_error.clone().unwrap_or_default(),
         }
     }
 }
@@ -202,7 +202,7 @@ impl SummaryRow {
             self.chassis.clone(),
             self.devices.clone(),
             self.firmware.clone(),
-            self.partial_errors.clone(),
+            self.domain_errors.clone(),
             self.error.clone(),
         ]
     }
@@ -647,13 +647,14 @@ mod tests {
     #[test]
     fn summary_row_formats_error_and_counts() {
         let mut inventory = full_inventory();
-        inventory.collection_error = Some("timeout".to_string());
+        inventory.target_error = Some("timeout".to_string());
 
         let row = SummaryRow::from(&inventory);
 
         assert_eq!(row.chassis, "1");
+        assert_eq!(row.devices, "1");
         assert_eq!(row.firmware, "1");
-        assert_eq!(row.partial_errors, "0");
+        assert_eq!(row.domain_errors, "0");
         assert_eq!(row.error, "timeout");
     }
 
@@ -685,6 +686,8 @@ mod tests {
         assert!(rendered.contains("1/72"));
         assert!(rendered.contains("Chassis\n"));
         assert!(rendered.contains("| BMC_0 | module"));
+        assert!(rendered.contains("Devices\n"));
+        assert!(rendered.contains("| GPU0"));
         assert!(rendered.contains("Firmware\n"));
         assert!(rendered.contains("| FirmwareInventory | BMC"));
     }
@@ -785,8 +788,8 @@ mod tests {
                 version: Some("3.19.00".to_string()),
                 release_date: Some("2026-01-01T00:00:00Z".to_string()),
             }],
-            errors: Vec::new(),
-            collection_error: None,
+            domain_errors: Vec::new(),
+            target_error: None,
         }
     }
 

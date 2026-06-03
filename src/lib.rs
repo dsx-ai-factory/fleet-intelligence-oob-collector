@@ -8,6 +8,8 @@ use inventory::mapper::{InventoryMapper, RedfishMapper};
 use inventory::sink::{InventorySink, JsonSink, TableSink};
 use inventory::source::{InventorySource, RedfishSource};
 
+pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InventoryFormat {
     Table,
@@ -22,6 +24,7 @@ pub struct InventoryOptions {
     pub detail: bool,
     pub format: InventoryFormat,
     pub concurrency: usize,
+    pub timeout_seconds: u64,
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
@@ -33,7 +36,8 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
         }
     }
 
-    let source = RedfishSource::new(options.port, options.insecure_tls)?;
+    let timeout = std::time::Duration::from_secs(options.timeout_seconds);
+    let source = RedfishSource::new(options.port, options.insecure_tls, timeout)?;
     let mapper = RedfishMapper;
     let concurrency = options.concurrency.max(1);
 

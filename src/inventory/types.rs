@@ -69,8 +69,8 @@ pub struct NodeInventory {
     pub chassis: Vec<ChassisInventory>,
     pub devices: Vec<DeviceInventory>,
     pub firmware: Vec<FirmwareInventory>,
-    pub errors: Vec<InventoryError>,
-    pub collection_error: Option<String>,
+    pub domain_errors: Vec<DomainError>,
+    pub target_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,7 +180,7 @@ pub struct FirmwareInventory {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InventoryError {
+pub struct DomainError {
     pub domain: String,
     pub resource: Option<String>,
     pub message: String,
@@ -280,12 +280,12 @@ mod tests {
                 version: Some("3.19.00".to_string()),
                 release_date: Some("2026-01-01T00:00:00Z".to_string()),
             }],
-            errors: vec![InventoryError {
+            domain_errors: vec![DomainError {
                 domain: "devices.processors".to_string(),
                 resource: Some("System".to_string()),
                 message: "timeout".to_string(),
             }],
-            collection_error: None,
+            target_error: None,
         };
 
         let value = serde_json::to_value(inventory).expect("json");
@@ -378,12 +378,12 @@ mod tests {
                     "version": "3.19.00",
                     "releaseDate": "2026-01-01T00:00:00Z"
                 }],
-                "errors": [{
+                "domainErrors": [{
                     "domain": "devices.processors",
                     "resource": "System",
                     "message": "timeout"
                 }],
-                "collectionError": null
+                "targetError": null
             })
         );
     }

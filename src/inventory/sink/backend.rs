@@ -116,8 +116,8 @@ mod tests {
             chassis: Vec::new(),
             devices: Vec::new(),
             firmware: Vec::new(),
-            errors: Vec::new(),
-            collection_error: None,
+            domain_errors: Vec::new(),
+            target_error: None,
         }
     }
 }

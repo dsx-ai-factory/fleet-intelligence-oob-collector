@@ -2,7 +2,9 @@ use std::error::Error;
 use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
-use fleet_intelligence_oob::{InventoryFormat, InventoryOptions, run_inventory};
+use fleet_intelligence_oob::{
+    DEFAULT_REDFISH_TIMEOUT_SECONDS, InventoryFormat, InventoryOptions, run_inventory,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "fleet-intelligence-oob")]
@@ -39,6 +41,9 @@ struct InventoryArgs {
 
     #[arg(long, default_value_t = 16)]
     concurrency: usize,
+
+    #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
+    timeout_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +94,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 detail: args.detail,
                 format: args.format.into(),
                 concurrency: args.concurrency,
+                timeout_seconds: args.timeout_seconds,
             })
             .await?
         }

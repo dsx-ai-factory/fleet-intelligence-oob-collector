@@ -30,7 +30,7 @@ mod tests {
         assert!(rendered.contains(r#""sourceType": "redfish""#));
         assert!(rendered.contains(r#""target": "node-a""#));
         assert!(rendered.contains(r#""node": null"#));
-        assert!(rendered.contains(r#""collectionError": null"#));
+        assert!(rendered.contains(r#""targetError": null"#));
     }
 
     fn inventory(target: &str) -> NodeInventory {
@@ -50,8 +50,8 @@ mod tests {
             chassis: Vec::new(),
             devices: Vec::new(),
             firmware: Vec::new(),
-            errors: Vec::new(),
-            collection_error: None,
+            domain_errors: Vec::new(),
+            target_error: None,
         }
     }
 }

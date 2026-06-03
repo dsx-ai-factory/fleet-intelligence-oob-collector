@@ -2,8 +2,8 @@ use super::InventoryMapper;
 use crate::inventory::source::SourceRecord;
 use crate::inventory::source::{ChassisData, SystemData};
 use crate::inventory::types::{
-    ChassisInventory, ChassisLocation, ChassisSerial, DeviceInventory, FirmwareInventory,
-    INVENTORY_SCHEMA_VERSION, InventoryError, InventorySourceInfo, ManagerInventory, NodeInfo,
+    ChassisInventory, ChassisLocation, ChassisSerial, DeviceInventory, DomainError,
+    FirmwareInventory, INVENTORY_SCHEMA_VERSION, InventorySourceInfo, ManagerInventory, NodeInfo,
     NodeInventory, SystemUuid,
 };
 
@@ -43,28 +43,17 @@ impl InventoryMapper for RedfishMapper {
                     }),
                 chassis: report.chassis.into_iter().map(map_chassis).collect(),
                 devices: report.devices.into_iter().map(map_device).collect(),
-                firmware: report
-                    .firmware
-                    .into_iter()
-                    .map(|firmware| FirmwareInventory {
-                        service_id: firmware.service_id,
-                        id: firmware.id,
-                        odata_id: firmware.odata_id,
-                        name: firmware.name,
-                        version: firmware.version,
-                        release_date: firmware.release_date,
-                    })
-                    .collect(),
-                errors: report
+                firmware: report.firmware.into_iter().map(map_firmware).collect(),
+                domain_errors: report
                     .errors
                     .into_iter()
-                    .map(|error| InventoryError {
+                    .map(|error| DomainError {
                         domain: error.domain,
                         resource: error.resource,
                         message: error.message,
                     })
                     .collect(),
-                collection_error: None,
+                target_error: None,
             },
             Err(error) => NodeInventory {
                 schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
@@ -82,8 +71,8 @@ impl InventoryMapper for RedfishMapper {
                 chassis: Vec::new(),
                 devices: Vec::new(),
                 firmware: Vec::new(),
-                errors: Vec::new(),
-                collection_error: Some(error),
+                domain_errors: Vec::new(),
+                target_error: Some(error),
             },
         }
     }
@@ -194,6 +183,17 @@ fn map_device(device: crate::inventory::source::DeviceData) -> DeviceInventory {
         firmware_version: device.firmware_version,
         status_state: device.status_state,
         health: device.health,
+    }
+}
+
+fn map_firmware(firmware: crate::inventory::source::FirmwareData) -> FirmwareInventory {
+    FirmwareInventory {
+        service_id: firmware.service_id,
+        id: firmware.id,
+        odata_id: firmware.odata_id,
+        name: firmware.name,
+        version: firmware.version,
+        release_date: firmware.release_date,
     }
 }
 
@@ -399,14 +399,14 @@ mod tests {
         assert_eq!(inventory.source.target, "node-a");
         assert_eq!(inventory.source.address, "10.0.0.1");
         assert_eq!(
-            inventory.collection_error.as_deref(),
+            inventory.target_error.as_deref(),
             Some("systems collection: timeout")
         );
         assert!(inventory.manager.is_none());
         assert!(inventory.node.is_none());
         assert!(inventory.chassis.is_empty());
         assert!(inventory.firmware.is_empty());
-        assert!(inventory.errors.is_empty());
+        assert!(inventory.domain_errors.is_empty());
     }
 
     #[test]
@@ -500,8 +500,8 @@ mod tests {
         );
         assert_eq!(device.parent_type.as_deref(), Some("system"));
         assert_eq!(device.status_state.as_deref(), Some("enabled"));
-        assert_eq!(inventory.errors.len(), 1);
-        assert_eq!(inventory.errors[0].domain, "devices.processors");
+        assert_eq!(inventory.domain_errors.len(), 1);
+        assert_eq!(inventory.domain_errors[0].domain, "devices.processors");
     }
 
     fn map_report(report: RedfishReport) -> NodeInventory {
