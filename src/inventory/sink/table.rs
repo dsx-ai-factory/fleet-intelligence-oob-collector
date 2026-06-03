@@ -15,6 +15,7 @@ pub struct TableSink {
 #[derive(Debug)]
 struct SummaryRow {
     address: String,
+    uuid: String,
     managers: String,
     systems: String,
     chassis: String,
@@ -117,6 +118,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let mut out = render_table(
         &[
             "Address",
+            "UUID",
             "Managers",
             "Systems",
             "Chassis",
@@ -140,6 +142,11 @@ impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
             address: inventory.source.address.clone(),
+            uuid: inventory
+                .uuid
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             managers: usize::from(inventory.manager.is_some()).to_string(),
             systems: usize::from(inventory.system.is_some()).to_string(),
             chassis: inventory.chassis.len().to_string(),
@@ -151,9 +158,10 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 7] {
+    fn values(&self) -> [String; 8] {
         [
             self.address.clone(),
+            self.uuid.clone(),
             self.managers.clone(),
             self.systems.clone(),
             self.chassis.clone(),
@@ -601,6 +609,7 @@ mod tests {
         let row = SummaryRow::from(&inventory);
 
         assert_eq!(row.managers, "1");
+        assert_eq!(row.uuid, "9aee71e4-6e80-11ee-a8ac-74d4dd550187");
         assert_eq!(row.systems, "1");
         assert_eq!(row.chassis, "1");
         assert_eq!(row.firmware, "1");
@@ -619,8 +628,8 @@ mod tests {
     fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
-        assert!(rendered.contains("| Address  | Managers | Systems | Chassis | Firmware"));
-        assert!(rendered.contains("| 10.0.0.1 | 1        | 1       | 1       | 1"));
+        assert!(rendered.contains("| Address  | UUID                                 | Managers | Systems | Chassis | Firmware"));
+        assert!(rendered.contains("| 10.0.0.1 | 9aee71e4-6e80-11ee-a8ac-74d4dd550187 | 1        | 1       | 1       | 1"));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }
