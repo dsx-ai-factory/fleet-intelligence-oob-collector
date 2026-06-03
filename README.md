@@ -14,6 +14,7 @@ does not become the product schema.
 src/main.rs                    CLI entry point
 src/lib.rs                     library orchestration
 src/config.rs                  target config loading
+src/inventory/README.md        inventory assumptions and platform quirks
 src/inventory/models/          FI inventory models
 src/inventory/source/mod.rs    source trait
 src/inventory/source/redfish.rs nv-redfish source

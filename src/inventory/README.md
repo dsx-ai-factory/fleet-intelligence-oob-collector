@@ -1,0 +1,111 @@
+# Inventory Collection Notes
+
+This package keeps a Fleet Intelligence inventory model between Redfish sources
+and output sinks. The goal is to keep Redfish and vendor-specific behavior out of
+the product schema where possible, while still documenting the assumptions used
+to make one node inventory record from a BMC endpoint.
+
+## Pipeline
+
+```text
+Target
+  -> source::RedfishSource
+  -> source::RedfishReport
+  -> mapper::RedfishMapper
+  -> models::NodeInventory
+  -> sink::{TableSink, JsonSink, BackendSink}
+```
+
+`RedfishSource` collects raw-ish Redfish data into source structs. `RedfishMapper`
+normalizes that report into the backend payload shape.
+
+## Node Identity
+
+- The primary node UUID comes from the selected Redfish `ComputerSystem.UUID`.
+- The selected system is the first system with a non-empty BIOS version.
+- If no system has a BIOS version, the mapper falls back to the first system in
+  the Redfish systems collection.
+- If the selected system has a missing, empty, or malformed UUID, the mapper
+  emits a `targetError` inventory instead of a partial node inventory.
+- `InventorySourceInfo.serviceUuid` keeps the Redfish service root UUID. It is
+  not used as the node UUID.
+- `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then falls
+  back to `Product`.
+
+The BIOS-based selection is a host-system heuristic. Some BMCs expose auxiliary
+systems, such as BMC, DPU, or baseboard systems, in the same collection as the
+host. The host system is the one expected to carry BIOS data and the stable node
+UUID.
+
+## Partial Collection
+
+Collection is split by inventory domain:
+
+- managers
+- systems
+- chassis
+- firmware
+
+A domain failure is recorded in `domainErrors` and does not discard other
+domains. For example, a firmware inventory failure should still preserve manager,
+system, chassis, and PCIe device data collected from the same target.
+
+A target-level failure, such as being unable to create the Redfish service root,
+is recorded as `targetError` and produces an otherwise empty inventory.
+
+## PCIe Device Traversal
+
+PCIe devices are not collected from every chassis by default. Redfish platforms
+vary widely in where they attach `PCIeDevices`, and walking every chassis can
+produce duplicates, unrelated devices, or noisy errors. The source chooses a
+platform policy from service root vendor/product, selected system, and chassis
+metadata.
+
+Current policies:
+
+- AMI with selected system `DGX`: collect PCIe devices from chassis IDs starting
+  with `HGX_GPU_SXM` or `HGX_NVSwitch`.
+- AMI with Lenovo GB300 chassis set: collect PCIe devices from chassis IDs
+  starting with `HGX_GPU_`.
+- AMI, Dell, HPE, Supermicro, and Lenovo: collect PCIe devices only from the
+  chassis whose ID matches the selected system ID.
+- NVIDIA BlueField, WIWYNN/NVIDIA GB200 NVL or GB BMC, NVIDIA P3809, and LiteOn
+  power shelf chassis sets: do not traverse PCIe devices.
+- Unknown platforms: do not traverse PCIe devices.
+
+These policies are intentionally conservative. Add fixture-backed tests before
+expanding traversal to a new platform.
+
+## Vendor And Platform Quirks
+
+- Redfish `Vendor` matching is case-insensitive.
+- Lenovo GB300 is detected by a chassis set containing both a Lenovo chassis and
+  an NVIDIA chassis with model `NVIDIA GB300`.
+- LiteOn power shelf chassis sets are treated as non-host inventory and skip PCIe
+  traversal.
+- AMI platforms are not all equivalent. Viking/DGX and Lenovo GB300 use special
+  PCIe chassis selection rules; other AMI platforms use selected-system chassis
+  matching.
+- GB200 NVL / GB BMC and P3809 endpoints currently skip PCIe traversal because
+  their exposed chassis layout does not map cleanly to host PCIe inventory.
+
+## Output Conventions
+
+- API JSON fields are camelCase.
+- Optional Redfish fields stay optional in the inventory model rather than being
+  filled with synthetic values.
+- `domainErrors` describes recoverable domain-level collection failures.
+- `targetError` describes a failure that prevents a meaningful node inventory.
+- The table sink is presentation-only; it should not introduce schema semantics
+  that are absent from `models::NodeInventory`.
+
+## Adding A New Platform Assumption
+
+When adding or changing a platform assumption:
+
+1. Add a fixture or unit test showing the Redfish shape that requires it.
+2. Keep the heuristic scoped to the narrowest vendor/product/chassis signature.
+3. Prefer skipping uncertain optional domains over producing duplicate or
+   incorrectly associated inventory.
+4. Record recoverable collection failures in `domainErrors`.
+5. Update this README with the new assumption and why it exists.
