@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::inventory::models::NodeInventory;
+use crate::models::NodeInventory;
 
 use super::InventorySink;
 
@@ -21,7 +21,7 @@ fn render_json(inventories: &[NodeInventory]) -> Result<String, serde_json::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::models::{INVENTORY_SCHEMA_VERSION, InventorySourceInfo, NodeInventory};
+    use crate::models::{INVENTORY_SCHEMA_VERSION, InventorySourceInfo, NodeInventory};
 
     #[test]
     fn json_sink_renders_backend_payload_shape() {

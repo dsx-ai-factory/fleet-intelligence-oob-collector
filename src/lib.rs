@@ -1,12 +1,10 @@
-pub mod config;
-pub mod inventory;
-
 use std::error::Error;
 
+use bmc_inventory::config;
+use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
+use bmc_inventory::sink::{InventorySink, JsonSink, TableSink};
+use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
-use inventory::mapper::{InventoryMapper, RedfishMapper};
-use inventory::sink::{InventorySink, JsonSink, TableSink};
-use inventory::source::{InventorySource, RedfishSource};
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
 

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::inventory::models::NodeInventory;
+use crate::models::NodeInventory;
 
 use super::InventorySink;
 
@@ -101,10 +101,10 @@ mod tests {
 
     fn inventory(address: &str) -> NodeInventory {
         NodeInventory {
-            schema_version: crate::inventory::models::INVENTORY_SCHEMA_VERSION.to_string(),
+            schema_version: crate::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             uuid: None,
-            source: crate::inventory::models::InventorySourceInfo {
+            source: crate::models::InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 address: address.to_string(),
                 redfish_version: None,

@@ -1,11 +1,11 @@
 use super::InventoryMapper;
-use crate::inventory::models::{
+use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
     InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory, PcieDeviceInventory,
     SystemInventory,
 };
-use crate::inventory::source::SourceRecord;
-use crate::inventory::source::{ChassisData, SystemData};
+use crate::source::SourceRecord;
+use crate::source::{ChassisData, SystemData};
 
 #[derive(Default)]
 pub struct RedfishMapper;
@@ -197,7 +197,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
     }
 }
 
-fn map_pcie_device(device: crate::inventory::source::PcieDeviceData) -> PcieDeviceInventory {
+fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory {
     PcieDeviceInventory {
         id: device.id,
         odata_id: device.odata_id,
@@ -215,7 +215,7 @@ fn map_pcie_device(device: crate::inventory::source::PcieDeviceData) -> PcieDevi
     }
 }
 
-fn map_firmware(firmware: crate::inventory::source::FirmwareData) -> FirmwareInventory {
+fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
     FirmwareInventory {
         service_id: firmware.service_id,
         id: firmware.id,
@@ -230,7 +230,7 @@ fn map_firmware(firmware: crate::inventory::source::FirmwareData) -> FirmwareInv
 mod tests {
     use super::*;
     use crate::config::Target;
-    use crate::inventory::source::{
+    use crate::source::{
         ChassisData, FirmwareData, ManagerData, RedfishReport, ServiceRootData, SourceRecord,
         SystemData,
     };

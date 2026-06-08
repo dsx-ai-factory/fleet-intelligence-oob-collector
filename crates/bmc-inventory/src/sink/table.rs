@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::InventorySink;
-use crate::inventory::models::{
+use crate::models::{
     ChassisInventory, ChassisLocation, FirmwareInventory, NodeInventory, PcieDeviceInventory,
     SystemInventory,
 };
@@ -563,7 +563,7 @@ fn write_row<T: fmt::Display>(out: &mut String, values: &[T], widths: &[usize]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::models::{
+    use crate::models::{
         INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, ManagerInventory,
         PcieDeviceInventory, SystemInventory,
     };
@@ -629,7 +629,9 @@ mod tests {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
         assert!(rendered.contains("| Address  | UUID                                 | Managers | Systems | Chassis | Firmware"));
-        assert!(rendered.contains("| 10.0.0.1 | 9aee71e4-6e80-11ee-a8ac-74d4dd550187 | 1        | 1       | 1       | 1"));
+        assert!(rendered.contains(
+            "| 10.0.0.1 | 9aee71e4-6e80-11ee-a8ac-74d4dd550187 | 1        | 1       | 1       | 1"
+        ));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }

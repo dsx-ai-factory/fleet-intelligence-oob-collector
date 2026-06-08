@@ -1,7 +1,7 @@
 .PHONY: test coverage coverage-html build
 
 test:
-	cargo test
+	cargo test --workspace
 
 build:
 	cargo build --bin bmc-collector
@@ -12,7 +12,7 @@ coverage:
 		echo "install with: cargo install cargo-llvm-cov"; \
 		exit 1; \
 	}
-	cargo llvm-cov --lib --fail-under-lines 80
+	cargo llvm-cov --workspace --fail-under-lines 80
 
 coverage-html:
 	@cargo llvm-cov --version >/dev/null 2>&1 || { \
@@ -20,4 +20,4 @@ coverage-html:
 		echo "install with: cargo install cargo-llvm-cov"; \
 		exit 1; \
 	}
-	cargo llvm-cov --lib --html --open
+	cargo llvm-cov --workspace --html --open

@@ -1,6 +1,6 @@
 # Fleet Intelligence OOB
 
-Standalone Rust OOB inventory collector for Fleet Intelligence.
+Standalone Rust OOB collector for Fleet Intelligence.
 
 The current MVP collects BMC inventory through Redfish using `nv-redfish`
 directly. NICo's `bmc-explorer` remains useful as a reference implementation,
@@ -8,20 +8,19 @@ but it is not linked into this collector. The collector keeps a Fleet
 Intelligence owned inventory model between the source and sink so Redfish data
 does not become the product schema.
 
-## Structure
+## Workspace Structure
 
 ```text
-src/main.rs                    CLI entry point
-src/lib.rs                     library orchestration
-src/config.rs                  target config loading
-src/inventory/README.md        inventory assumptions and platform quirks
-src/inventory/models/          FI inventory models
-src/inventory/source/mod.rs    source trait
-src/inventory/source/redfish.rs nv-redfish source
-src/inventory/mapper/mod.rs    mapper trait
-src/inventory/mapper/redfish.rs Redfish report to FI inventory mapper
-src/inventory/sink/mod.rs      sink trait
-src/inventory/sink/table.rs    CLI table sink
+src/main.rs                         CLI entry point
+src/lib.rs                          CLI orchestration
+crates/bmc-inventory/README.md      inventory assumptions and platform quirks
+crates/bmc-inventory/src/config.rs  target config loading
+crates/bmc-inventory/src/models/    FI inventory models
+crates/bmc-inventory/src/source/    source trait and nv-redfish source
+crates/bmc-inventory/src/mapper/    Redfish report to FI inventory mapper
+crates/bmc-inventory/src/sink/      table, JSON, and backend sinks
+crates/bmc-attestation/             attestation crate placeholder
+crates/bmc-telemetry/               telemetry crate placeholder
 ```
 
 Pipeline:
@@ -31,7 +30,7 @@ config targets
   -> RedfishSource
   -> RedfishMapper
   -> NodeInventory
-  -> TableSink
+  -> TableSink / JsonSink / BackendSink
 ```
 
 ## Build
