@@ -6,6 +6,15 @@ use crate::config::Target;
 
 pub use redfish::RedfishSource;
 
+pub mod inventory_domain {
+    pub const MANAGERS: &str = "managers";
+    pub const SYSTEMS: &str = "systems";
+    pub const SYSTEMS_SECURE_BOOT: &str = "systems.secureBoot";
+    pub const CHASSIS: &str = "chassis";
+    pub const CHASSIS_PCIE_DEVICES: &str = "chassis.pcieDevices";
+    pub const FIRMWARE: &str = "firmware";
+}
+
 pub struct SourceRecord {
     pub target: Target,
     pub collected_at: String,

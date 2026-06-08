@@ -93,8 +93,8 @@ fn node_inventory_serializes_as_backend_payload() {
             release_date: Some("2026-01-01T00:00:00Z".to_string()),
         }],
         domain_errors: vec![DomainError {
-            domain: "chassis.pcie_devices".to_string(),
-            resource: Some("System".to_string()),
+            domain: "chassis.pcieDevices".to_string(),
+            resource: Some("HGX_GPU_SXM_0".to_string()),
             message: "timeout".to_string(),
         }],
         target_error: None,
@@ -193,8 +193,8 @@ fn node_inventory_serializes_as_backend_payload() {
                 "releaseDate": "2026-01-01T00:00:00Z"
             }],
             "domainErrors": [{
-                "domain": "chassis.pcie_devices",
-                "resource": "System",
+                "domain": "chassis.pcieDevices",
+                "resource": "HGX_GPU_SXM_0",
                 "message": "timeout"
             }],
             "targetError": null

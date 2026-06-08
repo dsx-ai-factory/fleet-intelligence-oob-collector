@@ -43,7 +43,9 @@ Collection is split by inventory domain:
 
 - managers
 - systems
+- systems.secureBoot
 - chassis
+- chassis.pcieDevices
 - firmware
 
 A domain failure is recorded in `domainErrors` and does not discard other
@@ -52,6 +54,24 @@ system, chassis, and PCIe device data collected from the same target.
 
 A target-level failure, such as being unable to create the Redfish service root,
 is recorded as `targetError` and produces an otherwise empty inventory.
+
+## Domain Error Contract
+
+`domainErrors[].domain` is a stable backend write-decision key. Backend ingestion
+should key off `domain`, optionally scoped by `resource`; it should not parse
+`message` for control flow.
+
+| Domain | Resource | Backend write behavior |
+|--------|----------|------------------------|
+| `managers` | `null` | Do not write or clear manager data for the target. |
+| `systems` | `null` | Do not write or clear system data for the target, including secure boot. |
+| `systems.secureBoot` | system ID | Write the system data, but do not overwrite `secureBootEnabled` for that system. |
+| `chassis` | `null` | Do not write or clear chassis data for the target, including PCIe devices. |
+| `chassis.pcieDevices` | chassis ID | Write the chassis data, but do not replace PCIe devices for that chassis with an empty list. |
+| `firmware` | `null` | Do not write or clear firmware data for the target. |
+
+When `targetError` is present, backend ingestion should skip all inventory writes
+for that target and record the collection failure instead.
 
 ## PCIe Device Traversal
 

@@ -13,6 +13,7 @@ use url::Url;
 use super::{
     ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource,
     ManagerData, PcieDeviceData, RedfishReport, ServiceRootData, SourceRecord, SystemData,
+    inventory_domain,
 };
 use crate::config::Target;
 
@@ -100,28 +101,28 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
     let managers = match collect_managers(root).await {
         Ok(managers) => managers,
         Err(err) => {
-            push_inventory_error(&mut errors, "managers", None, err);
+            push_inventory_error(&mut errors, inventory_domain::MANAGERS, None, err);
             Vec::new()
         }
     };
     let systems = match collect_systems(root, &mut errors).await {
         Ok(systems) => systems,
         Err(err) => {
-            push_inventory_error(&mut errors, "systems", None, err);
+            push_inventory_error(&mut errors, inventory_domain::SYSTEMS, None, err);
             Vec::new()
         }
     };
     let chassis = match collect_chassis(root, &service_root, &systems, &mut errors).await {
         Ok(chassis) => chassis,
         Err(err) => {
-            push_inventory_error(&mut errors, "chassis", None, err);
+            push_inventory_error(&mut errors, inventory_domain::CHASSIS, None, err);
             Vec::new()
         }
     };
     let firmware = match collect_firmware(root).await {
         Ok(firmware) => firmware,
         Err(err) => {
-            push_inventory_error(&mut errors, "firmware", None, err);
+            push_inventory_error(&mut errors, inventory_domain::FIRMWARE, None, err);
             Vec::new()
         }
     };
@@ -430,7 +431,7 @@ async fn collect_secure_boot_enabled<B: Bmc>(
         Err(err) => {
             push_inventory_error(
                 errors,
-                "systems.secure_boot",
+                inventory_domain::SYSTEMS_SECURE_BOOT,
                 Some(system_id.to_string()),
                 err,
             );
@@ -451,7 +452,7 @@ async fn collect_pcie_devices<B: Bmc>(
             Err(err) => {
                 push_inventory_error(
                     errors,
-                    "chassis.pcie_devices",
+                    inventory_domain::CHASSIS_PCIE_DEVICES,
                     Some(chassis_id.to_string()),
                     err,
                 );
@@ -462,7 +463,7 @@ async fn collect_pcie_devices<B: Bmc>(
         Err(err) => {
             push_inventory_error(
                 errors,
-                "chassis.pcie_devices",
+                inventory_domain::CHASSIS_PCIE_DEVICES,
                 Some(chassis_id.to_string()),
                 err,
             );
@@ -791,6 +792,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn secure_boot_collection_failure_records_system_id_resource() {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System",
+            SYSTEM_WITH_SECURE_BOOT,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/SecureBoot",
+            MALFORMED_SECURE_BOOT,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
+            PCIE_DEVICES_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
+            PCIE_DEVICE,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            FIRMWARE,
+        ));
+
+        let root = ServiceRoot::new(Arc::clone(&bmc))
+            .await
+            .expect("service root wrapper");
+
+        let report = collect_report_from_root(&root).await.expect("report");
+
+        assert_eq!(report.systems.len(), 1);
+        assert_eq!(report.systems[0].id, "DGX");
+        assert_eq!(report.systems[0].secure_boot_enabled, None);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(
+            report.errors[0].domain,
+            inventory_domain::SYSTEMS_SECURE_BOOT
+        );
+        assert_eq!(report.errors[0].resource.as_deref(), Some("DGX"));
+        assert!(!report.errors[0].message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pcie_devices_collection_failure_records_chassis_id_resource() {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
+            MALFORMED_PCIE_DEVICES_COLLECTION,
+        ));
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            FIRMWARE,
+        ));
+
+        let root = ServiceRoot::new(Arc::clone(&bmc))
+            .await
+            .expect("service root wrapper");
+
+        let report = collect_report_from_root(&root).await.expect("report");
+
+        assert_eq!(report.chassis.len(), 1);
+        assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
+        assert!(report.chassis[0].pcie_devices.is_empty());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(
+            report.errors[0].domain,
+            inventory_domain::CHASSIS_PCIE_DEVICES
+        );
+        assert_eq!(report.errors[0].resource.as_deref(), Some("HGX_GPU_SXM_0"));
+        assert!(!report.errors[0].message.is_empty());
+    }
+
+    #[tokio::test]
     async fn manager_collection_failure_is_partial_and_keeps_other_inventory() {
         type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
 
@@ -971,6 +1071,23 @@ mod tests {
         }
     }"##;
 
+    const SYSTEM_WITH_SECURE_BOOT: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System",
+        "@odata.type": "#ComputerSystem.v1_15_0.ComputerSystem",
+        "Id": "DGX",
+        "Name": "System",
+        "UUID": "9AEE71E4-6E80-11EE-A8AC-74D4DD550187",
+        "SecureBoot": {"@odata.id": "/redfish/v1/Systems/System/SecureBoot"}
+    }"##;
+
+    const MALFORMED_SECURE_BOOT: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/SecureBoot",
+        "@odata.type": "#SecureBoot.v1_1_0.SecureBoot",
+        "Id": "SecureBoot",
+        "Name": "Secure Boot",
+        "SecureBootEnable": "enabled"
+    }"##;
+
     const CHASSIS_COLLECTION: &str = r##"{
         "@odata.id": "/redfish/v1/Chassis",
         "@odata.type": "#ChassisCollection.ChassisCollection",
@@ -1004,6 +1121,15 @@ mod tests {
         "Name": "PCIe Devices",
         "Members@odata.count": 1,
         "Members": [{"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1"}]
+    }"##;
+
+    const MALFORMED_PCIE_DEVICES_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
+        "@odata.type": "#PCIeDeviceCollection.PCIeDeviceCollection",
+        "Id": "PCIeDevices",
+        "Name": "PCIe Devices",
+        "Members@odata.count": 1,
+        "Members": 1
     }"##;
 
     const PCIE_DEVICE: &str = r##"{
