@@ -15,6 +15,10 @@ pub struct TableSink {
 #[derive(Debug)]
 struct SummaryRow {
     address: String,
+    source_type: String,
+    redfish_version: String,
+    service_uuid: String,
+    vendor: String,
     uuid: String,
     managers: String,
     systems: String,
@@ -22,6 +26,15 @@ struct SummaryRow {
     firmware: String,
     domain_errors: String,
     error: String,
+}
+
+#[derive(Debug)]
+struct SourceDetailRow {
+    source_type: String,
+    address: String,
+    redfish_version: String,
+    service_uuid: String,
+    vendor: String,
 }
 
 #[derive(Debug)]
@@ -118,6 +131,10 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let mut out = render_table(
         &[
             "Address",
+            "Source",
+            "Redfish",
+            "Service UUID",
+            "Vendor",
             "UUID",
             "Managers",
             "Systems",
@@ -142,6 +159,10 @@ impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
             address: inventory.source.address.clone(),
+            source_type: inventory.source.source_type.clone(),
+            redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
+            service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
+            vendor: inventory.source.vendor.clone().unwrap_or_default(),
             uuid: inventory
                 .uuid
                 .as_ref()
@@ -158,9 +179,13 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 8] {
+    fn values(&self) -> [String; 12] {
         [
             self.address.clone(),
+            self.source_type.clone(),
+            self.redfish_version.clone(),
+            self.service_uuid.clone(),
+            self.vendor.clone(),
             self.uuid.clone(),
             self.managers.clone(),
             self.systems.clone(),
@@ -168,6 +193,30 @@ impl SummaryRow {
             self.firmware.clone(),
             self.domain_errors.clone(),
             self.error.clone(),
+        ]
+    }
+}
+
+impl From<&NodeInventory> for SourceDetailRow {
+    fn from(inventory: &NodeInventory) -> Self {
+        Self {
+            source_type: inventory.source.source_type.clone(),
+            address: inventory.source.address.clone(),
+            redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
+            service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
+            vendor: inventory.source.vendor.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl SourceDetailRow {
+    fn values(&self) -> Vec<[String; 2]> {
+        vec![
+            ["Source".to_string(), self.source_type.clone()],
+            ["Address".to_string(), self.address.clone()],
+            ["Redfish Version".to_string(), self.redfish_version.clone()],
+            ["Service UUID".to_string(), self.service_uuid.clone()],
+            ["Vendor".to_string(), self.vendor.clone()],
         ]
     }
 }
@@ -434,6 +483,10 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
     out.push('\n');
     out.push_str(&format!("Node: {}\n", inventory.source.address));
 
+    let source_row = SourceDetailRow::from(inventory);
+    out.push_str("Source Information\n");
+    out.push_str(&render_table(&["Attribute", "Value"], source_row.values()));
+
     let manager_row = ManagerDetailRow::from(inventory);
     out.push_str("Manager Information\n");
     out.push_str(&render_table(&["Attribute", "Value"], manager_row.values()));
@@ -608,6 +661,10 @@ mod tests {
 
         let row = SummaryRow::from(&inventory);
 
+        assert_eq!(row.source_type, "redfish");
+        assert_eq!(row.redfish_version, "1.15.1");
+        assert_eq!(row.service_uuid, "870155dd-d474-aca8-11ee-6e809af87c0c");
+        assert_eq!(row.vendor, "NVIDIA");
         assert_eq!(row.managers, "1");
         assert_eq!(row.uuid, "9aee71e4-6e80-11ee-a8ac-74d4dd550187");
         assert_eq!(row.systems, "1");
@@ -628,10 +685,17 @@ mod tests {
     fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
-        assert!(rendered.contains("| Address  | UUID                                 | Managers | Systems | Chassis | Firmware"));
-        assert!(rendered.contains(
-            "| 10.0.0.1 | 9aee71e4-6e80-11ee-a8ac-74d4dd550187 | 1        | 1       | 1       | 1"
-        ));
+        assert!(rendered.contains("Address"));
+        assert!(rendered.contains("Source"));
+        assert!(rendered.contains("Redfish"));
+        assert!(rendered.contains("Service UUID"));
+        assert!(rendered.contains("Vendor"));
+        assert!(rendered.contains("10.0.0.1"));
+        assert!(rendered.contains("redfish"));
+        assert!(rendered.contains("1.15.1"));
+        assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
+        assert!(rendered.contains("NVIDIA"));
+        assert!(rendered.contains("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }
@@ -641,6 +705,10 @@ mod tests {
         let rendered = render_inventory_tables(&[full_inventory()], true);
 
         assert!(rendered.contains("Node: 10.0.0.1"));
+        assert!(rendered.contains("Source Information\n"));
+        assert!(rendered.contains("Redfish Version"));
+        assert!(rendered.contains("Service UUID"));
+        assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
         assert!(rendered.contains("Manager Information\n"));
         assert!(rendered.contains("Manager Model"));
         assert!(rendered.contains("OpenBMC"));
@@ -658,11 +726,13 @@ mod tests {
         assert!(rendered.contains("Firmware\n"));
         assert!(rendered.contains("| FirmwareInventory | BMC"));
 
+        let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Manager Information\n").expect("manager");
         let system = rendered.find("System Information\n").expect("system");
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
+        assert!(source < manager);
         assert!(manager < system);
         assert!(system < chassis);
         assert!(chassis < pcie);

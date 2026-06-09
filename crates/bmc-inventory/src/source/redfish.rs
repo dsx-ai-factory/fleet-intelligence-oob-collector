@@ -21,9 +21,9 @@ type RedfishBmc = HttpBmc<nv_redfish::bmc_http::reqwest::Client>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PcieTraversalPolicy {
+    All,
     Viking,
     SystemId(String),
-    LenovoGb300,
     None,
 }
 
@@ -252,7 +252,7 @@ async fn collect_chassis<B: Bmc>(
         .members()
         .await
         .map_err(|err| format!("chassis members: {err}"))?;
-    let pcie_traversal_policy = pcie_traversal_policy(service_root, systems, &chassis);
+    let pcie_traversal_policy = pcie_traversal_policy(service_root, systems);
     let mut out = Vec::with_capacity(chassis.len());
     for chassis in chassis {
         let chassis_id = chassis.id().to_string();
@@ -288,28 +288,19 @@ async fn collect_chassis<B: Bmc>(
     Ok(out)
 }
 
-fn pcie_traversal_policy<B: Bmc>(
+fn pcie_traversal_policy(
     service_root: &ServiceRootData,
     systems: &[SystemData],
-    chassis: &[nv_redfish::chassis::Chassis<B>],
 ) -> PcieTraversalPolicy {
     let vendor = service_root.vendor.as_deref();
-    let product = service_root.product.as_deref();
     let selected_system_id =
         selected_system_for_pcie_traversal(systems).map(|system| system.id.clone());
 
     if vendor_matches(vendor, "AMI") && selected_system_id.as_deref() == Some("DGX") {
         return PcieTraversalPolicy::Viking;
     }
-    if vendor_matches(vendor, "AMI") && is_lenovo_gb300_chassis_set(chassis) {
-        return PcieTraversalPolicy::LenovoGb300;
-    }
-    if vendor_matches(vendor, "AMI") {
-        return selected_system_id
-            .map(PcieTraversalPolicy::SystemId)
-            .unwrap_or(PcieTraversalPolicy::None);
-    }
-    if vendor_matches(vendor, "Dell")
+    if vendor_matches(vendor, "AMI")
+        || vendor_matches(vendor, "Dell")
         || vendor_matches(vendor, "HPE")
         || vendor_matches(vendor, "Supermicro")
         || vendor_matches(vendor, "Lenovo")
@@ -318,22 +309,8 @@ fn pcie_traversal_policy<B: Bmc>(
             .map(PcieTraversalPolicy::SystemId)
             .unwrap_or(PcieTraversalPolicy::None);
     }
-    if vendor_matches(vendor, "Nvidia") && selected_system_id.as_deref() == Some("Bluefield") {
-        return PcieTraversalPolicy::None;
-    }
-    if (vendor_matches(vendor, "WIWYNN") || vendor_matches(vendor, "NVIDIA"))
-        && matches!(product, Some("GB200 NVL" | "GB BMC"))
-    {
-        return PcieTraversalPolicy::None;
-    }
-    if vendor_matches(vendor, "NVIDIA") && product == Some("P3809") {
-        return PcieTraversalPolicy::None;
-    }
-    if is_liteon_powershelf_chassis_set(chassis) {
-        return PcieTraversalPolicy::None;
-    }
 
-    PcieTraversalPolicy::None
+    PcieTraversalPolicy::All
 }
 
 fn selected_system_for_pcie_traversal(systems: &[SystemData]) -> Option<&SystemData> {
@@ -345,55 +322,17 @@ fn selected_system_for_pcie_traversal(systems: &[SystemData]) -> Option<&SystemD
 
 fn should_collect_pcie_devices_for_chassis(policy: &PcieTraversalPolicy, chassis_id: &str) -> bool {
     match policy {
+        PcieTraversalPolicy::All => true,
         PcieTraversalPolicy::Viking => {
             chassis_id.starts_with("HGX_GPU_SXM") || chassis_id.starts_with("HGX_NVSwitch")
         }
         PcieTraversalPolicy::SystemId(system_id) => chassis_id == system_id,
-        PcieTraversalPolicy::LenovoGb300 => chassis_id.starts_with("HGX_GPU_"),
         PcieTraversalPolicy::None => false,
     }
 }
 
 fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
     vendor.is_some_and(|vendor| vendor.eq_ignore_ascii_case(expected))
-}
-
-fn is_lenovo_gb300_chassis_set<B: Bmc>(chassis: &[nv_redfish::chassis::Chassis<B>]) -> bool {
-    let has_gb300 = chassis.iter().any(|chassis| {
-        let raw = chassis.raw();
-        raw.manufacturer
-            .as_ref()
-            .and_then(|manufacturer| manufacturer.as_deref())
-            .is_some_and(|manufacturer| manufacturer == "NVIDIA")
-            && raw
-                .model
-                .as_ref()
-                .and_then(|model| model.as_deref())
-                .is_some_and(|model| model == "NVIDIA GB300")
-    });
-    let has_lenovo = chassis.iter().any(|chassis| {
-        chassis
-            .raw()
-            .manufacturer
-            .as_ref()
-            .and_then(|manufacturer| manufacturer.as_deref())
-            .is_some_and(|manufacturer| manufacturer == "Lenovo")
-    });
-    has_gb300 && has_lenovo
-}
-
-fn is_liteon_powershelf_chassis_set<B: Bmc>(chassis: &[nv_redfish::chassis::Chassis<B>]) -> bool {
-    chassis.iter().any(|chassis| {
-        let raw = chassis.raw();
-        let chassis_id = chassis.id().to_string();
-        chassis_id == "powershelf"
-            || (chassis_id == "chassis"
-                && raw
-                    .manufacturer
-                    .as_ref()
-                    .and_then(|manufacturer| manufacturer.as_deref())
-                    .is_some_and(|manufacturer| manufacturer.to_lowercase().contains("lite-on")))
-    })
 }
 
 fn chassis_location(
@@ -645,6 +584,10 @@ mod tests {
     #[test]
     fn pcie_traversal_policy_controls_selected_chassis() {
         assert!(should_collect_pcie_devices_for_chassis(
+            &PcieTraversalPolicy::All,
+            "BMC_0"
+        ));
+        assert!(should_collect_pcie_devices_for_chassis(
             &PcieTraversalPolicy::Viking,
             "HGX_GPU_SXM_0"
         ));
@@ -666,18 +609,89 @@ mod tests {
             "BMC_0"
         ));
 
-        assert!(should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::LenovoGb300,
-            "HGX_GPU_PCIE_0"
-        ));
-        assert!(!should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::LenovoGb300,
-            "HGX_NVSwitch_0"
-        ));
         assert!(!should_collect_pcie_devices_for_chassis(
             &PcieTraversalPolicy::None,
             "HGX_GPU_SXM_0"
         ));
+    }
+
+    #[test]
+    fn pcie_traversal_policy_defaults_to_all_chassis() {
+        let service_root = ServiceRootData {
+            vendor: Some("NVIDIA".to_string()),
+            product: Some("GB200 NVL".to_string()),
+            ..ServiceRootData::default()
+        };
+
+        let policy = pcie_traversal_policy(&service_root, &[]);
+
+        assert_eq!(policy, PcieTraversalPolicy::All);
+    }
+
+    #[test]
+    fn ami_dgx_pcie_traversal_uses_viking_chassis_prefixes() {
+        let service_root = ServiceRootData {
+            vendor: Some("AMI".to_string()),
+            ..ServiceRootData::default()
+        };
+        let systems = vec![SystemData {
+            id: "DGX".to_string(),
+            odata_id: None,
+            uuid: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            bios_version: Some("1.0".to_string()),
+            host_name: None,
+            asset_tag: None,
+            power_state: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            cpu_count: None,
+            cpu_core_count: None,
+            cpu_model: None,
+            memory_gib: None,
+            secure_boot_enabled: None,
+        }];
+
+        let policy = pcie_traversal_policy(&service_root, &systems);
+
+        assert_eq!(policy, PcieTraversalPolicy::Viking);
+    }
+
+    #[test]
+    fn selected_system_vendors_match_only_selected_system_chassis() {
+        let service_root = ServiceRootData {
+            vendor: Some("Dell".to_string()),
+            ..ServiceRootData::default()
+        };
+        let systems = vec![SystemData {
+            id: "System".to_string(),
+            odata_id: None,
+            uuid: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            bios_version: Some("1.0".to_string()),
+            host_name: None,
+            asset_tag: None,
+            power_state: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            cpu_count: None,
+            cpu_core_count: None,
+            cpu_model: None,
+            memory_gib: None,
+            secure_boot_enabled: None,
+        }];
+
+        let policy = pcie_traversal_policy(&service_root, &systems);
+
+        assert_eq!(policy, PcieTraversalPolicy::SystemId("System".to_string()));
     }
 
     #[tokio::test]

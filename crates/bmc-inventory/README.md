@@ -75,39 +75,24 @@ for that target and record the collection failure instead.
 
 ## PCIe Device Traversal
 
-PCIe devices are not collected from every chassis by default. Redfish platforms
-vary widely in where they attach `PCIeDevices`, and walking every chassis can
-produce duplicates, unrelated devices, or noisy errors. The source chooses a
-platform policy from service root vendor/product, selected system, and chassis
-metadata.
+PCIe devices are collected from every chassis by default. A small set of known
+platform policies narrows traversal where broad collection is known to produce
+duplicates or unrelated devices.
 
 Current policies:
 
 - AMI with selected system `DGX`: collect PCIe devices from chassis IDs starting
   with `HGX_GPU_SXM` or `HGX_NVSwitch`.
-- AMI with Lenovo GB300 chassis set: collect PCIe devices from chassis IDs
-  starting with `HGX_GPU_`.
 - AMI, Dell, HPE, Supermicro, and Lenovo: collect PCIe devices only from the
   chassis whose ID matches the selected system ID.
-- NVIDIA BlueField, WIWYNN/NVIDIA GB200 NVL or GB BMC, NVIDIA P3809, and LiteOn
-  power shelf chassis sets: do not traverse PCIe devices.
-- Unknown platforms: do not traverse PCIe devices.
+- All other platforms: collect PCIe devices from all chassis.
 
-These policies are intentionally conservative. Add fixture-backed tests before
-expanding traversal to a new platform.
+Add fixture-backed tests before adding another narrowed traversal policy.
 
 ## Vendor And Platform Quirks
 
 - Redfish `Vendor` matching is case-insensitive.
-- Lenovo GB300 is detected by a chassis set containing both a Lenovo chassis and
-  an NVIDIA chassis with model `NVIDIA GB300`.
-- LiteOn power shelf chassis sets are treated as non-host inventory and skip PCIe
-  traversal.
-- AMI platforms are not all equivalent. Viking/DGX and Lenovo GB300 use special
-  PCIe chassis selection rules; other AMI platforms use selected-system chassis
-  matching.
-- GB200 NVL / GB BMC and P3809 endpoints currently skip PCIe traversal because
-  their exposed chassis layout does not map cleanly to host PCIe inventory.
+- AMI DGX/Viking platforms use special PCIe chassis selection rules.
 
 ## Output Conventions
 
