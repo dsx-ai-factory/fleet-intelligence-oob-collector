@@ -12,8 +12,8 @@ use url::Url;
 
 use super::{
     ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource,
-    ManagerData, PcieDeviceData, RedfishReport, ServiceRootData, SourceRecord, SystemData,
-    inventory_domain,
+    ManagerData, PcieDeviceData, ProcessorData, RedfishReport, ServiceRootData, SourceRecord,
+    SystemData, inventory_domain,
 };
 use crate::config::Target;
 
@@ -229,6 +229,7 @@ async fn collect_systems<B: Bmc>(
                 .and_then(|summary| summary.total_system_memory_gi_b)
                 .flatten(),
             secure_boot_enabled: collect_secure_boot_enabled(&system, &system_id, errors).await,
+            processors: collect_processors(&system, &system_id, errors).await,
         });
     }
     Ok(out)
@@ -378,6 +379,55 @@ async fn collect_secure_boot_enabled<B: Bmc>(
         }
     };
     secure_boot.secure_boot_enable()
+}
+
+async fn collect_processors<B: Bmc>(
+    system: &nv_redfish::computer_system::ComputerSystem<B>,
+    system_id: &str,
+    errors: &mut Vec<InventoryErrorData>,
+) -> Vec<ProcessorData> {
+    let processors = match system.processors().await {
+        Ok(Some(processors)) => processors,
+        Ok(None) => return Vec::new(),
+        Err(err) => {
+            push_inventory_error(
+                errors,
+                inventory_domain::SYSTEMS_PROCESSORS,
+                Some(system_id.to_string()),
+                err,
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut out = Vec::with_capacity(processors.len());
+    for processor in processors {
+        let raw = processor.raw();
+        out.push(ProcessorData {
+            id: processor.id().to_string(),
+            odata_id: Some(processor.odata_id().to_string()),
+            socket: raw.socket.clone().flatten(),
+            processor_type: raw
+                .processor_type
+                .flatten()
+                .map(|processor_type| processor_type.to_snake_case().to_string()),
+            processor_architecture: raw
+                .processor_architecture
+                .clone()
+                .flatten()
+                .map(|architecture| architecture.to_string()),
+            instruction_set: raw.instruction_set.clone().flatten(),
+            manufacturer: raw.manufacturer.clone().flatten(),
+            model: raw.model.clone().flatten(),
+            max_speed_mhz: raw.max_speed_mhz.flatten(),
+            total_cores: raw.total_cores.flatten(),
+            total_threads: raw.total_threads.flatten(),
+            status_state: status_state(raw.status.as_ref()),
+            health: status_health(raw.status.as_ref()),
+            health_rollup: status_health_rollup(raw.status.as_ref()),
+        });
+    }
+    out
 }
 
 async fn collect_pcie_devices<B: Bmc>(
@@ -654,6 +704,7 @@ mod tests {
             cpu_model: None,
             memory_gib: None,
             secure_boot_enabled: None,
+            processors: Vec::new(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -687,6 +738,7 @@ mod tests {
             cpu_model: None,
             memory_gib: None,
             secure_boot_enabled: None,
+            processors: Vec::new(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -703,7 +755,18 @@ mod tests {
         bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
         bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System",
+            SYSTEM_WITH_PROCESSORS,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors",
+            PROCESSORS_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Systems/System/Processors/CPU1",
+            PROCESSOR,
+        ));
         bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
         bmc.expect(Expect::get(
@@ -767,6 +830,25 @@ mod tests {
         assert_eq!(report.systems[0].cpu_model.as_deref(), Some("Grace"));
         assert_eq!(report.systems[0].memory_gib, Some(480.0));
         assert_eq!(report.systems[0].secure_boot_enabled, None);
+        assert_eq!(report.systems[0].processors.len(), 1);
+        let processor = &report.systems[0].processors[0];
+        assert_eq!(processor.id, "CPU1");
+        assert_eq!(
+            processor.odata_id.as_deref(),
+            Some("/redfish/v1/Systems/System/Processors/CPU1")
+        );
+        assert_eq!(processor.socket.as_deref(), Some("CPU Socket 1"));
+        assert_eq!(processor.processor_type.as_deref(), Some("cpu"));
+        assert_eq!(processor.processor_architecture.as_deref(), Some("ARM"));
+        assert_eq!(processor.instruction_set.as_deref(), Some("ARM-A64"));
+        assert_eq!(processor.manufacturer.as_deref(), Some("NVIDIA"));
+        assert_eq!(processor.model.as_deref(), Some("Grace"));
+        assert_eq!(processor.max_speed_mhz, Some(3600));
+        assert_eq!(processor.total_cores, Some(72));
+        assert_eq!(processor.total_threads, Some(72));
+        assert_eq!(processor.status_state.as_deref(), Some("Enabled"));
+        assert_eq!(processor.health.as_deref(), Some("OK"));
+        assert_eq!(processor.health_rollup.as_deref(), Some("OK"));
         assert_eq!(report.systems[0].status_state.as_deref(), Some("Enabled"));
         assert_eq!(report.systems[0].health.as_deref(), Some("OK"));
         assert_eq!(report.systems[0].health_rollup.as_deref(), Some("Warning"));
@@ -1082,6 +1164,66 @@ mod tests {
             "State": "Enabled",
             "Health": "OK",
             "HealthRollup": "Warning"
+        }
+    }"##;
+
+    const SYSTEM_WITH_PROCESSORS: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System",
+        "@odata.type": "#ComputerSystem.v1_15_0.ComputerSystem",
+        "Id": "DGX",
+        "Name": "System",
+        "UUID": "9AEE71E4-6E80-11EE-A8AC-74D4DD550187",
+        "Manufacturer": "NVIDIA",
+        "Model": "GB200",
+        "SKU": "SKU-GB200",
+        "SerialNumber": "SN123",
+        "BiosVersion": "3A21",
+        "HostName": "node-a.example.com",
+        "AssetTag": "rack-12-tray-3",
+        "PowerState": "On",
+        "ProcessorSummary": {
+            "Count": 1,
+            "CoreCount": 72,
+            "Model": "Grace"
+        },
+        "Processors": {"@odata.id": "/redfish/v1/Systems/System/Processors"},
+        "MemorySummary": {
+            "TotalSystemMemoryGiB": 480
+        },
+        "Status": {
+            "State": "Enabled",
+            "Health": "OK",
+            "HealthRollup": "Warning"
+        }
+    }"##;
+
+    const PROCESSORS_COLLECTION: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/Processors",
+        "@odata.type": "#ProcessorCollection.ProcessorCollection",
+        "Id": "Processors",
+        "Name": "Processors",
+        "Members@odata.count": 1,
+        "Members": [{"@odata.id": "/redfish/v1/Systems/System/Processors/CPU1"}]
+    }"##;
+
+    const PROCESSOR: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
+        "@odata.type": "#Processor.v1_20_0.Processor",
+        "Id": "CPU1",
+        "Name": "CPU 1",
+        "Socket": "CPU Socket 1",
+        "ProcessorType": "CPU",
+        "ProcessorArchitecture": "ARM",
+        "InstructionSet": "ARM-A64",
+        "Manufacturer": "NVIDIA",
+        "Model": "Grace",
+        "MaxSpeedMHz": 3600,
+        "TotalCores": 72,
+        "TotalThreads": 72,
+        "Status": {
+            "State": "Enabled",
+            "Health": "OK",
+            "HealthRollup": "OK"
         }
     }"##;
 

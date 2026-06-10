@@ -2,7 +2,7 @@ use super::InventoryMapper;
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
     InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory, PcieDeviceInventory,
-    SystemInventory,
+    ProcessorInventory, SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -177,6 +177,26 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         cpu_model: system.cpu_model,
         memory_gib: system.memory_gib,
         secure_boot_enabled: system.secure_boot_enabled,
+        processors: system.processors.into_iter().map(map_processor).collect(),
+    }
+}
+
+fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory {
+    ProcessorInventory {
+        id: processor.id,
+        odata_id: processor.odata_id,
+        socket: processor.socket,
+        processor_type: processor.processor_type,
+        processor_architecture: processor.processor_architecture,
+        instruction_set: processor.instruction_set,
+        manufacturer: processor.manufacturer,
+        model: processor.model,
+        max_speed_mhz: processor.max_speed_mhz,
+        total_cores: processor.total_cores,
+        total_threads: processor.total_threads,
+        status_state: processor.status_state,
+        health: processor.health,
+        health_rollup: processor.health_rollup,
     }
 }
 
@@ -244,8 +264,8 @@ mod tests {
     use super::*;
     use crate::config::Target;
     use crate::source::{
-        ChassisData, FirmwareData, ManagerData, RedfishReport, ServiceRootData, SourceRecord,
-        SystemData,
+        ChassisData, FirmwareData, ManagerData, ProcessorData, RedfishReport, ServiceRootData,
+        SourceRecord, SystemData,
     };
 
     #[test]
@@ -269,7 +289,8 @@ mod tests {
                         .with_status_state("Enabled")
                         .with_health("OK")
                         .with_cpu(1, 72)
-                        .with_memory_gib(480.0),
+                        .with_memory_gib(480.0)
+                        .with_processor(processor("CPU1")),
                 ],
                 chassis: Vec::new(),
                 firmware: Vec::new(),
@@ -298,6 +319,10 @@ mod tests {
             system.uuid.as_ref().expect("uuid").to_string(),
             "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
         );
+        assert_eq!(system.processors.len(), 1);
+        assert_eq!(system.processors[0].id, "CPU1");
+        assert_eq!(system.processors[0].processor_type.as_deref(), Some("cpu"));
+        assert_eq!(system.processors[0].total_cores, Some(72));
     }
 
     #[test]
@@ -588,6 +613,26 @@ mod tests {
             cpu_model: None,
             memory_gib: None,
             secure_boot_enabled: None,
+            processors: Vec::new(),
+        }
+    }
+
+    fn processor(id: &str) -> ProcessorData {
+        ProcessorData {
+            id: id.to_string(),
+            odata_id: Some(format!("/redfish/v1/Systems/System/Processors/{id}")),
+            socket: Some("CPU Socket 1".to_string()),
+            processor_type: Some("cpu".to_string()),
+            processor_architecture: Some("ARM".to_string()),
+            instruction_set: Some("ARM-A64".to_string()),
+            manufacturer: Some("NVIDIA".to_string()),
+            model: Some("Grace".to_string()),
+            max_speed_mhz: Some(3600),
+            total_cores: Some(72),
+            total_threads: Some(72),
+            status_state: Some("Enabled".to_string()),
+            health: Some("OK".to_string()),
+            health_rollup: Some("OK".to_string()),
         }
     }
 
@@ -603,6 +648,7 @@ mod tests {
         fn with_health(self, health: &str) -> Self;
         fn with_cpu(self, count: i64, cores: i64) -> Self;
         fn with_memory_gib(self, memory_gib: f64) -> Self;
+        fn with_processor(self, processor: ProcessorData) -> Self;
     }
 
     impl SystemDataTestExt for SystemData {
@@ -659,6 +705,11 @@ mod tests {
 
         fn with_memory_gib(mut self, memory_gib: f64) -> Self {
             self.memory_gib = Some(memory_gib);
+            self
+        }
+
+        fn with_processor(mut self, processor: ProcessorData) -> Self {
+            self.processors.push(processor);
             self
         }
     }

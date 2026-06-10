@@ -29,6 +29,22 @@ fn node_inventory_serializes_as_backend_payload() {
             cpu_model: Some("Grace".to_string()),
             memory_gib: Some(480.0),
             secure_boot_enabled: Some(true),
+            processors: vec![ProcessorInventory {
+                id: "CPU1".to_string(),
+                odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
+                socket: Some("CPU Socket 1".to_string()),
+                processor_type: Some("cpu".to_string()),
+                processor_architecture: Some("ARM".to_string()),
+                instruction_set: Some("ARM-A64".to_string()),
+                manufacturer: Some("NVIDIA".to_string()),
+                model: Some("Grace".to_string()),
+                max_speed_mhz: Some(3600),
+                total_cores: Some(72),
+                total_threads: Some(72),
+                status_state: Some("Enabled".to_string()),
+                health: Some("OK".to_string()),
+                health_rollup: Some("OK".to_string()),
+            }],
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -129,7 +145,23 @@ fn node_inventory_serializes_as_backend_payload() {
                 "cpuCoreCount": 72,
                 "cpuModel": "Grace",
                 "memoryGib": 480.0,
-                "secureBootEnabled": true
+                "secureBootEnabled": true,
+                "processors": [{
+                    "id": "CPU1",
+                    "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
+                    "socket": "CPU Socket 1",
+                    "processorType": "cpu",
+                    "processorArchitecture": "ARM",
+                    "instructionSet": "ARM-A64",
+                    "manufacturer": "NVIDIA",
+                    "model": "Grace",
+                    "maxSpeedMhz": 3600,
+                    "totalCores": 72,
+                    "totalThreads": 72,
+                    "statusState": "Enabled",
+                    "health": "OK",
+                    "healthRollup": "OK"
+                }]
             }],
             "source": {
                 "sourceType": "redfish",

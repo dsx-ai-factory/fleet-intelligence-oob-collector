@@ -3,4 +3,6 @@
 /.env
 *.log
 *.tmp
-
+.DS_Store
+redfish-raw*/
+redfish-raw*.zip

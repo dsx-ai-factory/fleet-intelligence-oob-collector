@@ -48,6 +48,26 @@ pub struct SystemInventory {
     pub cpu_model: Option<String>,
     pub memory_gib: Option<f64>,
     pub secure_boot_enabled: Option<bool>,
+    pub processors: Vec<ProcessorInventory>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorInventory {
+    pub id: String,
+    pub odata_id: Option<String>,
+    pub socket: Option<String>,
+    pub processor_type: Option<String>,
+    pub processor_architecture: Option<String>,
+    pub instruction_set: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub max_speed_mhz: Option<i64>,
+    pub total_cores: Option<i64>,
+    pub total_threads: Option<i64>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
+    pub health_rollup: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

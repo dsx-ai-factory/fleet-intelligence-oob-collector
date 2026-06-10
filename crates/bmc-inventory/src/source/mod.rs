@@ -9,6 +9,7 @@ pub use redfish::RedfishSource;
 pub mod inventory_domain {
     pub const MANAGERS: &str = "managers";
     pub const SYSTEMS: &str = "systems";
+    pub const SYSTEMS_PROCESSORS: &str = "systems.processors";
     pub const SYSTEMS_SECURE_BOOT: &str = "systems.secureBoot";
     pub const CHASSIS: &str = "chassis";
     pub const CHASSIS_PCIE_DEVICES: &str = "chassis.pcieDevices";
@@ -78,6 +79,25 @@ pub struct SystemData {
     pub cpu_model: Option<String>,
     pub memory_gib: Option<f64>,
     pub secure_boot_enabled: Option<bool>,
+    pub processors: Vec<ProcessorData>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProcessorData {
+    pub id: String,
+    pub odata_id: Option<String>,
+    pub socket: Option<String>,
+    pub processor_type: Option<String>,
+    pub processor_architecture: Option<String>,
+    pub instruction_set: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub max_speed_mhz: Option<i64>,
+    pub total_cores: Option<i64>,
+    pub total_threads: Option<i64>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
+    pub health_rollup: Option<String>,
 }
 
 #[derive(Clone, Debug)]

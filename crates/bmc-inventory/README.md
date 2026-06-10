@@ -48,6 +48,7 @@ Collection is split by inventory domain:
 
 - managers
 - systems
+- systems.processors
 - systems.secureBoot
 - chassis
 - chassis.pcieDevices
@@ -70,6 +71,7 @@ should key off `domain`, optionally scoped by `resource`; it should not parse
 |--------|----------|------------------------|
 | `managers` | `null` | Do not write or clear manager data for the target. |
 | `systems` | `null` | Do not write or clear system data for the target, including secure boot. |
+| `systems.processors` | system ID | Write the system data, but do not replace processors for that system with an empty list. |
 | `systems.secureBoot` | system ID | Write the system data, but do not overwrite `secureBootEnabled` for that system. |
 | `chassis` | `null` | Do not write or clear chassis data for the target, including PCIe devices. |
 | `chassis.pcieDevices` | chassis ID | Write the chassis data, but do not replace PCIe devices for that chassis with an empty list. |

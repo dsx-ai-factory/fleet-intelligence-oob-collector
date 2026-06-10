@@ -4,7 +4,7 @@ use std::fmt;
 use super::InventorySink;
 use crate::models::{
     ChassisInventory, ChassisLocation, FirmwareInventory, ManagerInventory, NodeInventory,
-    PcieDeviceInventory, SystemInventory,
+    PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -101,6 +101,24 @@ struct DeviceDetailRow {
     serial: String,
     part: String,
     firmware: String,
+    status: String,
+    health: String,
+    health_rollup: String,
+}
+
+#[derive(Debug)]
+struct ProcessorDetailRow {
+    system_id: String,
+    id: String,
+    socket: String,
+    processor_type: String,
+    architecture: String,
+    instruction_set: String,
+    manufacturer: String,
+    model: String,
+    max_speed_mhz: String,
+    total_cores: String,
+    total_threads: String,
     status: String,
     health: String,
     health_rollup: String,
@@ -421,6 +439,55 @@ impl DeviceDetailRow {
     }
 }
 
+impl ProcessorDetailRow {
+    fn from_processor(system: &SystemInventory, processor: &ProcessorInventory) -> Self {
+        Self {
+            system_id: system.id.clone(),
+            id: processor.id.clone(),
+            socket: processor.socket.clone().unwrap_or_default(),
+            processor_type: processor.processor_type.clone().unwrap_or_default(),
+            architecture: processor.processor_architecture.clone().unwrap_or_default(),
+            instruction_set: processor.instruction_set.clone().unwrap_or_default(),
+            manufacturer: processor.manufacturer.clone().unwrap_or_default(),
+            model: processor.model.clone().unwrap_or_default(),
+            max_speed_mhz: processor
+                .max_speed_mhz
+                .map(|speed| speed.to_string())
+                .unwrap_or_default(),
+            total_cores: processor
+                .total_cores
+                .map(|cores| cores.to_string())
+                .unwrap_or_default(),
+            total_threads: processor
+                .total_threads
+                .map(|threads| threads.to_string())
+                .unwrap_or_default(),
+            status: processor.status_state.clone().unwrap_or_default(),
+            health: processor.health.clone().unwrap_or_default(),
+            health_rollup: processor.health_rollup.clone().unwrap_or_default(),
+        }
+    }
+
+    fn values(&self) -> [String; 14] {
+        [
+            self.system_id.clone(),
+            self.id.clone(),
+            self.socket.clone(),
+            self.processor_type.clone(),
+            self.architecture.clone(),
+            self.instruction_set.clone(),
+            self.manufacturer.clone(),
+            self.model.clone(),
+            self.max_speed_mhz.clone(),
+            self.total_cores.clone(),
+            self.total_threads.clone(),
+            self.status.clone(),
+            self.health.clone(),
+            self.health_rollup.clone(),
+        ]
+    }
+}
+
 impl From<&FirmwareInventory> for FirmwareDetailRow {
     fn from(firmware: &FirmwareInventory) -> Self {
         Self {
@@ -501,6 +568,37 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
             "Secure Boot",
         ],
         system_rows,
+    ));
+
+    let processor_rows = inventory
+        .systems
+        .iter()
+        .flat_map(|system| {
+            system
+                .processors
+                .iter()
+                .map(move |processor| ProcessorDetailRow::from_processor(system, processor))
+        })
+        .map(|row| row.values());
+    out.push_str("Processors\n");
+    out.push_str(&render_table(
+        &[
+            "System",
+            "ID",
+            "Socket",
+            "Type",
+            "Arch",
+            "Instruction",
+            "Manufacturer",
+            "Model",
+            "Max MHz",
+            "Cores",
+            "Threads",
+            "Status",
+            "Health",
+            "Health Rollup",
+        ],
+        processor_rows,
     ));
 
     let chassis_rows = inventory
@@ -722,6 +820,8 @@ mod tests {
         assert!(rendered.contains("CPU Model"));
         assert!(rendered.contains("Grace CPU"));
         assert!(rendered.contains("Secure Boot"));
+        assert!(rendered.contains("Processors\n"));
+        assert!(rendered.contains("CPU Socket 1"));
         assert!(rendered.contains("Health Rollup"));
         assert!(rendered.contains("Chassis\n"));
         assert!(rendered.contains("| BMC_0 | module"));
@@ -733,12 +833,14 @@ mod tests {
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
         let system = rendered.find("Systems\n").expect("system");
+        let processor = rendered.find("Processors\n").expect("processor");
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
         assert!(source < manager);
         assert!(manager < system);
-        assert!(system < chassis);
+        assert!(system < processor);
+        assert!(processor < chassis);
         assert!(chassis < pcie);
         assert!(pcie < firmware);
     }
@@ -791,6 +893,22 @@ mod tests {
                 cpu_model: Some("Grace CPU".to_string()),
                 memory_gib: Some(480.0),
                 secure_boot_enabled: Some(true),
+                processors: vec![ProcessorInventory {
+                    id: "CPU1".to_string(),
+                    odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
+                    socket: Some("CPU Socket 1".to_string()),
+                    processor_type: Some("cpu".to_string()),
+                    processor_architecture: Some("ARM".to_string()),
+                    instruction_set: Some("ARM-A64".to_string()),
+                    manufacturer: Some("NVIDIA".to_string()),
+                    model: Some("Grace CPU".to_string()),
+                    max_speed_mhz: Some(3600),
+                    total_cores: Some(72),
+                    total_threads: Some(72),
+                    status_state: Some("Enabled".to_string()),
+                    health: Some("OK".to_string()),
+                    health_rollup: Some("OK".to_string()),
+                }],
             }],
             managers: vec![ManagerInventory {
                 id: "BMC_0".to_string(),
@@ -868,6 +986,7 @@ mod tests {
             cpu_model: None,
             memory_gib: None,
             secure_boot_enabled: None,
+            processors: Vec::new(),
         }
     }
 }
