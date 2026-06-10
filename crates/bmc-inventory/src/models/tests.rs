@@ -8,7 +8,8 @@ fn node_inventory_serializes_as_backend_payload() {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
         collected_at: "2026-01-01T00:00:00Z".to_string(),
         uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
-        system: Some(SystemInventory {
+        primary_system_id: Some("System".to_string()),
+        systems: vec![SystemInventory {
             id: "System".to_string(),
             odata_id: Some("/redfish/v1/Systems/System".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
@@ -28,7 +29,7 @@ fn node_inventory_serializes_as_backend_payload() {
             cpu_model: Some("Grace".to_string()),
             memory_gib: Some(480.0),
             secure_boot_enabled: Some(true),
-        }),
+        }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
             address: "10.0.0.1".to_string(),
@@ -36,7 +37,7 @@ fn node_inventory_serializes_as_backend_payload() {
             service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
             vendor: Some("NVIDIA".to_string()),
         },
-        manager: Some(ManagerInventory {
+        managers: vec![ManagerInventory {
             id: "BMC_0".to_string(),
             odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
             uuid: Some("11111111-2222-3333-4444-555555555555".to_string()),
@@ -46,7 +47,7 @@ fn node_inventory_serializes_as_backend_payload() {
             status_state: Some("Enabled".to_string()),
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
-        }),
+        }],
         chassis: vec![ChassisInventory {
             id: "BMC_0".to_string(),
             odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
@@ -108,7 +109,8 @@ fn node_inventory_serializes_as_backend_payload() {
             "schemaVersion": "inventory.v1alpha1",
             "collectedAt": "2026-01-01T00:00:00Z",
             "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
-            "system": {
+            "primarySystemId": "System",
+            "systems": [{
                 "id": "System",
                 "odataId": "/redfish/v1/Systems/System",
                 "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
@@ -128,7 +130,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "cpuModel": "Grace",
                 "memoryGib": 480.0,
                 "secureBootEnabled": true
-            },
+            }],
             "source": {
                 "sourceType": "redfish",
                 "address": "10.0.0.1",
@@ -136,7 +138,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "serviceUuid": "870155dd-d474-aca8-11ee-6e809af87c0c",
                 "vendor": "NVIDIA"
             },
-            "manager": {
+            "managers": [{
                 "id": "BMC_0",
                 "odataId": "/redfish/v1/Managers/BMC_0",
                 "uuid": "11111111-2222-3333-4444-555555555555",
@@ -146,7 +148,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "statusState": "Enabled",
                 "health": "OK",
                 "healthRollup": "OK"
-            },
+            }],
             "chassis": [{
                 "id": "BMC_0",
                 "odataId": "/redfish/v1/Chassis/BMC_0",
@@ -215,8 +217,9 @@ fn target_error_inventory_serializes_absent_uuid() {
             service_uuid: None,
             vendor: None,
         },
-        manager: None,
-        system: None,
+        primary_system_id: None,
+        managers: Vec::new(),
+        systems: Vec::new(),
         chassis: Vec::new(),
         firmware: Vec::new(),
         domain_errors: Vec::new(),

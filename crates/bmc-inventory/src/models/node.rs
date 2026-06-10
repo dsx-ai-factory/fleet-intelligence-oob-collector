@@ -14,8 +14,9 @@ pub struct NodeInventory {
     pub collected_at: String,
     pub uuid: Option<InventoryUuid>,
     pub source: InventorySourceInfo,
-    pub manager: Option<ManagerInventory>,
-    pub system: Option<SystemInventory>,
+    pub primary_system_id: Option<String>,
+    pub managers: Vec<ManagerInventory>,
+    pub systems: Vec<SystemInventory>,
     pub chassis: Vec<ChassisInventory>,
     pub firmware: Vec<FirmwareInventory>,
     pub domain_errors: Vec<DomainError>,
@@ -36,6 +37,10 @@ pub struct InventoryUuid(Uuid);
 impl InventoryUuid {
     pub fn parse(value: &str) -> Option<Self> {
         Uuid::parse_str(value.trim()).ok().map(Self)
+    }
+
+    pub fn from_stable_name(name: &[u8]) -> Self {
+        Self(Uuid::new_v5(&Uuid::NAMESPACE_URL, name))
     }
 }
 

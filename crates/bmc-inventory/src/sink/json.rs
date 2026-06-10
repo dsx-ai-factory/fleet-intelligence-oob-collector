@@ -29,7 +29,7 @@ mod tests {
 
         assert!(rendered.contains(r#""sourceType": "redfish""#));
         assert!(!rendered.contains(r#""target""#));
-        assert!(rendered.contains(r#""system": null"#));
+        assert!(rendered.contains(r#""systems": []"#));
         assert!(rendered.contains(r#""targetError": null"#));
     }
 
@@ -45,8 +45,9 @@ mod tests {
                 service_uuid: None,
                 vendor: None,
             },
-            manager: None,
-            system: None,
+            primary_system_id: None,
+            managers: Vec::new(),
+            systems: Vec::new(),
             chassis: Vec::new(),
             firmware: Vec::new(),
             domain_errors: Vec::new(),

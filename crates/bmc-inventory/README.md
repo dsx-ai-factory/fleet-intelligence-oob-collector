@@ -26,7 +26,10 @@ normalizes that report into the backend payload shape.
 - If no system has a BIOS version, the mapper falls back to the first system in
   the Redfish systems collection.
 - If the selected system has a missing, empty, or malformed UUID, the mapper
-  emits a `targetError` inventory instead of a partial node inventory.
+  derives a stable UUID from the Redfish service root UUID when present, or the
+  target address otherwise.
+- `NodeInventory.primarySystemId` records the selected system ID used for node
+  identity.
 - `InventorySourceInfo.serviceUuid` keeps the Redfish service root UUID. It is
   not used as the node UUID.
 - `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then falls
@@ -35,7 +38,9 @@ normalizes that report into the backend payload shape.
 The BIOS-based selection is a host-system heuristic. Some BMCs expose auxiliary
 systems, such as BMC, DPU, or baseboard systems, in the same collection as the
 host. The host system is the one expected to carry BIOS data and the stable node
-UUID.
+UUID. The mapper still preserves every collected Redfish manager and system in
+`managers[]` and `systems[]`; selection only determines the top-level node UUID
+and primary marker.
 
 ## Partial Collection
 

@@ -7,6 +7,8 @@ use crate::models::{
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
 
+const DERIVED_NODE_UUID_KEY_PREFIX: &str = "fleet-intelligence-oob:redfish:";
+
 #[derive(Default)]
 pub struct RedfishMapper;
 
@@ -24,12 +26,8 @@ impl InventoryMapper for RedfishMapper {
                     vendor: report.service_root.vendor.or(report.service_root.product),
                 };
                 let selected_system = select_primary_system(&report.systems);
-                let node_uuid = match selected_system.as_ref().map(system_uuid).transpose() {
-                    Ok(uuid) => uuid.flatten(),
-                    Err(error) => {
-                        return target_error_inventory(collected_at, source, error);
-                    }
-                };
+                let node_uuid = node_uuid(selected_system.as_ref(), &source);
+                let primary_system_id = selected_system.map(|system| system.id);
                 let chassis = report
                     .chassis
                     .into_iter()
@@ -40,22 +38,20 @@ impl InventoryMapper for RedfishMapper {
                     collected_at,
                     uuid: node_uuid.clone(),
                     source,
-                    manager: report
-                        .managers
+                    primary_system_id: primary_system_id.clone(),
+                    managers: report.managers.into_iter().map(map_manager).collect(),
+                    systems: report
+                        .systems
                         .into_iter()
-                        .next()
-                        .map(|manager| ManagerInventory {
-                            id: manager.id,
-                            odata_id: manager.odata_id,
-                            uuid: manager.uuid,
-                            manager_type: manager.manager_type,
-                            model: manager.model,
-                            firmware_version: manager.firmware_version,
-                            status_state: manager.status_state,
-                            health: manager.health,
-                            health_rollup: manager.health_rollup,
-                        }),
-                    system: selected_system.map(|system| map_system(system, node_uuid)),
+                        .map(|system| {
+                            let uuid = if primary_system_id.as_ref() == Some(&system.id) {
+                                node_uuid.clone()
+                            } else {
+                                system_uuid(&system)
+                            };
+                            map_system(system, uuid)
+                        })
+                        .collect(),
                     chassis,
                     firmware: report.firmware.into_iter().map(map_firmware).collect(),
                     domain_errors: report
@@ -81,8 +77,9 @@ impl InventoryMapper for RedfishMapper {
                     service_uuid: None,
                     vendor: None,
                 },
-                manager: None,
-                system: None,
+                primary_system_id: None,
+                managers: Vec::new(),
+                systems: Vec::new(),
                 chassis: Vec::new(),
                 firmware: Vec::new(),
                 domain_errors: Vec::new(),
@@ -110,18 +107,53 @@ fn has_bios(system: &SystemData) -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
-fn system_uuid(system: &SystemData) -> Result<Option<InventoryUuid>, String> {
-    let uuid = system
-        .uuid
-        .as_deref()
-        .ok_or_else(|| format!("missing system UUID for {}", system.id))?;
-    let uuid = uuid.trim();
-    if uuid.is_empty() {
-        return Err(format!("empty system UUID for {}", system.id));
+fn node_uuid(system: Option<&SystemData>, source: &InventorySourceInfo) -> Option<InventoryUuid> {
+    system
+        .and_then(system_uuid)
+        .or_else(|| Some(derived_node_uuid(source)))
+}
+
+fn system_uuid(system: &SystemData) -> Option<InventoryUuid> {
+    system.uuid.as_deref().and_then(InventoryUuid::parse)
+}
+
+fn derived_node_uuid(source: &InventorySourceInfo) -> InventoryUuid {
+    let mut key = String::from(DERIVED_NODE_UUID_KEY_PREFIX);
+    match normalized_service_uuid(source.service_uuid.as_deref()) {
+        Some(service_uuid) => {
+            key.push_str("service:");
+            key.push_str(&service_uuid);
+        }
+        None => {
+            key.push_str("address:");
+            key.push_str(source.address.trim());
+        }
     }
-    InventoryUuid::parse(uuid)
-        .map(Some)
-        .ok_or_else(|| format!("malformed system UUID for {}: {uuid}", system.id))
+    InventoryUuid::from_stable_name(key.as_bytes())
+}
+
+fn normalized_service_uuid(service_uuid: Option<&str>) -> Option<String> {
+    let service_uuid = service_uuid?.trim();
+    if service_uuid.is_empty() {
+        return None;
+    }
+    InventoryUuid::parse(service_uuid)
+        .map(|uuid| uuid.to_string())
+        .or_else(|| Some(service_uuid.to_string()))
+}
+
+fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
+    ManagerInventory {
+        id: manager.id,
+        odata_id: manager.odata_id,
+        uuid: manager.uuid,
+        manager_type: manager.manager_type,
+        model: manager.model,
+        firmware_version: manager.firmware_version,
+        status_state: manager.status_state,
+        health: manager.health,
+        health_rollup: manager.health_rollup,
+    }
 }
 
 fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventory {
@@ -145,25 +177,6 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         cpu_model: system.cpu_model,
         memory_gib: system.memory_gib,
         secure_boot_enabled: system.secure_boot_enabled,
-    }
-}
-
-fn target_error_inventory(
-    collected_at: String,
-    source: InventorySourceInfo,
-    error: String,
-) -> NodeInventory {
-    NodeInventory {
-        schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
-        collected_at,
-        uuid: None,
-        source,
-        manager: None,
-        system: None,
-        chassis: Vec::new(),
-        firmware: Vec::new(),
-        domain_errors: Vec::new(),
-        target_error: Some(error),
     }
 }
 
@@ -268,7 +281,13 @@ mod tests {
             inventory.uuid.as_ref().expect("node uuid").to_string(),
             "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
         );
-        let system = inventory.system.expect("system");
+        assert_eq!(inventory.primary_system_id.as_deref(), Some("System"));
+        assert_eq!(inventory.systems.len(), 2);
+        let system = inventory
+            .systems
+            .iter()
+            .find(|system| system.id == "System")
+            .expect("system");
         assert_eq!(system.id, "System");
         assert_eq!(
             system.odata_id.as_deref(),
@@ -276,7 +295,7 @@ mod tests {
         );
         assert_eq!(system.status_state.as_deref(), Some("Enabled"));
         assert_eq!(
-            system.uuid.expect("uuid").to_string(),
+            system.uuid.as_ref().expect("uuid").to_string(),
             "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
         );
     }
@@ -360,13 +379,16 @@ mod tests {
             errors: Vec::new(),
         });
 
-        assert_eq!(inventory.system.expect("system").id, "SystemA");
+        assert_eq!(inventory.primary_system_id.as_deref(), Some("SystemA"));
     }
 
     #[test]
-    fn malformed_selected_system_uuid_marks_target_error() {
-        let inventory = map_report(RedfishReport {
-            service_root: ServiceRootData::default(),
+    fn malformed_selected_system_uuid_derives_stable_node_uuid() {
+        let report = RedfishReport {
+            service_root: ServiceRootData {
+                uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
+                ..ServiceRootData::default()
+            },
             managers: Vec::new(),
             systems: vec![
                 system("BadUuid").with_uuid("not-a-uuid").with_bios("3A21"),
@@ -375,23 +397,25 @@ mod tests {
             chassis: Vec::new(),
             firmware: Vec::new(),
             errors: Vec::new(),
-        });
+        };
 
-        assert!(inventory.uuid.is_none());
-        assert!(inventory.system.is_none());
-        assert!(inventory.chassis.is_empty());
-        assert!(inventory.firmware.is_empty());
-        assert!(
-            inventory
-                .target_error
-                .as_deref()
-                .expect("target error")
-                .contains("malformed system UUID for BadUuid")
-        );
+        let inventory = map_report(report.clone());
+        let repeated = map_report(report);
+
+        assert!(inventory.uuid.is_some());
+        assert_eq!(inventory.uuid, repeated.uuid);
+        let system = inventory
+            .systems
+            .iter()
+            .find(|system| system.id == "BadUuid")
+            .expect("system");
+        assert_eq!(inventory.primary_system_id.as_deref(), Some("BadUuid"));
+        assert_eq!(system.uuid, inventory.uuid);
+        assert!(inventory.target_error.is_none());
     }
 
     #[test]
-    fn empty_selected_system_uuid_marks_target_error() {
+    fn empty_selected_system_uuid_derives_node_uuid() {
         let inventory = map_report(RedfishReport {
             service_root: ServiceRootData::default(),
             managers: Vec::new(),
@@ -401,19 +425,13 @@ mod tests {
             errors: Vec::new(),
         });
 
-        assert!(inventory.uuid.is_none());
-        assert!(inventory.system.is_none());
-        assert!(
-            inventory
-                .target_error
-                .as_deref()
-                .expect("target error")
-                .contains("empty system UUID for EmptyUuid")
-        );
+        assert!(inventory.uuid.is_some());
+        assert_eq!(inventory.primary_system_id.as_deref(), Some("EmptyUuid"));
+        assert!(inventory.target_error.is_none());
     }
 
     #[test]
-    fn missing_selected_system_uuid_marks_target_error() {
+    fn missing_selected_system_uuid_derives_node_uuid() {
         let inventory = map_report(RedfishReport {
             service_root: ServiceRootData::default(),
             managers: Vec::new(),
@@ -423,14 +441,16 @@ mod tests {
             errors: Vec::new(),
         });
 
-        assert!(inventory.uuid.is_none());
-        assert!(inventory.system.is_none());
-        assert!(
-            inventory
-                .target_error
-                .as_deref()
-                .expect("target error")
-                .contains("missing system UUID for SystemA")
+        assert!(inventory.uuid.is_some());
+        assert_eq!(inventory.primary_system_id.as_deref(), Some("SystemA"));
+        assert!(inventory.target_error.is_none());
+    }
+
+    #[test]
+    fn normalizes_service_uuid_for_derived_identity() {
+        assert_eq!(
+            normalized_service_uuid(Some(" 870155DD-D474-ACA8-11EE-6E809AF87C0C ")).as_deref(),
+            Some("870155dd-d474-aca8-11ee-6e809af87c0c")
         );
     }
 
@@ -445,7 +465,7 @@ mod tests {
             errors: Vec::new(),
         });
 
-        assert!(inventory.system.expect("system").power_state.is_none());
+        assert!(inventory.systems[0].power_state.is_none());
     }
 
     #[test]
@@ -463,8 +483,9 @@ mod tests {
             inventory.target_error.as_deref(),
             Some("systems collection: timeout")
         );
-        assert!(inventory.manager.is_none());
-        assert!(inventory.system.is_none());
+        assert!(inventory.primary_system_id.is_none());
+        assert!(inventory.managers.is_empty());
+        assert!(inventory.systems.is_empty());
         assert!(inventory.chassis.is_empty());
         assert!(inventory.firmware.is_empty());
         assert!(inventory.domain_errors.is_empty());
@@ -505,7 +526,9 @@ mod tests {
 
         assert_eq!(inventory.source.redfish_version.as_deref(), Some("1.15.1"));
         assert_eq!(inventory.source.vendor.as_deref(), Some("NVIDIA BMC"));
-        let manager = inventory.manager.expect("manager");
+        assert!(inventory.uuid.is_some());
+        assert_eq!(inventory.managers.len(), 1);
+        let manager = inventory.managers.first().expect("manager");
         assert_eq!(manager.id, "BMC_0");
         assert_eq!(
             manager.odata_id.as_deref(),
@@ -515,7 +538,7 @@ mod tests {
         assert_eq!(manager.status_state.as_deref(), Some("Enabled"));
         assert_eq!(manager.health.as_deref(), Some("OK"));
         assert_eq!(manager.health_rollup.as_deref(), Some("OK"));
-        assert!(inventory.system.is_none());
+        assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
         assert_eq!(
             inventory.firmware[0].odata_id.as_deref(),

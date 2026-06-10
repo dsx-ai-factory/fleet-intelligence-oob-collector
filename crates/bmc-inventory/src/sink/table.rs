@@ -3,8 +3,8 @@ use std::fmt;
 
 use super::InventorySink;
 use crate::models::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, NodeInventory, PcieDeviceInventory,
-    SystemInventory,
+    ChassisInventory, ChassisLocation, FirmwareInventory, ManagerInventory, NodeInventory,
+    PcieDeviceInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -20,6 +20,7 @@ struct SummaryRow {
     service_uuid: String,
     vendor: String,
     uuid: String,
+    primary_system: String,
     managers: String,
     systems: String,
     chassis: String,
@@ -51,6 +52,7 @@ struct ManagerDetailRow {
 
 #[derive(Debug)]
 struct SystemDetailRow {
+    primary: String,
     system_id: String,
     system_uuid: String,
     manufacturer: String,
@@ -136,6 +138,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "Service UUID",
             "Vendor",
             "UUID",
+            "Primary System",
             "Managers",
             "Systems",
             "Chassis",
@@ -168,8 +171,9 @@ impl From<&NodeInventory> for SummaryRow {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            managers: usize::from(inventory.manager.is_some()).to_string(),
-            systems: usize::from(inventory.system.is_some()).to_string(),
+            primary_system: inventory.primary_system_id.clone().unwrap_or_default(),
+            managers: inventory.managers.len().to_string(),
+            systems: inventory.systems.len().to_string(),
             chassis: inventory.chassis.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
             domain_errors: inventory.domain_errors.len().to_string(),
@@ -179,7 +183,7 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 12] {
+    fn values(&self) -> [String; 13] {
         [
             self.address.clone(),
             self.source_type.clone(),
@@ -187,6 +191,7 @@ impl SummaryRow {
             self.service_uuid.clone(),
             self.vendor.clone(),
             self.uuid.clone(),
+            self.primary_system.clone(),
             self.managers.clone(),
             self.systems.clone(),
             self.chassis.clone(),
@@ -221,74 +226,40 @@ impl SourceDetailRow {
     }
 }
 
-impl From<&NodeInventory> for ManagerDetailRow {
-    fn from(inventory: &NodeInventory) -> Self {
+impl From<&ManagerInventory> for ManagerDetailRow {
+    fn from(manager: &ManagerInventory) -> Self {
         Self {
-            manager_id: inventory
-                .manager
-                .as_ref()
-                .map(|manager| manager.id.clone())
-                .unwrap_or_default(),
-            manager_uuid: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.uuid.clone())
-                .unwrap_or_default(),
-            manager_model: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.model.clone())
-                .unwrap_or_default(),
-            manager_type: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.manager_type.clone())
-                .unwrap_or_default(),
-            manager_firmware: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.firmware_version.clone())
-                .unwrap_or_default(),
-            manager_status: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.status_state.clone())
-                .unwrap_or_default(),
-            manager_health: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.health.clone())
-                .unwrap_or_default(),
-            manager_health_rollup: inventory
-                .manager
-                .as_ref()
-                .and_then(|manager| manager.health_rollup.clone())
-                .unwrap_or_default(),
+            manager_id: manager.id.clone(),
+            manager_uuid: manager.uuid.clone().unwrap_or_default(),
+            manager_model: manager.model.clone().unwrap_or_default(),
+            manager_type: manager.manager_type.clone().unwrap_or_default(),
+            manager_firmware: manager.firmware_version.clone().unwrap_or_default(),
+            manager_status: manager.status_state.clone().unwrap_or_default(),
+            manager_health: manager.health.clone().unwrap_or_default(),
+            manager_health_rollup: manager.health_rollup.clone().unwrap_or_default(),
         }
     }
 }
 
 impl ManagerDetailRow {
-    fn values(&self) -> Vec<[String; 2]> {
-        vec![
-            ["Manager".to_string(), self.manager_id.clone()],
-            ["Manager UUID".to_string(), self.manager_uuid.clone()],
-            ["Manager Model".to_string(), self.manager_model.clone()],
-            ["Manager Type".to_string(), self.manager_type.clone()],
-            ["BMC FW".to_string(), self.manager_firmware.clone()],
-            ["Manager Status".to_string(), self.manager_status.clone()],
-            ["Manager Health".to_string(), self.manager_health.clone()],
-            [
-                "Manager Health Rollup".to_string(),
-                self.manager_health_rollup.clone(),
-            ],
+    fn values(&self) -> [String; 8] {
+        [
+            self.manager_id.clone(),
+            self.manager_uuid.clone(),
+            self.manager_model.clone(),
+            self.manager_type.clone(),
+            self.manager_firmware.clone(),
+            self.manager_status.clone(),
+            self.manager_health.clone(),
+            self.manager_health_rollup.clone(),
         ]
     }
 }
 
-impl From<&SystemInventory> for SystemDetailRow {
-    fn from(system: &SystemInventory) -> Self {
+impl SystemDetailRow {
+    fn from_system(system: &SystemInventory, primary_system_id: Option<&str>) -> Self {
         Self {
+            primary: (primary_system_id == Some(system.id.as_str())).to_string(),
             system_id: system.id.clone(),
             system_uuid: system
                 .uuid
@@ -318,31 +289,26 @@ impl From<&SystemInventory> for SystemDetailRow {
                 .unwrap_or_default(),
         }
     }
-}
-
-impl SystemDetailRow {
-    fn values(&self) -> Vec<[String; 2]> {
-        vec![
-            ["System".to_string(), self.system_id.clone()],
-            ["System UUID".to_string(), self.system_uuid.clone()],
-            ["Manufacturer".to_string(), self.manufacturer.clone()],
-            ["Model".to_string(), self.model.clone()],
-            ["SKU".to_string(), self.sku.clone()],
-            ["Serial".to_string(), self.serial.clone()],
-            ["BIOS".to_string(), self.bios.clone()],
-            ["Host Name".to_string(), self.host_name.clone()],
-            ["Asset Tag".to_string(), self.asset_tag.clone()],
-            ["Power".to_string(), self.power.clone()],
-            ["Status".to_string(), self.status.clone()],
-            ["Health".to_string(), self.health.clone()],
-            ["Health Rollup".to_string(), self.health_rollup.clone()],
-            ["CPU".to_string(), self.cpu.clone()],
-            ["CPU Model".to_string(), self.cpu_model.clone()],
-            ["Mem GiB".to_string(), self.memory_gib.clone()],
-            [
-                "Secure Boot Enabled".to_string(),
-                self.secure_boot_enabled.clone(),
-            ],
+    fn values(&self) -> [String; 18] {
+        [
+            self.primary.clone(),
+            self.system_id.clone(),
+            self.system_uuid.clone(),
+            self.manufacturer.clone(),
+            self.model.clone(),
+            self.sku.clone(),
+            self.serial.clone(),
+            self.bios.clone(),
+            self.host_name.clone(),
+            self.asset_tag.clone(),
+            self.power.clone(),
+            self.status.clone(),
+            self.health.clone(),
+            self.health_rollup.clone(),
+            self.cpu.clone(),
+            self.cpu_model.clone(),
+            self.memory_gib.clone(),
+            self.secure_boot_enabled.clone(),
         ]
     }
 }
@@ -487,18 +453,54 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
     out.push_str("Source Information\n");
     out.push_str(&render_table(&["Attribute", "Value"], source_row.values()));
 
-    let manager_row = ManagerDetailRow::from(inventory);
-    out.push_str("Manager Information\n");
-    out.push_str(&render_table(&["Attribute", "Value"], manager_row.values()));
-
-    let system_row = inventory.system.as_ref().map(SystemDetailRow::from);
-    out.push_str("System Information\n");
+    let manager_rows = inventory
+        .managers
+        .iter()
+        .map(ManagerDetailRow::from)
+        .map(|row| row.values());
+    out.push_str("Managers\n");
     out.push_str(&render_table(
-        &["Attribute", "Value"],
-        system_row
-            .as_ref()
-            .map(SystemDetailRow::values)
-            .unwrap_or_default(),
+        &[
+            "ID",
+            "UUID",
+            "Model",
+            "Type",
+            "Firmware",
+            "Status",
+            "Health",
+            "Health Rollup",
+        ],
+        manager_rows,
+    ));
+
+    let system_rows = inventory
+        .systems
+        .iter()
+        .map(|system| SystemDetailRow::from_system(system, inventory.primary_system_id.as_deref()))
+        .map(|row| row.values());
+    out.push_str("Systems\n");
+    out.push_str(&render_table(
+        &[
+            "Primary",
+            "ID",
+            "UUID",
+            "Manufacturer",
+            "Model",
+            "SKU",
+            "Serial",
+            "BIOS",
+            "Host Name",
+            "Asset",
+            "Power",
+            "Status",
+            "Health",
+            "Health Rollup",
+            "CPU",
+            "CPU Model",
+            "Mem GiB",
+            "Secure Boot",
+        ],
+        system_rows,
     ));
 
     let chassis_rows = inventory
@@ -667,6 +669,7 @@ mod tests {
         assert_eq!(row.vendor, "NVIDIA");
         assert_eq!(row.managers, "1");
         assert_eq!(row.uuid, "9aee71e4-6e80-11ee-a8ac-74d4dd550187");
+        assert_eq!(row.primary_system, "System");
         assert_eq!(row.systems, "1");
         assert_eq!(row.chassis, "1");
         assert_eq!(row.firmware, "1");
@@ -709,15 +712,16 @@ mod tests {
         assert!(rendered.contains("Redfish Version"));
         assert!(rendered.contains("Service UUID"));
         assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
-        assert!(rendered.contains("Manager Information\n"));
-        assert!(rendered.contains("Manager Model"));
+        assert!(rendered.contains("Managers\n"));
         assert!(rendered.contains("OpenBMC"));
-        assert!(rendered.contains("System Information\n"));
+        assert!(rendered.contains("Systems\n"));
+        assert!(rendered.contains("Primary"));
+        assert!(rendered.contains("System"));
         assert!(rendered.contains("CPU"));
         assert!(rendered.contains("1/72"));
         assert!(rendered.contains("CPU Model"));
         assert!(rendered.contains("Grace CPU"));
-        assert!(rendered.contains("Secure Boot Enabled"));
+        assert!(rendered.contains("Secure Boot"));
         assert!(rendered.contains("Health Rollup"));
         assert!(rendered.contains("Chassis\n"));
         assert!(rendered.contains("| BMC_0 | module"));
@@ -727,8 +731,8 @@ mod tests {
         assert!(rendered.contains("| FirmwareInventory | BMC"));
 
         let source = rendered.find("Source Information\n").expect("source");
-        let manager = rendered.find("Manager Information\n").expect("manager");
-        let system = rendered.find("System Information\n").expect("system");
+        let manager = rendered.find("Managers\n").expect("manager");
+        let system = rendered.find("Systems\n").expect("system");
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
@@ -766,7 +770,8 @@ mod tests {
                 service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
                 vendor: Some("NVIDIA".to_string()),
             },
-            system: Some(SystemInventory {
+            primary_system_id: Some("System".to_string()),
+            systems: vec![SystemInventory {
                 id: "System".to_string(),
                 odata_id: Some("/redfish/v1/Systems/System".to_string()),
                 uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
@@ -786,8 +791,8 @@ mod tests {
                 cpu_model: Some("Grace CPU".to_string()),
                 memory_gib: Some(480.0),
                 secure_boot_enabled: Some(true),
-            }),
-            manager: Some(ManagerInventory {
+            }],
+            managers: vec![ManagerInventory {
                 id: "BMC_0".to_string(),
                 odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
                 uuid: Some("manager-uuid".to_string()),
@@ -797,7 +802,7 @@ mod tests {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
-            }),
+            }],
             chassis: vec![ChassisInventory {
                 id: "BMC_0".to_string(),
                 odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
