@@ -1,14 +1,15 @@
 use std::error::Error;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
-    DEFAULT_INVENTORY_INTERVAL_SECONDS, DEFAULT_REDFISH_TIMEOUT_SECONDS, InventoryFormat,
-    InventoryOptions, RuntimeOptions, run_inventory, run_runtime,
+    DEFAULT_INVENTORY_INTERVAL_SECONDS, DEFAULT_REDFISH_TIMEOUT_SECONDS,
+    DEFAULT_TARGET_CONCURRENCY, InventoryFormat, InventoryOptions, RuntimeOptions, run_inventory,
+    run_runtime,
 };
 
 #[derive(Debug, Parser)]
 #[command(name = "fleet-intelligence-oob")]
-#[command(about = "Fleet Intelligence OOB collector prototype backed by nv-redfish")]
+#[command(about = "Fleet Intelligence out-of-band collector")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -16,31 +17,36 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Collect BMC data and write it to local output")]
     Inventory(InventoryArgs),
+    #[command(about = "Continuously collect BMC data and export it to Fleet Intelligence")]
     Run(RuntimeArgs),
 }
 
 #[derive(Debug, Parser)]
 struct InventoryArgs {
-    #[arg(short, long, default_value = ".config")]
-    config: String,
-
-    #[arg(long)]
-    target: Option<String>,
-
-    #[arg(long, default_value_t = 443)]
-    port: u16,
-
-    #[arg(long)]
-    insecure_tls: bool,
+    #[command(flatten)]
+    collector: CollectorArgs,
 
     #[arg(long)]
     detail: bool,
 
     #[arg(long, default_value = "table", value_enum)]
     format: CliInventoryFormat,
+}
 
-    #[arg(long, default_value_t = 16)]
+#[derive(Clone, Debug, Args)]
+struct CollectorArgs {
+    #[arg(short, long, default_value = ".config")]
+    config: String,
+
+    #[arg(long)]
+    target: Option<String>,
+
+    #[arg(long)]
+    insecure_tls: bool,
+
+    #[arg(long, default_value_t = DEFAULT_TARGET_CONCURRENCY)]
     concurrency: usize,
 
     #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
@@ -49,23 +55,8 @@ struct InventoryArgs {
 
 #[derive(Debug, Parser)]
 struct RuntimeArgs {
-    #[arg(short, long, default_value = ".config")]
-    config: String,
-
-    #[arg(long)]
-    target: Option<String>,
-
-    #[arg(long, default_value_t = 443)]
-    port: u16,
-
-    #[arg(long)]
-    insecure_tls: bool,
-
-    #[arg(long, default_value_t = 16)]
-    concurrency: usize,
-
-    #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
-    timeout_seconds: u64,
+    #[command(flatten)]
+    collector: CollectorArgs,
 
     #[arg(long, env = "FLEETINT_BACKEND_URL")]
     backend_url: Option<String>,
@@ -92,6 +83,20 @@ impl From<CliInventoryFormat> for InventoryFormat {
     }
 }
 
+impl CollectorArgs {
+    fn into_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
+        InventoryOptions {
+            config: self.config,
+            target: self.target,
+            insecure_tls: self.insecure_tls,
+            detail,
+            format,
+            concurrency: self.concurrency,
+            timeout_seconds: self.timeout_seconds,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -103,30 +108,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inventory(args) => {
-            run_inventory(InventoryOptions {
-                config: args.config,
-                target: args.target,
-                port: args.port,
-                insecure_tls: args.insecure_tls,
-                detail: args.detail,
-                format: args.format.into(),
-                concurrency: args.concurrency,
-                timeout_seconds: args.timeout_seconds,
-            })
-            .await?
+            let format = args.format.into();
+            run_inventory(args.collector.into_options(args.detail, format)).await?
         }
         Command::Run(args) => {
             run_runtime(RuntimeOptions {
-                inventory: InventoryOptions {
-                    config: args.config,
-                    target: args.target,
-                    port: args.port,
-                    insecure_tls: args.insecure_tls,
-                    detail: false,
-                    format: InventoryFormat::Json,
-                    concurrency: args.concurrency,
-                    timeout_seconds: args.timeout_seconds,
-                },
+                inventory: args.collector.into_options(false, InventoryFormat::Json),
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,

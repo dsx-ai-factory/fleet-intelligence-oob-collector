@@ -1,17 +1,24 @@
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
 
 use crate::models::NodeInventory;
 
 use super::InventorySink;
+
+pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
+pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
 }
 
 impl BackendSink<HttpBackendClient> {
-    pub fn new(endpoint: impl Into<String>, jwt: impl Into<String>) -> Self {
-        Self::with_client(HttpBackendClient::new(endpoint, jwt))
+    pub fn new(
+        endpoint: impl Into<String>,
+        jwt: impl Into<String>,
+    ) -> Result<Self, Box<dyn Error>> {
+        Ok(Self::with_client(HttpBackendClient::new(endpoint, jwt)?))
     }
 }
 
@@ -41,20 +48,53 @@ pub struct HttpBackendClient {
 }
 
 impl HttpBackendClient {
-    pub fn new(endpoint: impl Into<String>, jwt: impl Into<String>) -> Self {
-        Self {
+    pub fn new(
+        endpoint: impl Into<String>,
+        jwt: impl Into<String>,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::with_timeout(
+            endpoint,
+            jwt,
+            Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
+        )
+    }
+
+    pub fn with_timeout(
+        endpoint: impl Into<String>,
+        jwt: impl Into<String>,
+        request_timeout: Duration,
+    ) -> Result<Self, Box<dyn Error>> {
+        if request_timeout.is_zero() {
+            return Err("backend request timeout must be greater than zero".into());
+        }
+        Ok(Self {
             endpoint: endpoint.into(),
             jwt: jwt.into(),
-            client: reqwest::blocking::Client::new(),
-        }
+            client: backend_http_client(request_timeout)?,
+        })
     }
 
     pub fn enroll(endpoint: &str, agent_token: &str) -> Result<String, Box<dyn Error>> {
+        Self::enroll_with_timeout(
+            endpoint,
+            agent_token,
+            Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
+        )
+    }
+
+    pub fn enroll_with_timeout(
+        endpoint: &str,
+        agent_token: &str,
+        request_timeout: Duration,
+    ) -> Result<String, Box<dyn Error>> {
         if agent_token.trim().is_empty() {
             return Err("agent token cannot be empty".into());
         }
+        if request_timeout.is_zero() {
+            return Err("backend request timeout must be greater than zero".into());
+        }
 
-        let response = reqwest::blocking::Client::new()
+        let response = backend_http_client(request_timeout)?
             .post(endpoint)
             .bearer_auth(agent_token)
             .send()?
@@ -67,6 +107,17 @@ impl HttpBackendClient {
 
         Ok(response.jwt_assertion)
     }
+}
+
+fn backend_http_client(
+    request_timeout: Duration,
+) -> Result<reqwest::blocking::Client, reqwest::Error> {
+    reqwest::blocking::Client::builder()
+        .timeout(request_timeout)
+        .connect_timeout(
+            request_timeout.min(Duration::from_secs(DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS)),
+        )
+        .build()
 }
 
 impl BackendClient for HttpBackendClient {
@@ -227,6 +278,17 @@ mod tests {
             err.to_string(),
             "backend rejected 1 inventory item(s); nodeUUID=<missing> status=MISSING_UUID message=item missing top-level uuid"
         );
+    }
+
+    #[test]
+    fn backend_client_rejects_zero_timeout() {
+        let Err(err) =
+            HttpBackendClient::with_timeout("https://api.example.com", "jwt", Duration::ZERO)
+        else {
+            panic!("zero timeout should fail");
+        };
+
+        assert!(err.to_string().contains("timeout"));
     }
 
     #[derive(Clone)]

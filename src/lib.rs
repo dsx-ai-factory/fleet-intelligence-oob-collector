@@ -12,6 +12,7 @@ use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
+pub const DEFAULT_TARGET_CONCURRENCY: usize = 64;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,7 +25,6 @@ pub enum InventoryFormat {
 pub struct InventoryOptions {
     pub config: String,
     pub target: Option<String>,
-    pub port: u16,
     pub insecure_tls: bool,
     pub detail: bool,
     pub format: InventoryFormat,
@@ -137,6 +137,7 @@ async fn upload_inventory(
 ) -> Result<(), UploadError> {
     tokio::task::spawn_blocking(move || {
         BackendSink::new(endpoint, jwt)
+            .map_err(|err| UploadError::Other(err.to_string()))?
             .write(inventories.as_slice())
             .map_err(|err| {
                 if backend_error_is_auth_failure(err.as_ref()) {
@@ -184,7 +185,7 @@ async fn collect_inventory(
     }
 
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
-    let source = RedfishSource::new(options.port, options.insecure_tls, timeout)?;
+    let source = RedfishSource::new(options.insecure_tls, timeout)?;
     let mapper = RedfishMapper;
     let concurrency = options.concurrency.max(1);
 
