@@ -1,12 +1,18 @@
-# Fleet Intelligence OOB
+# Fleet Intelligence Out Of Band Collector
 
-Standalone Rust OOB collector for Fleet Intelligence.
+Fleet Intelligence Out Of Band Collector is a Rust collector for gathering
+Fleet Intelligence data from server BMC interfaces. It is intended to collect
+inventory, attestation, and telemetry from out-of-band management paths without
+depending on an in-band host agent.
 
-The current MVP collects BMC inventory through Redfish using `nv-redfish`
-directly. NICo's `bmc-explorer` remains useful as a reference implementation,
-but it is not linked into this collector. The collector keeps a Fleet
-Intelligence owned inventory model between the source and sink so Redfish data
-does not become the product schema.
+The current implementation collects BMC inventory through Redfish using
+`nv-redfish` and can either print inventory locally or send it to the Fleet
+Intelligence backend. Attestation and telemetry crates are present as workspace
+placeholders for the next collector domains.
+
+The collector keeps Fleet Intelligence owned models between the BMC source and
+the output/backend sinks so vendor protocol data does not become the product
+schema.
 
 ## Workspace Structure
 
@@ -51,7 +57,9 @@ For an optimized binary:
 cargo build --release
 ```
 
-## Inventory
+## Run Inventory Collection
+
+Print inventory locally:
 
 ```bash
 cargo run -- inventory --config /path/to/.config --insecure-tls
@@ -59,7 +67,31 @@ target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls
 target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls --detail
 ```
 
-The config format matches the Go POC:
+Run continuously and send inventory to the backend:
+
+```bash
+target/debug/bmc-collector run --config /path/to/.config --insecure-tls \
+  --backend-url https://api.example.com \
+  --agent-token "$FLEETINT_AGENT_TOKEN"
+```
+
+`inventory` writes local table or JSON output only. Backend submission happens
+only in `run`.
+
+`run` exchanges the bootstrap agent token with `POST /v1/agent/enroll`, then
+uses the returned JWT for `PUT /v1/agent/oob_nodes`. The backend URL must be the
+API base URL without an API path suffix. `--backend-url` and `--agent-token` can
+also be provided via `FLEETINT_BACKEND_URL` and `FLEETINT_AGENT_TOKEN`.
+
+The collector does not send customer identity headers. In deployed environments,
+the trusted edge/auth proxy injects the customer context before the request
+reaches the agent API.
+
+`run` is the long-running agent mode. It performs one backend sync immediately,
+then repeats every 24 hours by default. Override the cadence with
+`--interval-seconds`.
+
+The target config file uses INI-style sections:
 
 ```ini
 [node-name]
