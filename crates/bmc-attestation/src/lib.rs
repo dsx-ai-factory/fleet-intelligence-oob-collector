@@ -1,4 +1,7 @@
 //! Attestation support for the Fleet Intelligence OOB agent.
-//!
-//! This crate is intentionally empty until the attestation collection boundary
-//! is implemented.
+
+pub mod config;
+pub mod mapper;
+pub mod models;
+pub mod sink;
+pub mod source;

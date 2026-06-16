@@ -1,9 +1,11 @@
 use std::error::Error;
 use std::str::FromStr;
 
+use bmc_attestation::config::defaults as attestation_defaults;
 use clap::{Parser, Subcommand};
 use fleet_intelligence_oob::{
-    DEFAULT_REDFISH_TIMEOUT_SECONDS, InventoryFormat, InventoryOptions, run_inventory,
+    AttestationFormat, AttestationOptions, DEFAULT_REDFISH_TIMEOUT_SECONDS, InventoryFormat,
+    InventoryOptions, run_attestation, run_inventory,
 };
 
 #[derive(Debug, Parser)]
@@ -17,6 +19,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Inventory(InventoryArgs),
+    Attestation(AttestationArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -46,10 +49,32 @@ struct InventoryArgs {
     timeout_seconds: u64,
 }
 
+#[derive(Debug, Parser)]
+struct AttestationArgs {
+    #[arg(short, long, default_value_t = attestation_defaults::DEFAULT_CONFIG_PATH.to_string())]
+    config: String,
+
+    #[arg(long)]
+    target: Option<String>,
+
+    #[arg(long)]
+    detail: bool,
+
+    #[arg(long, default_value = "table")]
+    format: CliAttestationFormat,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum CliInventoryFormat {
     Table,
     Json,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CliAttestationFormat {
+    Table,
+    Json,
+    Backend,
 }
 
 impl From<CliInventoryFormat> for InventoryFormat {
@@ -57,6 +82,16 @@ impl From<CliInventoryFormat> for InventoryFormat {
         match format {
             CliInventoryFormat::Table => Self::Table,
             CliInventoryFormat::Json => Self::Json,
+        }
+    }
+}
+
+impl From<CliAttestationFormat> for AttestationFormat {
+    fn from(format: CliAttestationFormat) -> Self {
+        match format {
+            CliAttestationFormat::Table => Self::Table,
+            CliAttestationFormat::Json => Self::Json,
+            CliAttestationFormat::Backend => Self::Backend,
         }
     }
 }
@@ -70,6 +105,21 @@ impl FromStr for CliInventoryFormat {
             "json" => Ok(Self::Json),
             _ => Err(format!(
                 "unsupported inventory format {value:?}; use table or json"
+            )),
+        }
+    }
+}
+
+impl FromStr for CliAttestationFormat {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "table" => Ok(Self::Table),
+            "json" => Ok(Self::Json),
+            "backend" => Ok(Self::Backend),
+            _ => Err(format!(
+                "unsupported attestation format {value:?}; use table, json, or backend"
             )),
         }
     }
@@ -95,6 +145,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 format: args.format.into(),
                 concurrency: args.concurrency,
                 timeout_seconds: args.timeout_seconds,
+            })
+            .await?
+        }
+        Command::Attestation(args) => {
+            run_attestation(AttestationOptions {
+                config: args.config,
+                target: args.target,
+                detail: args.detail,
+                format: args.format.into(),
             })
             .await?
         }
