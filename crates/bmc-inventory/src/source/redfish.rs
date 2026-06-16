@@ -28,16 +28,11 @@ enum PcieTraversalPolicy {
 }
 
 pub struct RedfishSource {
-    port: u16,
     client: nv_redfish::bmc_http::reqwest::Client,
 }
 
 impl RedfishSource {
-    pub fn new(
-        port: u16,
-        insecure_tls: bool,
-        request_timeout: Duration,
-    ) -> Result<Self, Box<dyn Error>> {
+    pub fn new(insecure_tls: bool, request_timeout: Duration) -> Result<Self, Box<dyn Error>> {
         if request_timeout.is_zero() {
             return Err("request timeout must be greater than zero".into());
         }
@@ -49,7 +44,7 @@ impl RedfishSource {
                 .accept_invalid_certs(insecure_tls)
                 .max_redirects(0),
         )?;
-        Ok(Self { port, client })
+        Ok(Self { client })
     }
 
     async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
@@ -64,7 +59,7 @@ impl RedfishSource {
         &self,
         target: &Target,
     ) -> Result<ServiceRoot<RedfishBmc>, Box<dyn Error>> {
-        let url = bmc_url(&target.address, self.port)?;
+        let url = bmc_url(&target.address)?;
         let bmc = Arc::new(HttpBmc::new(
             self.client.clone(),
             url,
@@ -517,7 +512,7 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
 fn status_state(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
     status
         .and_then(|status| status.state.flatten())
-        .and_then(redfish_enum_string)
+        .and_then(redfish_state_string)
 }
 
 fn status_health(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
@@ -541,10 +536,25 @@ fn redfish_health_string(health: nv_redfish::schema::resource::Health) -> Option
     }
 }
 
-fn redfish_enum_string<T: serde::Serialize>(value: T) -> Option<String> {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(ToString::to_string))
+fn redfish_state_string(state: nv_redfish::schema::resource::State) -> Option<String> {
+    match state {
+        nv_redfish::schema::resource::State::Enabled => Some("Enabled".to_string()),
+        nv_redfish::schema::resource::State::Disabled => Some("Disabled".to_string()),
+        nv_redfish::schema::resource::State::StandbyOffline => Some("StandbyOffline".to_string()),
+        nv_redfish::schema::resource::State::StandbySpare => Some("StandbySpare".to_string()),
+        nv_redfish::schema::resource::State::InTest => Some("InTest".to_string()),
+        nv_redfish::schema::resource::State::Starting => Some("Starting".to_string()),
+        nv_redfish::schema::resource::State::Absent => Some("Absent".to_string()),
+        nv_redfish::schema::resource::State::UnavailableOffline => {
+            Some("UnavailableOffline".to_string())
+        }
+        nv_redfish::schema::resource::State::Deferring => Some("Deferring".to_string()),
+        nv_redfish::schema::resource::State::Quiesced => Some("Quiesced".to_string()),
+        nv_redfish::schema::resource::State::Updating => Some("Updating".to_string()),
+        nv_redfish::schema::resource::State::Qualified => Some("Qualified".to_string()),
+        nv_redfish::schema::resource::State::Degraded => Some("Degraded".to_string()),
+        nv_redfish::schema::resource::State::UnsupportedValue => None,
+    }
 }
 
 fn push_inventory_error(
@@ -566,15 +576,17 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn bmc_url(address: &str, default_port: u16) -> Result<Url, Box<dyn Error>> {
-    let mut url: Url = if address.starts_with("http://") || address.starts_with("https://") {
+fn bmc_url(address: &str) -> Result<Url, Box<dyn Error>> {
+    let url: Url = if address.starts_with("http://") || address.starts_with("https://") {
         address.parse()?
     } else {
         format!("https://{address}").parse()?
     };
-    if url.port().is_none() {
-        url.set_port(Some(default_port))
-            .map_err(|()| format!("cannot set port {default_port} on {url}"))?;
+    if url.scheme() == "http" {
+        tracing::warn!(
+            address = %url,
+            "BMC target is configured with http://; Redfish credentials and inventory will not use TLS"
+        );
     }
     Ok(url)
 }
@@ -588,14 +600,12 @@ mod tests {
 
     #[test]
     fn redfish_source_builds_client() {
-        let source = RedfishSource::new(8443, true, Duration::from_secs(30)).expect("source");
-
-        assert_eq!(source.port, 8443);
+        RedfishSource::new(true, Duration::from_secs(30)).expect("source");
     }
 
     #[test]
     fn redfish_source_rejects_zero_timeout() {
-        let Err(error) = RedfishSource::new(8443, true, Duration::ZERO) else {
+        let Err(error) = RedfishSource::new(true, Duration::ZERO) else {
             panic!("zero timeout should fail");
         };
 
@@ -603,8 +613,8 @@ mod tests {
     }
 
     #[test]
-    fn bmc_url_adds_https_and_default_port_to_bare_address() {
-        let url = bmc_url("10.0.0.1", 443).expect("url");
+    fn bmc_url_adds_https_to_bare_address() {
+        let url = bmc_url("10.0.0.1").expect("url");
 
         assert_eq!(url.as_str(), "https://10.0.0.1/");
         assert_eq!(url.port_or_known_default(), Some(443));
@@ -612,21 +622,22 @@ mod tests {
 
     #[test]
     fn bmc_url_keeps_explicit_port() {
-        let url = bmc_url("https://bmc.example.com:8443", 443).expect("url");
+        let url = bmc_url("https://bmc.example.com:8443").expect("url");
 
         assert_eq!(url.as_str(), "https://bmc.example.com:8443/");
     }
 
     #[test]
-    fn bmc_url_applies_default_port_to_scheme_only_url() {
-        let url = bmc_url("http://bmc.example.com", 8443).expect("url");
+    fn bmc_url_uses_scheme_default_port_for_scheme_only_url() {
+        let url = bmc_url("http://bmc.example.com").expect("url");
 
-        assert_eq!(url.as_str(), "http://bmc.example.com:8443/");
+        assert_eq!(url.as_str(), "http://bmc.example.com/");
+        assert_eq!(url.port_or_known_default(), Some(80));
     }
 
     #[test]
     fn bmc_url_rejects_invalid_explicit_url() {
-        let error = bmc_url("https://", 443).expect_err("invalid url");
+        let error = bmc_url("https://").expect_err("invalid url");
 
         assert!(!error.to_string().is_empty());
     }

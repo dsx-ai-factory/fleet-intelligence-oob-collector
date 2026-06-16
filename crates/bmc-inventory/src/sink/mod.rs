@@ -6,7 +6,7 @@ use std::error::Error;
 
 use super::models::NodeInventory;
 
-pub use backend::{BackendClient, BackendSink, HttpBackendClient};
+pub use backend::{BackendClient, BackendHttpError, BackendSink, HttpBackendClient};
 pub use json::JsonSink;
 pub use table::TableSink;
 

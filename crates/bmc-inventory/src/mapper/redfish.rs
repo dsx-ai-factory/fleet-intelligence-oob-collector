@@ -36,7 +36,7 @@ impl InventoryMapper for RedfishMapper {
                 NodeInventory {
                     schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                     collected_at,
-                    uuid: node_uuid.clone(),
+                    uuid: Some(node_uuid.clone()),
                     source,
                     primary_system_id: primary_system_id.clone(),
                     managers: report.managers.into_iter().map(map_manager).collect(),
@@ -45,7 +45,7 @@ impl InventoryMapper for RedfishMapper {
                         .into_iter()
                         .map(|system| {
                             let uuid = if primary_system_id.as_ref() == Some(&system.id) {
-                                node_uuid.clone()
+                                Some(node_uuid.clone())
                             } else {
                                 system_uuid(&system)
                             };
@@ -107,10 +107,10 @@ fn has_bios(system: &SystemData) -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
-fn node_uuid(system: Option<&SystemData>, source: &InventorySourceInfo) -> Option<InventoryUuid> {
+fn node_uuid(system: Option<&SystemData>, source: &InventorySourceInfo) -> InventoryUuid {
     system
         .and_then(system_uuid)
-        .or_else(|| Some(derived_node_uuid(source)))
+        .unwrap_or_else(|| derived_node_uuid(source))
 }
 
 fn system_uuid(system: &SystemData) -> Option<InventoryUuid> {

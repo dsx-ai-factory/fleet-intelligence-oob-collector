@@ -13,7 +13,7 @@ pub struct Target {
 pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut targets = Vec::new();
+    let mut targets: Vec<Target> = Vec::new();
     let mut current: Option<Target> = None;
 
     for (line_no, line) in reader.lines().enumerate() {
@@ -27,13 +27,18 @@ pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
             .strip_prefix('[')
             .and_then(|line| line.strip_suffix(']'))
         {
-            if let Some(target) = current.take() {
-                validate_target(&target)?;
-                targets.push(target);
-            }
             let name = name.trim();
             if name.is_empty() {
                 return Err(format!("empty section name at line {line_no}").into());
+            }
+            if targets.iter().any(|target| target.name == name)
+                || current.as_ref().is_some_and(|target| target.name == name)
+            {
+                return Err(format!("duplicate target name {name:?} at line {line_no}").into());
+            }
+            if let Some(target) = current.take() {
+                validate_target(&target)?;
+                targets.push(target);
             }
             current = Some(Target {
                 name: name.to_string(),
@@ -161,6 +166,50 @@ mod tests {
             .to_string();
 
         assert!(error.contains("password is required"));
+    }
+
+    #[test]
+    fn rejects_duplicate_target_names() {
+        let path = write_config(
+            "duplicate-name",
+            r#"
+            [node-a]
+            address = 10.0.0.1
+            username = admin
+            password = secret
+
+            [node-a]
+            address = 10.0.0.2
+            username = admin
+            password = secret
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("duplicate target name should fail")
+            .to_string();
+
+        assert!(error.contains("duplicate target name"));
+    }
+
+    #[test]
+    fn rejects_adjacent_duplicate_target_names_before_validating_empty_target() {
+        let path = write_config(
+            "adjacent-duplicate-name",
+            r#"
+            [node-a]
+            [node-a]
+            address = 10.0.0.2
+            username = admin
+            password = secret
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("adjacent duplicate target name should fail")
+            .to_string();
+
+        assert!(error.contains("duplicate target name"));
     }
 
     #[test]
