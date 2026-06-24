@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::mapper::{AttestationMapper, RedfishMapper as AttestationRedfishMapper};
-use bmc_attestation::models::BatchAttestation;
+use bmc_attestation::models::{BatchAttestation, NodeAttestation};
 use bmc_attestation::sink::{
-    AttestationSink, BackendClient as AttestationBackendClient,
+    BackendClient as AttestationBackendClient,
     BackendSink as AttestationBackendSink, HttpBackendClient as AttestationHttpBackendClient,
-    JsonSink as AttestationJsonSink, TableSink as AttestationTableSink,
 };
 use bmc_attestation::source::{
-    MeasurementRequest, NonceData, RedfishAttestationSource, SourceRecord, now_rfc3339,
+    MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339,
 };
 use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
@@ -22,10 +21,8 @@ use bmc_inventory::sink::{
 };
 use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
-use tokio::time::{sleep, timeout};
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
-const LOCAL_TEST_NONCE: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 pub const DEFAULT_TARGET_CONCURRENCY: usize = 64;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
@@ -33,13 +30,6 @@ pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 pub enum InventoryFormat {
     Table,
     Json,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AttestationFormat {
-    Table,
-    Json,
-    Backend,
 }
 
 #[derive(Clone, Debug)]
@@ -53,13 +43,6 @@ pub struct InventoryOptions {
     pub timeout_seconds: u64,
 }
 
-pub struct AttestationOptions {
-    pub config: String,
-    pub target: Option<String>,
-    pub detail: bool,
-    pub format: AttestationFormat,
-}
-
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
     pub inventory: InventoryOptions,
@@ -69,30 +52,77 @@ pub struct RuntimeOptions {
 }
 
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
-    let endpoints = agent_endpoints(&required_backend_option(
-        options.backend_url,
-        "backend URL",
-    )?)?;
+    let backend_url = required_backend_option(options.backend_url, "backend URL")?;
+    let endpoints = agent_endpoints(&backend_url)?;
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
-    let mut jwt = enroll_agent(endpoints.enroll_endpoint.clone(), agent_token.clone()).await?;
-
+    // enrolled_at is captured at enrollment and refreshed whenever the agent
+    // re-enrolls (e.g. after a JWT rejection).
+    let Enrollment {
+        mut jwt,
+        mut enrolled_at,
+    } = enroll_agent(endpoints.enroll_endpoint.clone(), agent_token.clone()).await?;
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
+
+    let attestation_settings = {
+        let mut s = attestation_config::defaults::attestation_config();
+        s.insecure_tls = options.inventory.insecure_tls;
+        s.concurrency = options.inventory.concurrency;
+        s.redfish_timeout = std::time::Duration::from_secs(options.inventory.timeout_seconds);
+        s
+    };
+    let nonce_path = attestation_config::defaults::DEFAULT_BACKEND_NONCE_PATH.to_string();
+    let attestation_path =
+        attestation_config::defaults::DEFAULT_BACKEND_ATTESTATION_PATH.to_string();
+
     loop {
         let started_at = std::time::Instant::now();
+
+        // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             endpoints.enroll_endpoint.clone(),
             agent_token.clone(),
             &mut jwt,
+            &mut enrolled_at,
         )
         .await
         {
-            Ok(()) => tracing::info!(
-                elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                next_sync_seconds = interval.as_secs(),
-                "inventory backend sync completed"
-            ),
+            Ok(inventories) => {
+                tracing::info!(
+                    elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                    "inventory backend sync completed"
+                );
+
+                // Phase 2: Collect and upload attestation for nodes with discovered UUIDs only when inventory succeeds
+                let attestation_targets =
+                    build_attestation_targets(&options.inventory, &inventories);
+                if attestation_targets.is_empty() {
+                    tracing::warn!("no nodes with discovered UUID; skipping attestation");
+                } else {
+                    match collect_and_upload_attestation(
+                        &attestation_targets,
+                        &attestation_settings,
+                        &backend_url,
+                        &nonce_path,
+                        &attestation_path,
+                        &jwt,
+                    )
+                    .await
+                    {
+                        Ok(()) => tracing::info!(
+                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                            node_count = attestation_targets.len(),
+                            "attestation backend sync completed"
+                        ),
+                        Err(err) => tracing::error!(
+                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                            error = %err,
+                            "attestation backend sync failed"
+                        ),
+                    }
+                }
+            }
             Err(err) => tracing::error!(
                 elapsed_seconds = started_at.elapsed().as_secs_f64(),
                 next_attempt_seconds = interval.as_secs(),
@@ -101,6 +131,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             ),
         }
 
+        tracing::info!(next_sync_seconds = interval.as_secs(), "sleeping until next cycle");
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
             signal = tokio::signal::ctrl_c() => {
@@ -112,6 +143,140 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             }
         }
     }
+}
+
+struct AttestationTarget {
+    name: String,
+    node_uuid: String,
+    address: String,
+    username: String,
+    password: String,
+}
+
+fn build_attestation_targets(
+    options: &InventoryOptions,
+    inventories: &[NodeInventory],
+) -> Vec<AttestationTarget> {
+    let targets = match config::load_targets(&options.config) {
+        Ok(targets) => targets,
+        Err(_) => return Vec::new(),
+    };
+
+    targets
+        .into_iter()
+        .filter_map(|target| {
+            let uuid = inventories.iter().find_map(|inv| {
+                if inv.source.address == target.address {
+                    inv.uuid.as_ref().map(|u| u.to_string())
+                } else {
+                    None
+                }
+            })?;
+            Some(AttestationTarget {
+                name: target.name,
+                node_uuid: uuid,
+                address: target.address,
+                username: target.username,
+                password: target.password,
+            })
+        })
+        .collect()
+}
+
+async fn collect_and_upload_attestation(
+    targets: &[AttestationTarget],
+    attestation_settings: &attestation_config::AttestationConfig,
+    backend_url: &str,
+    nonce_path: &str,
+    attestation_path: &str,
+    jwt: &str,
+) -> Result<(), Box<dyn Error>> {
+    let source = RedfishAttestationSource::new(
+        attestation_settings.port,
+        attestation_settings.insecure_tls,
+        attestation_settings.redfish_timeout,
+        attestation_settings.task_timeout,
+        attestation_settings.task_poll_interval,
+    )?;
+    let mapper = AttestationRedfishMapper;
+    let measurement = MeasurementRequest {
+        measurement_indices: attestation_settings.measurement_indices.clone(),
+    };
+    let concurrency = attestation_settings.concurrency.max(1);
+    let timeout = attestation_settings.redfish_timeout;
+
+    let collected: Vec<_> = stream::iter(targets)
+        .map(|target| {
+            let source = source.clone();
+            let measurement = measurement.clone();
+            let backend_url = backend_url.to_string();
+            let nonce_path = nonce_path.to_string();
+            let attestation_path = attestation_path.to_string();
+            let jwt = jwt.to_string();
+            let node_uuid = target.node_uuid.clone();
+            let config_target = attestation_config::Target {
+                name: target.name.clone(),
+                node_uuid: target.node_uuid.clone(),
+                address: target.address.clone(),
+                username: target.username.clone(),
+                password: target.password.clone(),
+            };
+            async move {
+                let mut client = match AttestationHttpBackendClient::new(
+                    &backend_url,
+                    &nonce_path,
+                    &attestation_path,
+                    jwt,
+                    timeout,
+                ) {
+                    Ok(client) => client,
+                    Err(err) => {
+                        return NodeAttestation::failed(
+                            node_uuid,
+                            config_target.name,
+                            config_target.address,
+                            format!("backend client: {err}"),
+                        );
+                    }
+                };
+                let nonce = match client.get_nonce(&node_uuid).await {
+                    Ok(response) => response,
+                    Err(err) => {
+                        return NodeAttestation::failed(
+                            node_uuid,
+                            config_target.name,
+                            config_target.address,
+                            format!("nonce request: {err}"),
+                        );
+                    }
+                };
+                let record = source
+                    .collect(
+                        config_target,
+                        NonceData {
+                            nonce: nonce.nonce,
+                            nonce_refresh_timestamp: nonce.nonce_refresh_timestamp,
+                        },
+                        measurement,
+                    )
+                    .await;
+                mapper.map(record)
+            }
+        })
+        .buffered(concurrency)
+        .collect()
+        .await;
+
+    let batch = BatchAttestation::new(now_rfc3339(), collected);
+    let sink = AttestationBackendSink::new(
+        backend_url,
+        nonce_path,
+        attestation_path,
+        jwt,
+        timeout,
+    )?;
+    sink.write(&batch).await?;
+    Ok(())
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
@@ -130,34 +295,61 @@ async fn collect_and_upload_inventory(
     enroll_endpoint: String,
     agent_token: String,
     jwt: &mut String,
-) -> Result<(), Box<dyn Error>> {
-    let inventories = Arc::new(collect_inventory(options).await?);
+    enrolled_at: &mut String,
+) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
+    let mut inventory_vec = collect_inventory(options).await?;
+    stamp_enrolled_at(&mut inventory_vec, enrolled_at);
+    let inventories = Arc::new(inventory_vec);
     match upload_inventory(endpoint.clone(), jwt.clone(), Arc::clone(&inventories)).await {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(inventories),
         Err(UploadError::AuthFailure(message)) => {
             tracing::info!(
                 error = %message,
                 "backend JWT rejected; enrolling again before retry"
             );
-            *jwt = enroll_agent(enroll_endpoint, agent_token).await?;
-            upload_inventory(endpoint, jwt.clone(), inventories)
+            // Re-enroll refreshes both the JWT and enrolled_at; re-stamp the nodes
+            // so the retry carries the updated enrollment timestamp.
+            let enrollment: Enrollment = enroll_agent(enroll_endpoint, agent_token).await?;
+            *jwt = enrollment.jwt;
+            *enrolled_at = enrollment.enrolled_at;
+            let mut inventory_vec = Arc::try_unwrap(inventories)
+                .expect("upload task released its inventory reference");
+            stamp_enrolled_at(&mut inventory_vec, enrolled_at);
+            let inventories = Arc::new(inventory_vec);
+            upload_inventory(endpoint, jwt.clone(), Arc::clone(&inventories))
                 .await
-                .map_err(|err| -> Box<dyn Error> { err.to_string().into() })
+                .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
+            Ok(inventories)
         }
         Err(err) => Err(err.to_string().into()),
     }
 }
 
+fn stamp_enrolled_at(inventories: &mut [NodeInventory], enrolled_at: &str) {
+    for node in inventories {
+        node.enrolled_at = Some(enrolled_at.to_string());
+    }
+}
+
+struct Enrollment {
+    jwt: String,
+    enrolled_at: String,
+}
+
 async fn enroll_agent(
     enroll_endpoint: String,
     agent_token: String,
-) -> Result<String, Box<dyn Error>> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<Enrollment, Box<dyn Error>> {
+    let jwt = tokio::task::spawn_blocking(move || {
         InventoryHttpBackendClient::enroll(&enroll_endpoint, &agent_token)
             .map_err(|err| err.to_string())
     })
     .await?
-    .map_err(|err| -> Box<dyn Error> { err.into() })
+    .map_err(|err| -> Box<dyn Error> { err.into() })?;
+    Ok(Enrollment {
+        jwt,
+        enrolled_at: now_rfc3339(),
+    })
 }
 
 async fn upload_inventory(
@@ -302,153 +494,5 @@ mod tests {
         assert!(backend_error_is_auth_failure(unauthorized.as_ref()));
         assert!(backend_error_is_auth_failure(forbidden.as_ref()));
         assert!(!backend_error_is_auth_failure(server_error.as_ref()));
-    }
-}
-
-pub async fn run_attestation(options: AttestationOptions) -> Result<(), Box<dyn Error>> {
-    let mut config = attestation_config::load_config(&options.config)?;
-    if let Some(target_name) = &options.target {
-        config.targets.retain(|target| target.name == *target_name);
-        if config.targets.is_empty() {
-            return Err(format!("target {target_name:?} not found").into());
-        }
-    }
-
-    loop {
-        let attempt = async {
-            let source = RedfishAttestationSource::new(
-                config.attestation.port,
-                config.attestation.insecure_tls,
-                config.attestation.redfish_timeout,
-                config.attestation.task_timeout,
-                config.attestation.task_poll_interval,
-            )?;
-            let mapper = AttestationRedfishMapper;
-            let measurement = MeasurementRequest {
-                measurement_indices: config.attestation.measurement_indices.clone(),
-            };
-            let concurrency = config.attestation.concurrency.max(1);
-            let use_local_nonce = options.format != AttestationFormat::Backend;
-
-            let collected: Vec<_> = stream::iter(config.targets.clone())
-                .map(|target| {
-                    let source = source.clone();
-                    let backend = config.backend.clone();
-                    let measurement = measurement.clone();
-                    let timeout = config.attestation.redfish_timeout;
-                    async move {
-                        if use_local_nonce {
-                            let record = source
-                                .collect(
-                                    target,
-                                    NonceData {
-                                        nonce: LOCAL_TEST_NONCE.to_string(),
-                                        nonce_refresh_timestamp: None,
-                                    },
-                                    measurement,
-                                )
-                                .await;
-                            return (mapper.map(record), None);
-                        }
-
-                        let original_jwt = backend.jwt.clone();
-                        let mut client = match AttestationHttpBackendClient::new(
-                            &backend.url,
-                            &backend.nonce_path,
-                            &backend.attestation_path,
-                            backend.jwt,
-                            timeout,
-                        ) {
-                            Ok(client) => client,
-                            Err(err) => {
-                                return (
-                                    mapper.map(SourceRecord::failed(
-                                        target,
-                                        None,
-                                        format!("backend client: {err}"),
-                                    )),
-                                    None,
-                                );
-                            }
-                        };
-                        let nonce = match client.get_nonce(&target.node_uuid).await {
-                            Ok(response) => response,
-                            Err(err) => {
-                                return (
-                                    mapper.map(SourceRecord::failed(
-                                        target,
-                                        None,
-                                        format!("nonce request: {err}"),
-                                    )),
-                                    None,
-                                );
-                            }
-                        };
-                        let refreshed_jwt = if client.jwt() != original_jwt {
-                            Some(client.jwt().to_string())
-                        } else {
-                            None
-                        };
-                        let record = source
-                            .collect(
-                                target,
-                                NonceData {
-                                    nonce: nonce.nonce,
-                                    nonce_refresh_timestamp: nonce.nonce_refresh_timestamp,
-                                },
-                                measurement,
-                            )
-                            .await;
-                        (mapper.map(record), refreshed_jwt)
-                    }
-                })
-                .buffered(concurrency)
-                .collect()
-                .await;
-
-            let mut refreshed_jwt = None;
-            let attestations = collected
-                .into_iter()
-                .map(|(attestation, jwt)| {
-                    if refreshed_jwt.is_none() {
-                        refreshed_jwt = jwt;
-                    }
-                    attestation
-                })
-                .collect();
-            let batch = BatchAttestation::new(now_rfc3339(), attestations);
-
-            match options.format {
-                AttestationFormat::Table => {
-                    AttestationTableSink::new(options.detail).write(&batch)?
-                }
-                AttestationFormat::Json => AttestationJsonSink.write(&batch)?,
-                AttestationFormat::Backend => {
-                    let sink = AttestationBackendSink::new(
-                        &config.backend.url,
-                        &config.backend.nonce_path,
-                        &config.backend.attestation_path,
-                        refreshed_jwt.as_deref().unwrap_or(&config.backend.jwt),
-                        config.attestation.redfish_timeout,
-                    )?;
-                    sink.write(&batch).await?;
-                }
-            }
-
-            Ok(())
-        };
-
-        let result = match config.attestation.batch_timeout {
-            Some(batch_timeout) => timeout(batch_timeout, attempt).await.map_err(|err| {
-                format!("attestation batch timed out after {batch_timeout:?}: {err}")
-            })?,
-            None => attempt.await,
-        };
-
-        match (&result, config.attestation.interval) {
-            (Err(_), Some(_)) => sleep(config.attestation.retry_interval).await,
-            (Ok(_), Some(interval)) => sleep(interval).await,
-            (_, None) => return result,
-        }
     }
 }

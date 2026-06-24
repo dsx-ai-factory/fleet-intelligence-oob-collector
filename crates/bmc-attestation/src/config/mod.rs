@@ -62,6 +62,18 @@ enum SectionKind {
 }
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
+    load_config_with_backend_requirements(path, true, true)
+}
+
+pub fn load_config_with_backend_overrides(path: &str) -> Result<Config, Box<dyn Error>> {
+    load_config_with_backend_requirements(path, false, false)
+}
+
+fn load_config_with_backend_requirements(
+    path: &str,
+    require_backend_url: bool,
+    require_backend_jwt: bool,
+) -> Result<Config, Box<dyn Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut backend = BackendConfig {
@@ -137,7 +149,7 @@ pub fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
     if let Some(target) = current_target.take() {
         targets.push(validate_target(target)?);
     }
-    validate_backend(&backend)?;
+    validate_backend(&backend, require_backend_url, require_backend_jwt)?;
     if targets.is_empty() {
         return Err(format!("no attestation targets found in {path}").into());
     }
@@ -233,11 +245,15 @@ fn parse_target_key(
     Ok(())
 }
 
-fn validate_backend(backend: &BackendConfig) -> Result<(), Box<dyn Error>> {
-    if backend.url.is_empty() {
+fn validate_backend(
+    backend: &BackendConfig,
+    require_url: bool,
+    require_jwt: bool,
+) -> Result<(), Box<dyn Error>> {
+    if require_url && backend.url.is_empty() {
         return Err("backend url is required".into());
     }
-    if backend.jwt.is_empty() {
+    if require_jwt && backend.jwt.is_empty() {
         return Err("backend jwt is required".into());
     }
     if backend.nonce_path.is_empty() {

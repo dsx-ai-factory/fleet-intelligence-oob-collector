@@ -25,7 +25,7 @@ crates/bmc-inventory/src/models/    FI inventory models
 crates/bmc-inventory/src/source/    source trait and nv-redfish source
 crates/bmc-inventory/src/mapper/    Redfish report to FI inventory mapper
 crates/bmc-inventory/src/sink/      table, JSON, and backend sinks
-crates/bmc-attestation/             attestation crate placeholder
+crates/bmc-attestation/             attestation crate
 crates/bmc-telemetry/               telemetry crate placeholder
 ```
 
@@ -57,45 +57,58 @@ For an optimized binary:
 cargo build --release
 ```
 
-## Run Inventory Collection
+## Configuration
 
-Print inventory locally:
+The config file lists BMC targets in INI-style sections:
 
-```bash
-cargo run -- inventory --config /path/to/.config --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/.config --insecure-tls --detail
+```ini
+[node-name]
+address = 10.0.0.10
+username = root
+password = secret
 ```
 
-Run continuously and send inventory to the backend:
+Each `[section]` is a BMC target with `address`, `username`, and `password`.
+
+Backend API paths are derived from `--backend-url`. Connection settings
+(`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
+inventory and attestation collection.
+
+## Run Inventory Collection
+
+Print inventory locally (for debugging/testing):
 
 ```bash
-target/debug/bmc-collector run --config /path/to/.config --insecure-tls \
-  --backend-url https://api.example.com \
+cargo run -- inventory --config /path/to/oob.config --insecure-tls
+target/debug/bmc-collector inventory --config /path/to/oob.config --insecure-tls
+target/debug/bmc-collector inventory --config /path/to/oob.config --insecure-tls --detail
+```
+
+## Run Agent (Inventory + Attestation)
+
+Run continuously and send both inventory and attestation to the backend:
+
+```bash
+target/debug/bmc-collector run --config /path/to/oob.config --insecure-tls \
+  --backend-url http://127.0.0.1:18002 \
   --agent-token "$FLEETINT_AGENT_TOKEN"
 ```
 
-`inventory` writes local table or JSON output only. Backend submission happens
-only in `run`.
+`--backend-url` and `--agent-token` can also be provided via `FLEETINT_BACKEND_URL`
+and `FLEETINT_AGENT_TOKEN` environment variables.
 
-`run` exchanges the bootstrap agent token with `POST /v1/agent/enroll`, then
-uses the returned JWT for `PUT /v1/agent/oob_nodes`. The backend URL must be the
-API base URL without an API path suffix. `--backend-url` and `--agent-token` can
-also be provided via `FLEETINT_BACKEND_URL` and `FLEETINT_AGENT_TOKEN`.
+Each `run` cycle:
+
+1. Collects inventory from all BMC targets concurrently
+2. Uploads the inventory batch to `PUT /v1/agent/oob_nodes`
+3. For targets where inventory discovered a system UUID, collects attestation
+4. Uploads the attestation batch to the backend attestation endpoint
+5. Sleeps for the configured interval (default 24 hours, override with
+   `--interval-seconds`)
+
+The agent enrolls with `POST /v1/agent/enroll` using the bootstrap agent token
+and uses the returned JWT for all subsequent backend requests.
 
 The collector does not send customer identity headers. In deployed environments,
 the trusted edge/auth proxy injects the customer context before the request
 reaches the agent API.
-
-`run` is the long-running agent mode. It performs one backend sync immediately,
-then repeats every 24 hours by default. Override the cadence with
-`--interval-seconds`.
-
-The target config file uses INI-style sections:
-
-```ini
-[node-name]
-address=10.0.0.10
-username=root
-password=secret
-```
