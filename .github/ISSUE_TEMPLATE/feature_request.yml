@@ -1,0 +1,60 @@
+name: Feature Request
+description: Request new or improved collector functionality
+title: "[FEA]: "
+labels: ["enhancement"]
+
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - BMC inventory collection
+        - Redfish mapping
+        - Attestation
+        - Telemetry
+        - Backend submission
+        - CLI/configuration
+        - Documentation
+        - Tests/tooling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user, operator, or integration problem should this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior, data model, command, or workflow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any current workaround or alternative design.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include relevant platform, BMC, Redfish, or backend details. Redact private data.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for similar requests.
+          required: true
+        - label: I removed credentials, tokens, customer data, and private infrastructure details.
+          required: true
