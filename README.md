@@ -99,3 +99,17 @@ address=10.0.0.10
 username=root
 password=secret
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, validation
+commands, pull request expectations, and contribution sign-off guidance.
+
+## Security
+
+Do not report security vulnerabilities through public GitHub issues. See
+[SECURITY.md](SECURITY.md) for NVIDIA private vulnerability reporting channels.
+
+## License
+
+This project is licensed under Apache-2.0. See [LICENSE](LICENSE).

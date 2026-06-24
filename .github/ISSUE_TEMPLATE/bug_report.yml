@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report a reproducible problem with the collector
+title: "[BUG]: "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include BMC passwords, tokens, customer data, or private infrastructure details.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: What version, branch, or commit are you running?
+      placeholder: "example: 0.1.0 or 4a5357d"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Command or mode
+      multiple: true
+      options:
+        - inventory
+        - run
+        - library/crate API
+        - build/test
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: Provide the smallest safe command, config shape, or Redfish scenario that reproduces the issue. Redact secrets.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Rust version, collector build mode, BMC vendor/model/firmware if relevant, and whether TLS verification was enabled.
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste relevant output with credentials, tokens, addresses, and customer identifiers redacted.
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
+        - label: I removed credentials, tokens, customer data, and private infrastructure details.
+          required: true
+        - label: This is not a security vulnerability report.
+          required: true
