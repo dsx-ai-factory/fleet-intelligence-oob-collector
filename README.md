@@ -112,3 +112,30 @@ and uses the returned JWT for all subsequent backend requests.
 The collector does not send customer identity headers. In deployed environments,
 the trusted edge/auth proxy injects the customer context before the request
 reaches the agent API.
+
+`run` is the long-running agent mode. It performs one backend sync immediately,
+then repeats every 24 hours by default. Override the cadence with
+`--interval-seconds`.
+
+The target config file uses INI-style sections:
+
+```ini
+[node-name]
+address=10.0.0.10
+username=root
+password=secret
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, validation
+commands, pull request expectations, and contribution sign-off guidance.
+
+## Security
+
+Do not report security vulnerabilities through public GitHub issues. See
+[SECURITY.md](SECURITY.md) for NVIDIA private vulnerability reporting channels.
+
+## License
+
+This project is licensed under Apache-2.0. See [LICENSE](LICENSE).
