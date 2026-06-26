@@ -12,7 +12,7 @@ use futures::stream::{self, StreamExt};
 use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
 use crate::models::{BatchAttestation, NodeAttestation};
-use crate::sink::{BackendClient, HttpBackendClient};
+use crate::sink::{BackendClient, BackendHttpError, HttpBackendClient};
 use crate::source::{MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339};
 
 /// Result of running the attestation pipeline over a batch of targets.
@@ -24,11 +24,21 @@ pub struct CollectionOutcome {
     pub refreshed_jwt: Option<String>,
 }
 
+/// Whether a backend error is a JWT rejection (HTTP 401/403), signalling that the
+/// agent must re-enroll rather than record per-target failures with a dead token.
+fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
+    err.downcast_ref::<BackendHttpError>()
+        .is_some_and(|err| matches!(err.status(), 401 | 403))
+}
+
 /// Collect attestation evidence for every target concurrently.
 ///
 /// Per target: build a backend client from `jwt`, request a nonce, collect signed
-/// measurements over Redfish, and map them. A target-level failure (client/nonce
-/// error) becomes a failed `NodeAttestation` rather than aborting the batch.
+/// measurements over Redfish, and map them. A non-auth target-level failure
+/// (client/nonce error) becomes a failed `NodeAttestation` rather than aborting the
+/// batch. A backend auth failure (HTTP 401/403) is propagated as a batch-level
+/// error instead, so the caller can re-enroll and retry the whole batch with a
+/// fresh token rather than uploading failures collected under a rejected JWT.
 pub async fn collect(
     targets: &[Target],
     settings: &AttestationConfig,
@@ -54,7 +64,9 @@ pub async fn collect(
     // backend returns is captured below for the caller to apply.
     let base_jwt = jwt.to_string();
 
-    let collected: Vec<(NodeAttestation, Option<String>)> = stream::iter(targets)
+    type TargetOutcome = Result<(NodeAttestation, Option<String>), Box<dyn Error>>;
+
+    let collected: Vec<TargetOutcome> = stream::iter(targets)
         .map(|target| {
             let source = source.clone();
             let measurement = measurement.clone();
@@ -74,7 +86,7 @@ pub async fn collect(
                 ) {
                     Ok(client) => client,
                     Err(err) => {
-                        return (
+                        return Ok((
                             NodeAttestation::failed(
                                 node_uuid,
                                 target.name,
@@ -82,13 +94,16 @@ pub async fn collect(
                                 format!("backend client: {err}"),
                             ),
                             None,
-                        );
+                        ));
                     }
                 };
                 let nonce = match client.get_nonce(&node_uuid).await {
                     Ok(response) => response,
+                    // A rejected JWT cannot be recovered per target: abort the batch so
+                    // the caller can re-enroll and retry with a fresh token.
+                    Err(err) if is_auth_failure(err.as_ref()) => return Err(err),
                     Err(err) => {
-                        return (
+                        return Ok((
                             NodeAttestation::failed(
                                 node_uuid,
                                 target.name,
@@ -96,7 +111,7 @@ pub async fn collect(
                                 format!("nonce request: {err}"),
                             ),
                             None,
-                        );
+                        ));
                     }
                 };
                 // The backend may rotate the agent token on a nonce response.
@@ -111,7 +126,7 @@ pub async fn collect(
                         measurement,
                     )
                     .await;
-                (mapper.map(record), refreshed_jwt)
+                Ok((mapper.map(record), refreshed_jwt))
             }
         })
         .buffered(concurrency)
@@ -120,7 +135,8 @@ pub async fn collect(
 
     let mut attestations = Vec::with_capacity(collected.len());
     let mut refreshed_jwt = None;
-    for (record, refreshed) in collected {
+    for outcome in collected {
+        let (record, refreshed) = outcome?;
         if refreshed.is_some() {
             refreshed_jwt = refreshed;
         }
@@ -131,4 +147,26 @@ pub async fn collect(
         batch: BatchAttestation::new(now_rfc3339(), attestations),
         refreshed_jwt,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_jwt_rejections_as_auth_failures() {
+        for status in [401, 403] {
+            let err: Box<dyn Error> = Box::new(BackendHttpError::new(status, "denied"));
+            assert!(is_auth_failure(err.as_ref()), "status {status} should be auth failure");
+        }
+    }
+
+    #[test]
+    fn other_errors_are_not_auth_failures() {
+        let http: Box<dyn Error> = Box::new(BackendHttpError::new(500, "boom"));
+        assert!(!is_auth_failure(http.as_ref()));
+
+        let plain: Box<dyn Error> = "nonce request: timeout".into();
+        assert!(!is_auth_failure(plain.as_ref()));
+    }
 }

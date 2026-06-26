@@ -167,15 +167,22 @@ async fn collect_and_upload_attestation(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
 ) -> Result<(), Box<dyn Error>> {
-    let outcome = collector::collect(
-        targets,
-        attestation_settings,
-        &endpoints.base_url,
-        &endpoints.nonce_path,
-        &endpoints.attestation_path,
-        session.jwt(),
-    )
-    .await?;
+    let outcome = match collect_attestation(targets, attestation_settings, endpoints, session.jwt())
+        .await
+    {
+        Ok(outcome) => outcome,
+        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
+        // and re-run the whole batch with a fresh token before giving up.
+        Err(err) if is_auth_failure(err.as_ref()) => {
+            tracing::info!(
+                error = %err,
+                "backend JWT rejected during nonce collection; enrolling again before retry"
+            );
+            session.reenroll().await?;
+            collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
+        }
+        Err(err) => return Err(err),
+    };
     // Carry any rotated token forward so the upload and subsequent cycles authenticate
     // with the freshest JWT instead of the one we started the cycle with.
     if let Some(token) = outcome.refreshed_jwt {
@@ -195,6 +202,23 @@ async fn collect_and_upload_attestation(
         }
         Err(err) => Err(err),
     }
+}
+
+async fn collect_attestation(
+    targets: &[attestation_config::Target],
+    attestation_settings: &attestation_config::AttestationConfig,
+    endpoints: &BackendEndpoints,
+    jwt: &str,
+) -> Result<collector::CollectionOutcome, Box<dyn Error>> {
+    collector::collect(
+        targets,
+        attestation_settings,
+        &endpoints.base_url,
+        &endpoints.nonce_path,
+        &endpoints.attestation_path,
+        jwt,
+    )
+    .await
 }
 
 async fn upload_attestation(

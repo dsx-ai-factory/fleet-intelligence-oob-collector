@@ -134,32 +134,35 @@ impl BackendClient for HttpBackendClient {
         }
         let path = self.nonce_path.replace("{node_uuid}", node_uuid);
         let endpoint = self.endpoint(&path)?;
-        let request = serde_json::json!({
-            "method": "POST",
-            "url": endpoint.as_str(),
-            "headers": {
-                "authorization": "Bearer <redacted>"
-            },
-            "body": null
-        });
-        println!("Requesting attestation nonce from backend:");
-        println!("{}", serde_json::to_string_pretty(&request)?);
+        tracing::info!(%endpoint, node_uuid, "requesting attestation nonce from backend");
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let request = serde_json::json!({
+                "method": "POST",
+                "url": endpoint.as_str(),
+                "headers": {
+                    "authorization": "Bearer <redacted>"
+                },
+                "body": null
+            });
+            tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "nonce request");
+        }
         let response = self
             .client
             .post(endpoint)
             .bearer_auth(&self.jwt)
             .send()
-            .await?
-            .error_for_status()?
-            .json::<NonceResponse>()
             .await?;
-        let response_log = serde_json::json!({
-            "nonce": &response.nonce,
-            "jwtAssertion": response.jwt_assertion.as_ref().map(|_| "<redacted>"),
-            "nonceRefreshTimestamp": &response.nonce_refresh_timestamp
-        });
-        println!("Received attestation nonce response:");
-        println!("{}", serde_json::to_string_pretty(&response_log)?);
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Box::new(BackendHttpError::new(status.as_u16(), body)));
+        }
+        let response = response.json::<NonceResponse>().await?;
+        tracing::info!(
+            nonce_refresh_timestamp = response.nonce_refresh_timestamp.as_deref(),
+            jwt_rotated = response.jwt_assertion.is_some(),
+            "received attestation nonce response"
+        );
         if response.nonce.is_empty() {
             return Err("nonce response missing nonce".into());
         }
@@ -177,8 +180,10 @@ impl BackendClient for HttpBackendClient {
         }
         let endpoint = self.endpoint(&self.attestation_path)?;
         let request = batch.backend_request();
-        println!("Exporting attestation data to backend: {endpoint}");
-        println!("{}", serde_json::to_string_pretty(&request)?);
+        tracing::info!(%endpoint, "exporting attestation data to backend");
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "attestation request body");
+        }
         let response = self
             .client
             .post(endpoint)

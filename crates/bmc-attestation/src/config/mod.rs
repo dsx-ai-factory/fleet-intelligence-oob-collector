@@ -176,8 +176,10 @@ fn parse_backend_key(
     match key {
         "url" | "backend_url" => backend.url = value.to_string(),
         "jwt" => backend.jwt = value.to_string(),
-        "nonce_path" => backend.nonce_path = normalize_path(value),
-        "attestation_path" => backend.attestation_path = normalize_path(value),
+        "nonce_path" => backend.nonce_path = parse_backend_path(value, "nonce_path", line_no)?,
+        "attestation_path" => {
+            backend.attestation_path = parse_backend_path(value, "attestation_path", line_no)?
+        }
         other => return Err(format!("unknown backend key {other:?} at line {line_no}").into()),
     }
     Ok(())
@@ -302,6 +304,15 @@ fn validate_unique_targets(targets: &[Target]) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+/// Parse a backend path value, rejecting blank input so an explicit empty string
+/// fails validation instead of silently normalizing to the root path `/`.
+fn parse_backend_path(value: &str, key: &str, line_no: usize) -> Result<String, Box<dyn Error>> {
+    if value.is_empty() {
+        return Err(format!("backend {key} at line {line_no} cannot be empty").into());
+    }
+    Ok(normalize_path(value))
 }
 
 fn normalize_path(value: &str) -> String {
@@ -493,6 +504,41 @@ mod tests {
             .to_string();
 
         assert!(error.contains("nonce_path must contain {node_uuid}"));
+    }
+
+    #[test]
+    fn rejects_blank_backend_paths() {
+        for (field, line) in [
+            ("attestation_path", "attestation_path ="),
+            ("nonce_path", "nonce_path ="),
+        ] {
+            let path = write_config(
+                &format!("blank-{field}"),
+                &format!(
+                    r#"
+                    [backend]
+                    url = https://backend.example.com
+                    jwt = token
+                    {line}
+
+                    [node-a]
+                    node_uuid = uuid-a
+                    address = 10.0.0.1
+                    username = admin
+                    password = secret
+                    "#
+                ),
+            );
+
+            let error = load_config(path.to_str().expect("path"))
+                .expect_err("blank path should fail")
+                .to_string();
+
+            assert!(
+                error.contains(&format!("backend {field}")) && error.contains("cannot be empty"),
+                "unexpected error for {field}: {error}"
+            );
+        }
     }
 
     #[test]

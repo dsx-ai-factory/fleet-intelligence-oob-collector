@@ -30,7 +30,10 @@ impl BackendEndpoints {
     /// already include a `/v1/agent` path suffix.
     pub fn resolve(backend_url: &str) -> Result<Self, Box<dyn Error>> {
         let base_url = backend_url.trim().trim_end_matches('/').to_string();
-        if base_url.ends_with("/v1/agent/enroll") || base_url.ends_with("/v1/agent/oob_nodes") {
+        if base_url.ends_with("/v1/agent")
+            || base_url.ends_with("/v1/agent/enroll")
+            || base_url.ends_with("/v1/agent/oob_nodes")
+        {
             return Err("backend URL must be the API base URL without a /v1/agent path suffix".into());
         }
 
@@ -175,6 +178,10 @@ mod tests {
 
         let err = BackendEndpoints::resolve("https://api.example.com/v1/agent/oob_nodes")
             .expect_err("error");
+        assert!(err.to_string().contains("API base URL"));
+
+        let err =
+            BackendEndpoints::resolve("https://api.example.com/v1/agent/").expect_err("error");
         assert!(err.to_string().contains("API base URL"));
     }
 

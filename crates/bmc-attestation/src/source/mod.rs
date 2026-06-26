@@ -511,6 +511,14 @@ fn bmc_url(address: &str, default_port: u16) -> Result<Url, Box<dyn Error>> {
     } else {
         format!("https://{address}").parse()?
     };
+    // Reject plaintext targets up front: attestation attaches Redfish Basic Auth
+    // credentials, which must never be sent over an unencrypted http:// connection.
+    if url.scheme() != "https" {
+        return Err(format!(
+            "BMC target {address:?} must use https://; plaintext http:// is not allowed because Redfish credentials would be sent in cleartext"
+        )
+        .into());
+    }
     if url.port().is_none() {
         url.set_port(Some(default_port))
             .map_err(|()| format!("cannot set port {default_port} on {url}"))?;
@@ -580,5 +588,14 @@ mod tests {
 
         assert_eq!(url.as_str(), "https://10.0.0.1/");
         assert_eq!(url.port_or_known_default(), Some(443));
+    }
+
+    #[test]
+    fn bmc_url_rejects_plaintext_http() {
+        let error = bmc_url("http://10.0.0.1", 443)
+            .expect_err("plaintext http should be rejected")
+            .to_string();
+
+        assert!(error.contains("must use https://"), "unexpected error: {error}");
     }
 }
