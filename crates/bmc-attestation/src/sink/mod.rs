@@ -6,7 +6,7 @@ use std::error::Error;
 
 use crate::models::BatchAttestation;
 
-pub use backend::{BackendClient, BackendSink, HttpBackendClient, NonceResponse};
+pub use backend::{BackendClient, BackendHttpError, BackendSink, HttpBackendClient, NonceResponse};
 pub use json::JsonSink;
 pub use table::TableSink;
 

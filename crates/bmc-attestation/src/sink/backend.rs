@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fmt;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -178,16 +179,58 @@ impl BackendClient for HttpBackendClient {
         let request = batch.backend_request();
         println!("Exporting attestation data to backend: {endpoint}");
         println!("{}", serde_json::to_string_pretty(&request)?);
-        self.client
+        let response = self
+            .client
             .post(endpoint)
             .bearer_auth(&self.jwt)
             .json(&request)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Box::new(BackendHttpError::new(status.as_u16(), body)));
+        }
         Ok(())
     }
 }
+
+/// A non-success HTTP response from the attestation backend, preserving the
+/// status code so callers can distinguish JWT rejections (401/403) and re-enroll.
+#[derive(Debug)]
+pub struct BackendHttpError {
+    status: u16,
+    body: String,
+}
+
+impl BackendHttpError {
+    pub fn new(status: u16, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: body.into(),
+        }
+    }
+
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+}
+
+impl fmt::Display for BackendHttpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.body.trim().is_empty() {
+            write!(f, "backend request failed with HTTP {}", self.status)
+        } else {
+            write!(
+                f,
+                "backend request failed with HTTP {}: {}",
+                self.status, self.body
+            )
+        }
+    }
+}
+
+impl Error for BackendHttpError {}
 
 #[cfg(test)]
 mod tests {
