@@ -36,6 +36,7 @@ impl InventoryMapper for RedfishMapper {
                 NodeInventory {
                     schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                     collected_at,
+                    enrolled_at: None,
                     uuid: Some(node_uuid.clone()),
                     source,
                     primary_system_id: primary_system_id.clone(),
@@ -69,6 +70,7 @@ impl InventoryMapper for RedfishMapper {
             Err(error) => NodeInventory {
                 schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                 collected_at,
+                enrolled_at: None,
                 uuid: None,
                 source: InventorySourceInfo {
                     source_type: "redfish".to_string(),

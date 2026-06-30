@@ -12,6 +12,7 @@ use super::{
 pub struct NodeInventory {
     pub schema_version: String,
     pub collected_at: String,
+    pub enrolled_at: Option<String>,
     pub uuid: Option<InventoryUuid>,
     pub source: InventorySourceInfo,
     pub primary_system_id: Option<String>,

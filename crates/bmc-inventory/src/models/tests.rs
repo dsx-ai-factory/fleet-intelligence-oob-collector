@@ -7,6 +7,7 @@ fn node_inventory_serializes_as_backend_payload() {
     let inventory = NodeInventory {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
         collected_at: "2026-01-01T00:00:00Z".to_string(),
+        enrolled_at: Some("2026-01-02T00:00:00Z".to_string()),
         uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
         primary_system_id: Some("System".to_string()),
         systems: vec![SystemInventory {
@@ -124,6 +125,7 @@ fn node_inventory_serializes_as_backend_payload() {
         json!({
             "schemaVersion": "inventory.v1alpha1",
             "collectedAt": "2026-01-01T00:00:00Z",
+            "enrolledAt": "2026-01-02T00:00:00Z",
             "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
             "primarySystemId": "System",
             "systems": [{
@@ -241,6 +243,7 @@ fn target_error_inventory_serializes_absent_uuid() {
     let inventory = NodeInventory {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
         collected_at: "2026-01-01T00:00:00Z".to_string(),
+        enrolled_at: None,
         uuid: None,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -261,5 +264,6 @@ fn target_error_inventory_serializes_absent_uuid() {
     let value = serde_json::to_value(inventory).expect("json");
 
     assert!(value["uuid"].is_null());
+    assert!(value["enrolledAt"].is_null());
     assert_eq!(value["targetError"], "malformed system UUID");
 }

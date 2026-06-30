@@ -84,7 +84,7 @@ impl From<CliInventoryFormat> for InventoryFormat {
 }
 
 impl CollectorArgs {
-    fn into_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
+    fn into_inventory_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
         InventoryOptions {
             config: self.config,
             target: self.target,
@@ -109,11 +109,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Inventory(args) => {
             let format = args.format.into();
-            run_inventory(args.collector.into_options(args.detail, format)).await?
+            run_inventory(args.collector.into_inventory_options(args.detail, format)).await?
         }
         Command::Run(args) => {
+            let format = InventoryFormat::Json;
             run_runtime(RuntimeOptions {
-                inventory: args.collector.into_options(false, InventoryFormat::Json),
+                inventory: args.collector.into_inventory_options(false, format),
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,

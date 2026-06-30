@@ -14,7 +14,9 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
+bmc-attestation = { path = "crates/bmc-attestation" }
 bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 nv-redfish = { version = "0.10.1", features = ["bmc-http", "std-redfish"] }
@@ -41,6 +43,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+bmc-attestation.workspace = true
 bmc-inventory.workspace = true
 futures.workspace = true
 tokio.workspace = true

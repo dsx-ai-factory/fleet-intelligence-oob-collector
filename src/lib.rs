@@ -1,15 +1,23 @@
+mod backend;
+
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use bmc_attestation::collector;
+use bmc_attestation::config as attestation_config;
+use bmc_attestation::models::BatchAttestation;
+use bmc_attestation::sink::BackendSink as AttestationBackendSink;
 use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
-    BackendHttpError, BackendSink, HttpBackendClient, InventorySink, JsonSink, TableSink,
+    BackendSink as InventoryBackendSink, InventorySink, JsonSink, TableSink,
 };
 use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
+
+use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_TARGET_CONCURRENCY: usize = 64;
@@ -32,6 +40,7 @@ pub struct InventoryOptions {
     pub timeout_seconds: u64,
 }
 
+#[derive(Clone, Debug)]
 pub struct RuntimeOptions {
     pub inventory: InventoryOptions,
     pub backend_url: Option<String>,
@@ -40,30 +49,66 @@ pub struct RuntimeOptions {
 }
 
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
-    let endpoints = agent_endpoints(&required_backend_option(
-        options.backend_url,
-        "backend URL",
-    )?)?;
+    let backend_url = required_backend_option(options.backend_url, "backend URL")?;
+    let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
-    let mut jwt = enroll_agent(endpoints.enroll_endpoint.clone(), agent_token.clone()).await?;
-
+    // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
+    // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
+    let mut session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token).await?;
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
+
+    let attestation_settings = {
+        let mut s = attestation_config::defaults::attestation_config();
+        s.insecure_tls = options.inventory.insecure_tls;
+        s.concurrency = options.inventory.concurrency;
+        s.redfish_timeout = std::time::Duration::from_secs(options.inventory.timeout_seconds);
+        s
+    };
+
     loop {
         let started_at = std::time::Instant::now();
+
+        // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
             endpoints.oob_nodes_endpoint.clone(),
-            endpoints.enroll_endpoint.clone(),
-            agent_token.clone(),
-            &mut jwt,
+            &mut session,
         )
         .await
         {
-            Ok(()) => tracing::info!(
-                elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                next_sync_seconds = interval.as_secs(),
-                "inventory backend sync completed"
-            ),
+            Ok(inventories) => {
+                tracing::info!(
+                    elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                    "inventory backend sync completed"
+                );
+
+                // Phase 2: Collect and upload attestation for nodes with discovered UUIDs only when inventory succeeds
+                let attestation_targets =
+                    build_attestation_targets(&options.inventory, &inventories);
+                if attestation_targets.is_empty() {
+                    tracing::warn!("no nodes with discovered UUID; skipping attestation");
+                } else {
+                    match collect_and_upload_attestation(
+                        &attestation_targets,
+                        &attestation_settings,
+                        &endpoints,
+                        &mut session,
+                    )
+                    .await
+                    {
+                        Ok(()) => tracing::info!(
+                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                            node_count = attestation_targets.len(),
+                            "attestation backend sync completed"
+                        ),
+                        Err(err) => tracing::error!(
+                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                            error = %err,
+                            "attestation backend sync failed"
+                        ),
+                    }
+                }
+            }
             Err(err) => tracing::error!(
                 elapsed_seconds = started_at.elapsed().as_secs_f64(),
                 next_attempt_seconds = interval.as_secs(),
@@ -72,6 +117,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             ),
         }
 
+        tracing::info!(next_sync_seconds = interval.as_secs(), "sleeping until next cycle");
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
             signal = tokio::signal::ctrl_c() => {
@@ -83,6 +129,112 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             }
         }
     }
+}
+
+fn build_attestation_targets(
+    options: &InventoryOptions,
+    inventories: &[NodeInventory],
+) -> Vec<attestation_config::Target> {
+    let targets = match config::load_targets(&options.config) {
+        Ok(targets) => targets,
+        Err(_) => return Vec::new(),
+    };
+
+    targets
+        .into_iter()
+        .filter_map(|target| {
+            let uuid = inventories.iter().find_map(|inv| {
+                if inv.source.address == target.address {
+                    inv.uuid.as_ref().map(|u| u.to_string())
+                } else {
+                    None
+                }
+            })?;
+            Some(attestation_config::Target {
+                name: target.name,
+                node_uuid: uuid,
+                address: target.address,
+                username: target.username,
+                password: target.password,
+            })
+        })
+        .collect()
+}
+
+async fn collect_and_upload_attestation(
+    targets: &[attestation_config::Target],
+    attestation_settings: &attestation_config::AttestationConfig,
+    endpoints: &BackendEndpoints,
+    session: &mut BackendSession,
+) -> Result<(), Box<dyn Error>> {
+    let outcome = match collect_attestation(targets, attestation_settings, endpoints, session.jwt())
+        .await
+    {
+        Ok(outcome) => outcome,
+        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
+        // and re-run the whole batch with a fresh token before giving up.
+        Err(err) if is_auth_failure(err.as_ref()) => {
+            tracing::info!(
+                error = %err,
+                "backend JWT rejected during nonce collection; enrolling again before retry"
+            );
+            session.reenroll().await?;
+            collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
+        }
+        Err(err) => return Err(err),
+    };
+    // Carry any rotated token forward so the upload and subsequent cycles authenticate
+    // with the freshest JWT instead of the one we started the cycle with.
+    if let Some(token) = outcome.refreshed_jwt {
+        session.set_jwt(token);
+    }
+
+    let timeout = attestation_settings.redfish_timeout;
+    match upload_attestation(endpoints, session.jwt(), &outcome.batch, timeout).await {
+        Ok(()) => Ok(()),
+        Err(err) if is_auth_failure(err.as_ref()) => {
+            tracing::info!(
+                error = %err,
+                "backend JWT rejected on attestation upload; enrolling again before retry"
+            );
+            session.reenroll().await?;
+            upload_attestation(endpoints, session.jwt(), &outcome.batch, timeout).await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn collect_attestation(
+    targets: &[attestation_config::Target],
+    attestation_settings: &attestation_config::AttestationConfig,
+    endpoints: &BackendEndpoints,
+    jwt: &str,
+) -> Result<collector::CollectionOutcome, Box<dyn Error>> {
+    collector::collect(
+        targets,
+        attestation_settings,
+        &endpoints.base_url,
+        &endpoints.nonce_path,
+        &endpoints.attestation_path,
+        jwt,
+    )
+    .await
+}
+
+async fn upload_attestation(
+    endpoints: &BackendEndpoints,
+    jwt: &str,
+    batch: &BatchAttestation,
+    timeout: std::time::Duration,
+) -> Result<(), Box<dyn Error>> {
+    let sink = AttestationBackendSink::new(
+        &endpoints.base_url,
+        &endpoints.nonce_path,
+        &endpoints.attestation_path,
+        jwt,
+        timeout,
+    )?;
+    sink.write(batch).await
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
@@ -98,36 +250,40 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
     endpoint: String,
-    enroll_endpoint: String,
-    agent_token: String,
-    jwt: &mut String,
-) -> Result<(), Box<dyn Error>> {
-    let inventories = Arc::new(collect_inventory(options).await?);
-    match upload_inventory(endpoint.clone(), jwt.clone(), Arc::clone(&inventories)).await {
-        Ok(()) => Ok(()),
+    session: &mut BackendSession,
+) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
+    let mut inventory_vec = collect_inventory(options).await?;
+    stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
+    let inventories = Arc::new(inventory_vec);
+    match upload_inventory(endpoint.clone(), session.jwt().to_string(), Arc::clone(&inventories))
+        .await
+    {
+        Ok(()) => Ok(inventories),
         Err(UploadError::AuthFailure(message)) => {
             tracing::info!(
                 error = %message,
                 "backend JWT rejected; enrolling again before retry"
             );
-            *jwt = enroll_agent(enroll_endpoint, agent_token).await?;
-            upload_inventory(endpoint, jwt.clone(), inventories)
+            // Re-enroll refreshes both the JWT and enrolled_at; re-stamp the nodes
+            // so the retry carries the updated enrollment timestamp.
+            session.reenroll().await?;
+            let mut inventory_vec = Arc::try_unwrap(inventories)
+                .expect("upload task released its inventory reference");
+            stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
+            let inventories = Arc::new(inventory_vec);
+            upload_inventory(endpoint, session.jwt().to_string(), Arc::clone(&inventories))
                 .await
-                .map_err(|err| -> Box<dyn Error> { err.to_string().into() })
+                .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
+            Ok(inventories)
         }
         Err(err) => Err(err.to_string().into()),
     }
 }
 
-async fn enroll_agent(
-    enroll_endpoint: String,
-    agent_token: String,
-) -> Result<String, Box<dyn Error>> {
-    tokio::task::spawn_blocking(move || {
-        HttpBackendClient::enroll(&enroll_endpoint, &agent_token).map_err(|err| err.to_string())
-    })
-    .await?
-    .map_err(|err| -> Box<dyn Error> { err.into() })
+fn stamp_enrolled_at(inventories: &mut [NodeInventory], enrolled_at: &str) {
+    for node in inventories {
+        node.enrolled_at = Some(enrolled_at.to_string());
+    }
 }
 
 async fn upload_inventory(
@@ -136,11 +292,11 @@ async fn upload_inventory(
     inventories: Arc<Vec<NodeInventory>>,
 ) -> Result<(), UploadError> {
     tokio::task::spawn_blocking(move || {
-        BackendSink::new(endpoint, jwt)
+        InventoryBackendSink::new(endpoint, jwt)
             .map_err(|err| UploadError::Other(err.to_string()))?
             .write(inventories.as_slice())
             .map_err(|err| {
-                if backend_error_is_auth_failure(err.as_ref()) {
+                if is_auth_failure(err.as_ref()) {
                     UploadError::AuthFailure(err.to_string())
                 } else {
                     UploadError::Other(err.to_string())
@@ -167,12 +323,6 @@ impl fmt::Display for UploadError {
 
 impl Error for UploadError {}
 
-fn backend_error_is_auth_failure(err: &(dyn Error + 'static)) -> bool {
-    err.downcast_ref::<BackendHttpError>()
-        .map(|err| matches!(err.status(), 401 | 403))
-        .unwrap_or(false)
-}
-
 async fn collect_inventory(
     options: InventoryOptions,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
@@ -197,80 +347,4 @@ async fn collect_inventory(
         .buffered(concurrency)
         .collect()
         .await)
-}
-
-fn required_backend_option(
-    value: Option<String>,
-    name: &'static str,
-) -> Result<String, Box<dyn Error>> {
-    value
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("{name} is required when running backend runtime").into())
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct AgentEndpoints {
-    enroll_endpoint: String,
-    oob_nodes_endpoint: String,
-}
-
-fn agent_endpoints(backend_url: &str) -> Result<AgentEndpoints, Box<dyn Error>> {
-    let backend_url = backend_url.trim().trim_end_matches('/');
-    if backend_url.ends_with("/v1/agent/enroll") || backend_url.ends_with("/v1/agent/oob_nodes") {
-        return Err("backend URL must be the API base URL without a /v1/agent path suffix".into());
-    }
-
-    Ok(AgentEndpoints {
-        enroll_endpoint: format!("{backend_url}/v1/agent/enroll"),
-        oob_nodes_endpoint: format!("{backend_url}/v1/agent/oob_nodes"),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{AgentEndpoints, agent_endpoints, backend_error_is_auth_failure};
-    use bmc_inventory::sink::BackendHttpError;
-    use std::error::Error;
-
-    #[test]
-    fn agent_endpoints_accepts_base_url() {
-        assert_eq!(
-            agent_endpoints("https://api.example.com/").expect("endpoints"),
-            AgentEndpoints {
-                enroll_endpoint: "https://api.example.com/v1/agent/enroll".to_string(),
-                oob_nodes_endpoint: "https://api.example.com/v1/agent/oob_nodes".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn agent_endpoints_trims_trailing_slashes() {
-        assert_eq!(
-            agent_endpoints("https://api.example.com///").expect("endpoints"),
-            AgentEndpoints {
-                enroll_endpoint: "https://api.example.com/v1/agent/enroll".to_string(),
-                oob_nodes_endpoint: "https://api.example.com/v1/agent/oob_nodes".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn agent_endpoints_rejects_full_endpoint_urls() {
-        let err = agent_endpoints("https://api.example.com/v1/agent/enroll").expect_err("error");
-        assert!(err.to_string().contains("API base URL"));
-
-        let err = agent_endpoints("https://api.example.com/v1/agent/oob_nodes").expect_err("error");
-        assert!(err.to_string().contains("API base URL"));
-    }
-
-    #[test]
-    fn backend_auth_failure_detects_jwt_rejection_statuses() {
-        let unauthorized: Box<dyn Error> = Box::new(BackendHttpError::new(401, "expired token"));
-        let forbidden: Box<dyn Error> = Box::new(BackendHttpError::new(403, "invalid token"));
-        let server_error: Box<dyn Error> = Box::new(BackendHttpError::new(500, "backend failed"));
-
-        assert!(backend_error_is_auth_failure(unauthorized.as_ref()));
-        assert!(backend_error_is_auth_failure(forbidden.as_ref()));
-        assert!(!backend_error_is_auth_failure(server_error.as_ref()));
-    }
 }
