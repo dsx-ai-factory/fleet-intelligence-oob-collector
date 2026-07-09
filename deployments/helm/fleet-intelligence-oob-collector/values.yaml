@@ -4,6 +4,9 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Existing Docker registry Secrets used to pull the collector image.
+imagePullSecrets: []
+
 # Fleet Intelligence API base URL, without a /v1/agent suffix.
 backendUrl: https://data.fleet-intelligence.nvidia.com
 

@@ -161,15 +161,22 @@ kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
 kubectl create secret generic fleet-intelligence-oob-collector-bmc-config \
   --from-file=targets.config=/path/to/oob.config
 
+kubectl create secret docker-registry ghcr-pull-secret \
+  --docker-server=ghcr.io \
+  --docker-username="$GITHUB_USER" \
+  --docker-password="$GITHUB_TOKEN"
+
 helm install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
-  --version 0.1.0
+  --version 0.1.0 \
+  --set 'imagePullSecrets[0].name=ghcr-pull-secret'
 ```
 
 The chart intentionally references existing Secrets instead of accepting
 credentials as values, which keeps credentials out of Helm release state. See
 `deployments/helm/fleet-intelligence-oob-collector/values.yaml` for the supported image
-and collector settings. Validate local chart changes with `make chart-lint`.
+and collector settings. The image pull Secret is only required for a private
+collector image. Validate local chart changes with `make chart-lint`.
 By default, the collector sends data to
 `https://data.fleet-intelligence.nvidia.com`. Set `backendUrl` to use a
 different Fleet Intelligence endpoint.
