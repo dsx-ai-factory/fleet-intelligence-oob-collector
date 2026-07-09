@@ -49,7 +49,7 @@ spec:
             - name: FLEETINT_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentTokenSecretName | quote }}
+                  name: {{ required "agentTokenSecretName is required" .Values.agentTokenSecretName | quote }}
                   key: agent-token
           volumeMounts:
             - name: target-config
@@ -58,7 +58,7 @@ spec:
       volumes:
         - name: target-config
           secret:
-            secretName: {{ .Values.bmcConfigSecretName | quote }}
+            secretName: {{ required "bmcConfigSecretName is required" .Values.bmcConfigSecretName | quote }}
             items:
               - key: targets.config
                 path: targets.config

@@ -14,7 +14,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release --bin bmc-collector && \
     cp target/release/bmc-collector /bmc-collector && \
     strip /bmc-collector && \
-    file /bmc-collector | grep -q "statically linked"
+    file /bmc-collector | tee /tmp/bmc-collector.file && \
+    grep -Eq "statically linked|static-pie linked" /tmp/bmc-collector.file
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

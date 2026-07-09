@@ -34,6 +34,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
           toolchain: 1.95.0
+          cache: false
       - run: cargo test --workspace --locked
       - uses: azure/setup-helm@v4
       - run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
@@ -76,8 +77,6 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             REVISION=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
 
