@@ -1,0 +1,3 @@
+backendUrl: https://data.fleet-intelligence.nvidia.com
+agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
+bmcConfigSecretName: fleet-intelligence-oob-collector-bmc-config-test

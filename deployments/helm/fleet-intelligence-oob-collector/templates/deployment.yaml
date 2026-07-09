@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.fullname" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: {{ include "fleet-intelligence-oob-collector.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          args:
+            - run
+            - --config
+            - /etc/fleet-intelligence-oob-collector/targets.config
+            - --interval-seconds
+            - {{ .Values.intervalSeconds | quote }}
+            {{- if .Values.insecureTls }}
+            - --insecure-tls
+            {{- end }}
+          env:
+            - name: FLEETINT_BACKEND_URL
+              value: {{ required "backendUrl is required" .Values.backendUrl | quote }}
+            - name: FLEETINT_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentTokenSecretName | quote }}
+                  key: agent-token
+          volumeMounts:
+            - name: target-config
+              mountPath: /etc/fleet-intelligence-oob-collector
+              readOnly: true
+      volumes:
+        - name: target-config
+          secret:
+            secretName: {{ .Values.bmcConfigSecretName | quote }}
+            items:
+              - key: targets.config
+                path: targets.config
+                mode: 0440

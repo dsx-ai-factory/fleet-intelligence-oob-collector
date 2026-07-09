@@ -1,0 +1,11 @@
+apiVersion: v2
+name: fleet-intelligence-oob-collector
+description: Fleet Intelligence out-of-band BMC collector
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/NVIDIA/fleet-intelligence-oob-collector
+sources:
+  - https://github.com/NVIDIA/fleet-intelligence-oob-collector
+annotations:
+  org.opencontainers.image.source: https://github.com/NVIDIA/fleet-intelligence-oob-collector

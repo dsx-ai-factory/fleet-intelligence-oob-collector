@@ -1,0 +1,7 @@
+The Fleet Intelligence OOB collector has been deployed. It reads the bootstrap
+agent token from Secret {{ .Values.agentTokenSecretName | quote }} and BMC
+targets from Secret {{ .Values.bmcConfigSecretName | quote }}. Check the
+collector status with:
+
+  kubectl rollout status deployment/{{ include "fleet-intelligence-oob-collector.fullname" . }} -n {{ .Release.Namespace }}
+  kubectl logs deployment/{{ include "fleet-intelligence-oob-collector.fullname" . }} -n {{ .Release.Namespace }}

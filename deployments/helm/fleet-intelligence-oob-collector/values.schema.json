@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "backendUrl", "agentTokenSecretName", "bmcConfigSecretName", "intervalSeconds", "insecureTls"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "backendUrl": { "type": "string", "minLength": 1 },
+    "agentTokenSecretName": { "type": "string", "minLength": 1 },
+    "bmcConfigSecretName": { "type": "string", "minLength": 1 },
+    "intervalSeconds": { "type": "integer", "minimum": 1 },
+    "insecureTls": { "type": "boolean" }
+  }
+}
