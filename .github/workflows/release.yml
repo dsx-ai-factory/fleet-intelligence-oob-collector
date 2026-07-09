@@ -18,6 +18,7 @@ env:
 
 jobs:
   validate:
+    name: Validate release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,9 +75,6 @@ jobs:
           flavor: latest=auto
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
       - id: build
         uses: docker/build-push-action@v6
         with:
@@ -107,6 +105,7 @@ jobs:
           retention-days: 1
 
   publish-image:
+    name: Publish image
     needs: build-image
     runs-on: ubuntu-24.04
     permissions:
@@ -133,9 +132,6 @@ jobs:
           flavor: latest=auto
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
       - name: Create multi-platform image
         working-directory: /tmp/digests
         env:
@@ -155,6 +151,7 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
 
   publish-chart:
+    name: Publish Helm chart
     needs: publish-image
     runs-on: ubuntu-latest
     permissions:
