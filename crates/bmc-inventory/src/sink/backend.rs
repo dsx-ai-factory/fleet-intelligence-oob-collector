@@ -8,6 +8,7 @@ use super::InventorySink;
 
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -94,8 +95,8 @@ impl HttpBackendClient {
             return Err("backend request timeout must be greater than zero".into());
         }
 
-        let response = backend_http_client(request_timeout)?
-            .post(endpoint)
+        let client = backend_http_client(request_timeout)?;
+        let response = backend_request(&client, reqwest::Method::POST, endpoint)
             .bearer_auth(agent_token)
             .send()?
             .error_for_status()?;
@@ -120,11 +121,19 @@ fn backend_http_client(
         .build()
 }
 
+fn backend_request(
+    client: &reqwest::blocking::Client,
+    method: reqwest::Method,
+    endpoint: &str,
+) -> reqwest::blocking::RequestBuilder {
+    client
+        .request(method, endpoint)
+        .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
+}
+
 impl BackendClient for HttpBackendClient {
     fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        let response = self
-            .client
-            .put(&self.endpoint)
+        let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
             .json(&BatchUpsertRequest { data: inventories })
             .send()?;
@@ -246,6 +255,23 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+
+    #[test]
+    fn backend_http_client_sets_user_agent() {
+        let client = backend_http_client(Duration::from_secs(1)).expect("client");
+        let request = backend_request(
+            &client,
+            reqwest::Method::POST,
+            "https://backend.example.com",
+        )
+        .build()
+        .expect("request");
+
+        assert_eq!(
+            request.headers()[reqwest::header::USER_AGENT],
+            BACKEND_USER_AGENT
+        );
+    }
 
     #[test]
     fn backend_sink_puts_node_inventory_batch() {

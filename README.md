@@ -57,6 +57,27 @@ For an optimized binary:
 cargo build --release
 ```
 
+## Container Image
+
+Build the image locally:
+
+```bash
+make container-build
+docker run --rm fleet-intelligence-oob-collector:dev --help
+```
+
+Release tags publish Linux `amd64` and `arm64` images to
+`ghcr.io/nvidia/fleet-intelligence-oob-collector`. For example:
+
+```bash
+docker pull ghcr.io/nvidia/fleet-intelligence-oob-collector:0.1.0
+```
+
+The runtime image uses Distroless `static-debian12:nonroot` with a statically
+linked `bmc-collector` binary. It runs as a numeric non-root user and contains no
+shell or package manager while retaining minimal runtime files such as CA
+certificates.
+
 ## Configuration
 
 The config file lists BMC targets in INI-style sections:
@@ -125,6 +146,48 @@ address=10.0.0.10
 username=root
 password=secret
 ```
+
+## Helm Chart
+
+The chart is published as an OCI artifact at
+`oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector`. Create separate
+Secrets for the backend bootstrap token and BMC target config before installing
+it:
+
+```bash
+kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
+  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
+
+kubectl create secret generic fleet-intelligence-oob-collector-bmc-config \
+  --from-file=targets.config=/path/to/oob.config
+
+kubectl create secret docker-registry ghcr-pull-secret \
+  --docker-server=ghcr.io \
+  --docker-username="$GITHUB_USER" \
+  --docker-password="$GITHUB_TOKEN"
+
+helm install fleet-intelligence-oob-collector \
+  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  --version 0.1.0 \
+  --set 'imagePullSecrets[0].name=ghcr-pull-secret'
+```
+
+The chart intentionally references existing Secrets instead of accepting
+credentials as values, which keeps credentials out of Helm release state. See
+`deployments/helm/fleet-intelligence-oob-collector/values.yaml` for the supported image
+and collector settings. The image pull Secret is only required for a private
+collector image. Validate local chart changes with `make chart-lint`.
+By default, the collector sends data to
+`https://data.fleet-intelligence.nvidia.com`. Set `backendUrl` to use a
+different Fleet Intelligence endpoint.
+By default, the chart version is also used as the collector image tag.
+
+## Releases
+
+Pushing a semantic version tag such as `v0.1.0` runs tests, publishes the
+multi-architecture container image, and publishes a chart with the matching
+version. Pre-release tags such as `v0.2.0-rc.1` are supported and do not update
+the image's `latest` tag.
 
 ## Contributing
 

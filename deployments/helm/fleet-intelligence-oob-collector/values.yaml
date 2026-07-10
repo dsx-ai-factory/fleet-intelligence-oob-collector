@@ -1,0 +1,20 @@
+image:
+  repository: ghcr.io/nvidia/fleet-intelligence-oob-collector
+  # Defaults to the chart version when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Existing Docker registry Secrets used to pull the collector image.
+imagePullSecrets: []
+
+# Fleet Intelligence API base URL, without a /v1/agent suffix.
+backendUrl: https://data.fleet-intelligence.nvidia.com
+
+# Secret containing the `agent-token` key.
+agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
+
+# Secret containing the `targets.config` key.
+bmcConfigSecretName: fleet-intelligence-oob-collector-bmc-config
+
+intervalSeconds: 86400
+insecureTls: false

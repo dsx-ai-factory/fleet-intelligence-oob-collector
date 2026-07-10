@@ -7,6 +7,8 @@ use url::Url;
 
 use crate::models::BatchAttestation;
 
+const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
+
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
 }
@@ -113,6 +115,12 @@ impl HttpBackendClient {
         drop(segments);
         Ok(url)
     }
+
+    fn request(&self, method: reqwest::Method, endpoint: Url) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, endpoint)
+            .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
+    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -147,8 +155,7 @@ impl BackendClient for HttpBackendClient {
             tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "nonce request");
         }
         let response = self
-            .client
-            .post(endpoint)
+            .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
             .send()
             .await?;
@@ -185,8 +192,7 @@ impl BackendClient for HttpBackendClient {
             tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "attestation request body");
         }
         let response = self
-            .client
-            .post(endpoint)
+            .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
             .json(&request)
             .send()
@@ -240,6 +246,32 @@ impl Error for BackendHttpError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_http_client_sets_user_agent() {
+        let client = HttpBackendClient::new(
+            "https://backend.example.com",
+            "/v1/oob/nodes/{node_uuid}/nonce",
+            "/v1/oob/attestations",
+            "jwt",
+            Duration::from_secs(1),
+        )
+        .expect("client");
+        let request = client
+            .request(
+                reqwest::Method::POST,
+                "https://backend.example.com/v1/oob/attestations"
+                    .parse()
+                    .expect("endpoint"),
+            )
+            .build()
+            .expect("request");
+
+        assert_eq!(
+            request.headers()[reqwest::header::USER_AGENT],
+            BACKEND_USER_AGENT
+        );
+    }
 
     #[test]
     fn builds_backend_endpoint() {
