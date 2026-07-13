@@ -30,8 +30,7 @@ struct StaticBmcEndpoint {
     port: Option<u16>,
     mac: String,
     username: String,
-    #[serde(default)]
-    password: Option<String>,
+    password: String,
 }
 
 pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
@@ -77,10 +76,9 @@ impl StaticBmcEndpoint {
         if self.username.trim().is_empty() {
             return Err(format!("{context}.username is required").into());
         }
-        let password = self
-            .password
-            .filter(|password| !password.is_empty())
-            .ok_or_else(|| format!("{context}.password is required by the OOB collector"))?;
+        if self.password.trim().is_empty() {
+            return Err(format!("{context}.password is required by the OOB collector").into());
+        }
         let address = match (self.ip, self.port) {
             (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
             (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
@@ -92,7 +90,7 @@ impl StaticBmcEndpoint {
             mac: self.mac,
             address,
             username: self.username,
-            password,
+            password: self.password,
         })
     }
 }
@@ -185,7 +183,27 @@ mod tests {
             .expect_err("missing password should fail")
             .to_string();
 
-        assert!(error.contains("password is required"));
+        assert!(error.contains("missing field `password`"));
+    }
+
+    #[test]
+    fn rejects_blank_password() {
+        let path = write_config(
+            "blank-password",
+            r#"
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "10.0.0.1"
+            mac = "00:11:22:33:44:55"
+            username = "admin"
+            password = "   "
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("blank password should fail")
+            .to_string();
+
+        assert!(error.contains("password is required by the OOB collector"));
     }
 
     #[test]
