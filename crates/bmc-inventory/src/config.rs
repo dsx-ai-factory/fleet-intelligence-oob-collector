@@ -145,7 +145,7 @@ mod tests {
         .expect("shared config example");
 
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].mac, "00:11:22:33:44:55");
+        assert_eq!(targets[0].mac, "aa:bb:cc:dd:ee:ff");
     }
 
     #[test]

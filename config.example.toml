@@ -7,7 +7,7 @@ enabled = false
 [[endpoint_sources.static_bmc_endpoints]]
 ip = "10.0.0.10"
 port = 443
-mac = "00:11:22:33:44:55"
+mac = "aa:bb:cc:dd:ee:ff"
 username = "bmc-username"
 password = "bmc-password"
 
@@ -36,4 +36,4 @@ flush_interval = "2s"
 
 [metrics]
 endpoint = "0.0.0.0:9009"
-prefix = "nico_hardware_health"
+prefix = "fleetint_"
