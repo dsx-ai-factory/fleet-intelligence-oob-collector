@@ -15,8 +15,8 @@ concurrency:
 env:
   IMAGE: ghcr.io/nvidia/fleet-intelligence-oob-collector
   NICO_IMAGE: ghcr.io/nvidia/nico-hardware-health
-  # Pin NICo source so every chart release has a reproducible health binary.
-  NICO_SOURCE_REF: 2de69857585d73a6d275c26adcbd307301478151
+  # Build the released NICo hardware-health source version.
+  NICO_SOURCE_REF: v0.10.7
   CHART_REGISTRY: oci://ghcr.io/nvidia/charts
 
 jobs:
@@ -174,7 +174,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Check out pinned NICo source
+      - name: Check out NICo v0.10.7 source
         uses: actions/checkout@v4
         with:
           repository: NVIDIA/infra-controller
