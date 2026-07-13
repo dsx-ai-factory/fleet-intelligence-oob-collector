@@ -26,6 +26,14 @@ enabled = false
 [sinks.prometheus]
 enabled = true
 
+[sinks.otlp]
+enabled = false
+# From Docker Desktop Kubernetes, use http://host.docker.internal:4317.
+endpoint = "http://localhost:4317"
+include_diagnostics = false
+batch_size = 512
+flush_interval = "2s"
+
 [metrics]
 endpoint = "0.0.0.0:9009"
 prefix = "nico_hardware_health"
