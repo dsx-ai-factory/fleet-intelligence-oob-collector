@@ -41,9 +41,6 @@ struct CollectorArgs {
     config: String,
 
     #[arg(long)]
-    mac: Option<String>,
-
-    #[arg(long)]
     insecure_tls: bool,
 
     #[arg(long, default_value_t = DEFAULT_TARGET_CONCURRENCY)]
@@ -87,7 +84,6 @@ impl CollectorArgs {
     fn into_inventory_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
         InventoryOptions {
             config: self.config,
-            mac: self.mac,
             insecure_tls: self.insecure_tls,
             detail,
             format,

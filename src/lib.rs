@@ -32,7 +32,6 @@ pub enum InventoryFormat {
 #[derive(Clone, Debug)]
 pub struct InventoryOptions {
     pub config: String,
-    pub mac: Option<String>,
     pub insecure_tls: bool,
     pub detail: bool,
     pub format: InventoryFormat,
@@ -326,13 +325,7 @@ impl Error for UploadError {}
 async fn collect_inventory(
     options: InventoryOptions,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
-    let mut targets = config::load_targets(&options.config)?;
-    if let Some(mac) = &options.mac {
-        targets.retain(|target| target.mac == *mac);
-        if targets.is_empty() {
-            return Err(format!("BMC MAC {mac:?} not found").into());
-        }
-    }
+    let targets = config::load_targets(&options.config)?;
 
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let source = RedfishSource::new(options.insecure_tls, timeout)?;

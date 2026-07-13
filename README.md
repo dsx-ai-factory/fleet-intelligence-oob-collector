@@ -110,7 +110,6 @@ Print inventory locally (for debugging/testing):
 cargo run -- inventory --config /path/to/config.toml --insecure-tls
 target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls
 target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls --detail
-target/debug/bmc-collector inventory --config /path/to/config.toml --mac 00:11:22:33:44:55
 ```
 
 ## Run Agent (Inventory + Attestation)
