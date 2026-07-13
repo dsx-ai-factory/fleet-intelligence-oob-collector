@@ -1,15 +1,28 @@
 use std::collections::HashSet;
 use std::error::Error;
+use std::fmt;
 use std::net::IpAddr;
 
 use serde::Deserialize;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Target {
     pub mac: String,
     pub address: String,
     pub username: String,
     pub password: String,
+}
+
+impl fmt::Debug for Target {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Target")
+            .field("mac", &self.mac)
+            .field("address", &self.address)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -98,6 +111,24 @@ impl StaticBmcEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_debug_redacts_password() {
+        let target = Target {
+            mac: "aa:bb:cc:dd:ee:ff".to_string(),
+            address: "10.0.0.1".to_string(),
+            username: "admin".to_string(),
+            password: "super-secret".to_string(),
+        };
+
+        let rendered = format!("{target:?}");
+
+        assert!(rendered.contains("aa:bb:cc:dd:ee:ff"));
+        assert!(rendered.contains("10.0.0.1"));
+        assert!(rendered.contains("admin"));
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains("super-secret"));
+    }
 
     #[test]
     fn loads_static_endpoints_and_ignores_other_settings() {

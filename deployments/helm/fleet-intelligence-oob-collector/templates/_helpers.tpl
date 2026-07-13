@@ -31,6 +31,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- "nico-hardware-health" }}
 {{- end }}
 
+{{- define "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fleet-intelligence-oob-collector.nicoHardwareHealthName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
 {{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}

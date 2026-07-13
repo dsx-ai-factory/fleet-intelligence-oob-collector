@@ -28,7 +28,7 @@ enabled = true
 
 [sinks.otlp]
 enabled = true
-# From Docker Desktop Kubernetes, use http://host.docker.internal:4317.
+# For Docker Desktop Kubernetes, replace `localhost` with `host.docker.internal`.
 endpoint = "http://localhost:4317"
 include_diagnostics = false
 batch_size = 512

@@ -12,12 +12,12 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 6 }}
+      {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: nico-hardware-health
   template:
     metadata:
       labels:
-        {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 8 }}
+        {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: nico-hardware-health
     spec:
       {{- with .Values.imagePullSecrets }}
