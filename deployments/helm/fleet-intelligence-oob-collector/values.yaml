@@ -1,20 +1,36 @@
-image:
-  repository: ghcr.io/nvidia/fleet-intelligence-oob-collector
-  # Defaults to the chart version when empty.
-  tag: ""
-  pullPolicy: IfNotPresent
-
-# Existing Docker registry Secrets used to pull the collector image.
+# Existing Docker registry Secrets used to pull chart images.
 imagePullSecrets: []
 
-# Fleet Intelligence API base URL, without a /v1/agent suffix.
-backendUrl: https://data.fleet-intelligence.nvidia.com
+# Existing Secret containing the TOML configuration shared by both collectors.
+config:
+  secretName: fleet-intelligence-config
+  secretKey: config.toml
 
-# Secret containing the `agent-token` key.
-agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
+# Fleet Intelligence BMC inventory and attestation collector.
+bmcCollector:
+  image:
+    repository: ghcr.io/nvidia/fleet-intelligence-oob-collector
+    # Defaults to the chart version when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Fleet Intelligence API base URL, without a /v1/agent suffix.
+  backendUrl: https://data.fleet-intelligence.nvidia.com
+  # Secret containing the `agent-token` key.
+  agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
+  intervalSeconds: 86400
+  insecureTls: false
 
-# Secret containing the `targets.config` key.
-bmcConfigSecretName: fleet-intelligence-oob-collector-bmc-config
-
-intervalSeconds: 86400
-insecureTls: false
+# Optional NICo Redfish hardware-health service. Its TOML configuration may
+# contain BMC credentials, so it is only accepted through an existing Secret.
+nicoHardwareHealth:
+  enabled: true
+  image:
+    repository: ghcr.io/nvidia/nico-hardware-health
+    # Defaults to the chart version when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Optional Secret with ca.crt, tls.crt, and tls.key for NICo API mTLS.
+  tlsSecretName: ""
+  service:
+    enabled: true
+    port: 9009

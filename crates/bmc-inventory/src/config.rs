@@ -1,163 +1,183 @@
+use std::collections::HashSet;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::net::IpAddr;
+
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub struct Target {
-    pub name: String,
+    pub mac: String,
     pub address: String,
     pub username: String,
     pub password: String,
 }
 
+#[derive(Deserialize)]
+struct Config {
+    endpoint_sources: EndpointSources,
+}
+
+#[derive(Deserialize)]
+struct EndpointSources {
+    #[serde(default)]
+    static_bmc_endpoints: Vec<StaticBmcEndpoint>,
+}
+
+#[derive(Deserialize)]
+struct StaticBmcEndpoint {
+    ip: IpAddr,
+    #[serde(default)]
+    port: Option<u16>,
+    mac: String,
+    username: String,
+    #[serde(default)]
+    password: Option<String>,
+}
+
 pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut targets: Vec<Target> = Vec::new();
-    let mut current: Option<Target> = None;
+    let contents = std::fs::read_to_string(path)?;
+    parse_targets(&contents, path)
+}
 
-    for (line_no, line) in reader.lines().enumerate() {
-        let line_no = line_no + 1;
-        let line = line?;
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if let Some(name) = line
-            .strip_prefix('[')
-            .and_then(|line| line.strip_suffix(']'))
-        {
-            let name = name.trim();
-            if name.is_empty() {
-                return Err(format!("empty section name at line {line_no}").into());
-            }
-            if targets.iter().any(|target| target.name == name)
-                || current.as_ref().is_some_and(|target| target.name == name)
-            {
-                return Err(format!("duplicate target name {name:?} at line {line_no}").into());
-            }
-            if let Some(target) = current.take() {
-                validate_target(&target)?;
-                targets.push(target);
-            }
-            current = Some(Target {
-                name: name.to_string(),
-                address: String::new(),
-                username: String::new(),
-                password: String::new(),
-            });
-            continue;
-        }
+fn parse_targets(contents: &str, path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
+    let config: Config = toml::from_str(contents)
+        .map_err(|error| format!("failed to parse TOML config {path}: {error}"))?;
 
-        let Some(target) = current.as_mut() else {
-            return Err(format!("key outside section at line {line_no}").into());
-        };
-        let Some((key, value)) = line.split_once('=') else {
-            return Err(format!("invalid config line {line_no}").into());
-        };
-        match key.trim().to_ascii_lowercase().as_str() {
-            "address" => target.address = value.trim().to_string(),
-            "username" => target.username = value.trim().to_string(),
-            "password" => target.password = value.trim().to_string(),
-            other => return Err(format!("unknown key {other:?} at line {line_no}").into()),
-        }
+    if config.endpoint_sources.static_bmc_endpoints.is_empty() {
+        return Err(format!(
+            "no BMC targets found in {path}; configure endpoint_sources.static_bmc_endpoints"
+        )
+        .into());
     }
 
-    if let Some(target) = current.take() {
-        validate_target(&target)?;
+    let mut macs = HashSet::new();
+    let mut targets = Vec::with_capacity(config.endpoint_sources.static_bmc_endpoints.len());
+    for (index, endpoint) in config
+        .endpoint_sources
+        .static_bmc_endpoints
+        .into_iter()
+        .enumerate()
+    {
+        let target = endpoint.into_target(index)?;
+        if !macs.insert(target.mac.clone()) {
+            return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
+        }
         targets.push(target);
     }
-    if targets.is_empty() {
-        return Err(format!("no BMC targets found in {path}").into());
-    }
+
     Ok(targets)
 }
 
-fn validate_target(target: &Target) -> Result<(), Box<dyn Error>> {
-    if target.address.is_empty() {
-        return Err(format!("target {:?} address is required", target.name).into());
+impl StaticBmcEndpoint {
+    fn into_target(self, index: usize) -> Result<Target, Box<dyn Error>> {
+        let context = format!("endpoint_sources.static_bmc_endpoints[{index}]");
+        if self.mac.trim().is_empty() {
+            return Err(format!("{context}.mac is required").into());
+        }
+        if self.username.trim().is_empty() {
+            return Err(format!("{context}.username is required").into());
+        }
+        let password = self
+            .password
+            .filter(|password| !password.is_empty())
+            .ok_or_else(|| format!("{context}.password is required by the OOB collector"))?;
+        let address = match (self.ip, self.port) {
+            (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
+            (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
+            (IpAddr::V4(ip), None) => ip.to_string(),
+            (IpAddr::V6(ip), None) => format!("[{ip}]"),
+        };
+
+        Ok(Target {
+            mac: self.mac,
+            address,
+            username: self.username,
+            password,
+        })
     }
-    if target.username.is_empty() {
-        return Err(format!("target {:?} username is required", target.name).into());
-    }
-    if target.password.is_empty() {
-        return Err(format!("target {:?} password is required", target.name).into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
-    fn loads_multiple_targets_and_ignores_comments() {
+    fn loads_static_endpoints_and_ignores_other_settings() {
         let path = write_config(
             "valid",
             r#"
-            # lab BMCs
-            [node-a]
-            address = 10.0.0.1
-            username = admin
-            password = secret
+            shard = 0
+            endpoint_discovery_interval = "5m"
 
-            ; second target
-            [node-b]
-            address = https://bmc.example.com
-            username = root
-            password = pass
+            [endpoint_sources.carbide_api]
+            enabled = false
+
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "10.0.0.1"
+            port = 8443
+            mac = "00:11:22:33:44:55"
+            username = "admin"
+            password = "secret"
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "2001:db8::1"
+            mac = "00:11:22:33:44:66"
+            username = "root"
+            password = "pass"
+
+            [sinks.prometheus]
+            enabled = true
             "#,
         );
 
         let targets = load_targets(path.to_str().expect("path")).expect("targets");
 
         assert_eq!(targets.len(), 2);
-        assert_eq!(targets[0].name, "node-a");
-        assert_eq!(targets[0].address, "10.0.0.1");
-        assert_eq!(targets[1].name, "node-b");
-        assert_eq!(targets[1].address, "https://bmc.example.com");
+        assert_eq!(targets[0].mac, "00:11:22:33:44:55");
+        assert_eq!(targets[0].address, "10.0.0.1:8443");
+        assert_eq!(targets[1].mac, "00:11:22:33:44:66");
+        assert_eq!(targets[1].address, "[2001:db8::1]");
     }
 
     #[test]
-    fn rejects_key_outside_section() {
-        let path = write_config("key-outside-section", "address = 10.0.0.1\n");
+    fn repository_shared_config_example_is_valid() {
+        let targets = parse_targets(
+            include_str!("../../../config.example.toml"),
+            "config.example.toml",
+        )
+        .expect("shared config example");
 
-        let error = load_targets(path.to_str().expect("path"))
-            .expect_err("key outside section should fail")
-            .to_string();
-
-        assert!(error.contains("key outside section"));
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].mac, "00:11:22:33:44:55");
     }
 
     #[test]
-    fn rejects_unknown_key() {
+    fn rejects_legacy_ini_config() {
         let path = write_config(
-            "unknown-key",
+            "legacy-ini",
             r#"
             [node-a]
-            address = 10.0.0.1
-            username = admin
-            password = secret
-            token = nope
+            address = "10.0.0.1"
+            username = "admin"
+            password = "secret"
             "#,
         );
 
         let error = load_targets(path.to_str().expect("path"))
-            .expect_err("unknown key should fail")
+            .expect_err("legacy config should fail")
             .to_string();
 
-        assert!(error.contains("unknown key"));
+        assert!(error.contains("endpoint_sources"));
     }
 
     #[test]
-    fn rejects_missing_required_target_field() {
+    fn rejects_missing_password() {
         let path = write_config(
             "missing-password",
             r#"
-            [node-a]
-            address = 10.0.0.1
-            username = admin
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "10.0.0.1"
+            mac = "00:11:22:33:44:55"
+            username = "admin"
             "#,
         );
 
@@ -169,67 +189,54 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_target_names() {
+    fn rejects_empty_static_endpoint_list() {
         let path = write_config(
-            "duplicate-name",
+            "empty",
             r#"
-            [node-a]
-            address = 10.0.0.1
-            username = admin
-            password = secret
-
-            [node-a]
-            address = 10.0.0.2
-            username = admin
-            password = secret
+            [endpoint_sources.carbide_api]
+            api_url = "https://api.example.com:1079"
             "#,
         );
-
-        let error = load_targets(path.to_str().expect("path"))
-            .expect_err("duplicate target name should fail")
-            .to_string();
-
-        assert!(error.contains("duplicate target name"));
-    }
-
-    #[test]
-    fn rejects_adjacent_duplicate_target_names_before_validating_empty_target() {
-        let path = write_config(
-            "adjacent-duplicate-name",
-            r#"
-            [node-a]
-            [node-a]
-            address = 10.0.0.2
-            username = admin
-            password = secret
-            "#,
-        );
-
-        let error = load_targets(path.to_str().expect("path"))
-            .expect_err("adjacent duplicate target name should fail")
-            .to_string();
-
-        assert!(error.contains("duplicate target name"));
-    }
-
-    #[test]
-    fn rejects_empty_config() {
-        let path = write_config("empty", "# no targets\n");
 
         let error = load_targets(path.to_str().expect("path"))
             .expect_err("empty config should fail")
             .to_string();
 
-        assert!(error.contains("no BMC targets found"));
+        assert!(error.contains("static_bmc_endpoints"));
+    }
+
+    #[test]
+    fn rejects_duplicate_macs() {
+        let path = write_config(
+            "duplicate-mac",
+            r#"
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "10.0.0.1"
+            mac = "00:11:22:33:44:55"
+            username = "admin"
+            password = "secret"
+            [[endpoint_sources.static_bmc_endpoints]]
+            ip = "10.0.0.2"
+            mac = "00:11:22:33:44:55"
+            username = "admin"
+            password = "secret"
+            "#,
+        );
+
+        let error = load_targets(path.to_str().expect("path"))
+            .expect_err("duplicate MAC should fail")
+            .to_string();
+
+        assert!(error.contains("duplicate BMC MAC"));
     }
 
     fn write_config(name: &str, content: &str) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "fleet-intelligence-oob-{name}-{}.config",
+            "fleet-intelligence-oob-{name}-{}.toml",
             std::process::id()
         ));
-        fs::write(&path, unindent(content)).expect("write config");
+        std::fs::write(&path, unindent(content)).expect("write config");
         path
     }
 

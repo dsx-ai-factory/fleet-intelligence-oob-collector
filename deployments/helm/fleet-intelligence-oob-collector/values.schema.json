@@ -2,18 +2,8 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "imagePullSecrets", "backendUrl", "agentTokenSecretName", "bmcConfigSecretName", "intervalSeconds", "insecureTls"],
+  "required": ["imagePullSecrets", "config", "bmcCollector", "nicoHardwareHealth"],
   "properties": {
-    "image": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["repository", "tag", "pullPolicy"],
-      "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string" },
-        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
-      }
-    },
     "imagePullSecrets": {
       "type": "array",
       "items": {
@@ -25,10 +15,63 @@
         }
       }
     },
-    "backendUrl": { "type": "string", "minLength": 1 },
-    "agentTokenSecretName": { "type": "string", "minLength": 1 },
-    "bmcConfigSecretName": { "type": "string", "minLength": 1 },
-    "intervalSeconds": { "type": "integer", "minimum": 1 },
-    "insecureTls": { "type": "boolean" }
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secretName", "secretKey"],
+      "properties": {
+        "secretName": { "type": "string", "minLength": 1 },
+        "secretKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "bmcCollector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "backendUrl", "agentTokenSecretName", "intervalSeconds", "insecureTls"],
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "backendUrl": { "type": "string", "minLength": 1 },
+        "agentTokenSecretName": { "type": "string", "minLength": 1 },
+        "intervalSeconds": { "type": "integer", "minimum": 1 },
+        "insecureTls": { "type": "boolean" }
+      }
+    },
+    "nicoHardwareHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "tlsSecretName", "service"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "tlsSecretName": { "type": "string" },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "port"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    }
   }
 }

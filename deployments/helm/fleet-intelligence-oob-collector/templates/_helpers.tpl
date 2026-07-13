@@ -24,5 +24,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.image" -}}
-{{- printf "%s:%s" .Values.image.repository (default .Chart.Version .Values.image.tag) -}}
+{{- printf "%s:%s" .Values.bmcCollector.image.repository (default .Chart.Version .Values.bmcCollector.image.tag) -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.nicoHardwareHealthName" -}}
+{{- printf "%s-nico-hardware-health" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
+{{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}

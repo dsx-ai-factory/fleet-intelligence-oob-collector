@@ -5,10 +5,10 @@ Fleet Intelligence data from server BMC interfaces. It is intended to collect
 inventory, attestation, and telemetry from out-of-band management paths without
 depending on an in-band host agent.
 
-The current implementation collects BMC inventory through Redfish using
-`nv-redfish` and can either print inventory locally or send it to the Fleet
-Intelligence backend. Attestation and telemetry crates are present as workspace
-placeholders for the next collector domains.
+The current implementation collects BMC inventory and attestation through
+Redfish using `nv-redfish` and can either print inventory locally or send it to
+the Fleet Intelligence backend. NICo hardware health provides the telemetry
+collection service deployed by the Helm chart.
 
 The collector keeps Fleet Intelligence owned models between the BMC source and
 the output/backend sinks so vendor protocol data does not become the product
@@ -26,7 +26,6 @@ crates/bmc-inventory/src/source/    source trait and nv-redfish source
 crates/bmc-inventory/src/mapper/    Redfish report to FI inventory mapper
 crates/bmc-inventory/src/sink/      table, JSON, and backend sinks
 crates/bmc-attestation/             attestation crate
-crates/bmc-telemetry/               telemetry crate placeholder
 ```
 
 Pipeline:
@@ -80,16 +79,25 @@ certificates.
 
 ## Configuration
 
-The config file lists BMC targets in INI-style sections:
+The collector reads a shared TOML configuration. BMC targets come from
+`endpoint_sources.static_bmc_endpoints`:
 
-```ini
-[node-name]
-address = 10.0.0.10
-username = root
-password = secret
+```toml
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.0.10"
+port = 443
+mac = "00:11:22:33:44:55"
+username = "root"
+password = "secret"
 ```
 
-Each `[section]` is a BMC target with `address`, `username`, and `password`.
+The OOB collector reads the static endpoint fields it needs and ignores
+service-only collector, processor, sink, and metrics settings. The endpoint MAC
+address identifies the BMC and is included in the collected inventory. Static
+endpoints must include a password for OOB inventory and attestation. API
+discovery alone is not sufficient for the OOB collector; the shared file must
+contain at least one static endpoint. The previous INI-style target format is no
+longer accepted.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
@@ -100,9 +108,10 @@ inventory and attestation collection.
 Print inventory locally (for debugging/testing):
 
 ```bash
-cargo run -- inventory --config /path/to/oob.config --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/oob.config --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/oob.config --insecure-tls --detail
+cargo run -- inventory --config /path/to/config.toml --insecure-tls
+target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls
+target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls --detail
+target/debug/bmc-collector inventory --config /path/to/config.toml --mac 00:11:22:33:44:55
 ```
 
 ## Run Agent (Inventory + Attestation)
@@ -110,7 +119,7 @@ target/debug/bmc-collector inventory --config /path/to/oob.config --insecure-tls
 Run continuously and send both inventory and attestation to the backend:
 
 ```bash
-target/debug/bmc-collector run --config /path/to/oob.config --insecure-tls \
+target/debug/bmc-collector run --config /path/to/config.toml --insecure-tls \
   --backend-url http://127.0.0.1:18002 \
   --agent-token "$FLEETINT_AGENT_TOKEN"
 ```
@@ -138,28 +147,22 @@ reaches the agent API.
 then repeats every 24 hours by default. Override the cadence with
 `--interval-seconds`.
 
-The target config file uses INI-style sections:
-
-```ini
-[node-name]
-address=10.0.0.10
-username=root
-password=secret
-```
+See `config.example.toml` for a shared configuration that can be
+mounted into both the OOB collector and NICo hardware-health service.
 
 ## Helm Chart
 
 The chart is published as an OCI artifact at
 `oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector`. Create separate
-Secrets for the backend bootstrap token and BMC target config before installing
-it:
+Secrets for the backend bootstrap token and shared hardware configuration
+before installing it:
 
 ```bash
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
   --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
 
-kubectl create secret generic fleet-intelligence-oob-collector-bmc-config \
-  --from-file=targets.config=/path/to/oob.config
+kubectl create secret generic fleet-intelligence-config \
+  --from-file=config.toml=/path/to/config.toml
 
 kubectl create secret docker-registry ghcr-pull-secret \
   --docker-server=ghcr.io \
@@ -178,8 +181,8 @@ credentials as values, which keeps credentials out of Helm release state. See
 and collector settings. The image pull Secret is only required for a private
 collector image. Validate local chart changes with `make chart-lint`.
 By default, the collector sends data to
-`https://data.fleet-intelligence.nvidia.com`. Set `backendUrl` to use a
-different Fleet Intelligence endpoint.
+`https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
+use a different Fleet Intelligence endpoint.
 By default, the chart version is also used as the collector image tag.
 
 ## Releases

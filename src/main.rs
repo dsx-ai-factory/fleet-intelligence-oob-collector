@@ -37,11 +37,11 @@ struct InventoryArgs {
 
 #[derive(Clone, Debug, Args)]
 struct CollectorArgs {
-    #[arg(short, long, default_value = ".config")]
+    #[arg(short, long, default_value = "config.toml")]
     config: String,
 
     #[arg(long)]
-    target: Option<String>,
+    mac: Option<String>,
 
     #[arg(long)]
     insecure_tls: bool,
@@ -87,7 +87,7 @@ impl CollectorArgs {
     fn into_inventory_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
         InventoryOptions {
             config: self.config,
-            target: self.target,
+            mac: self.mac,
             insecure_tls: self.insecure_tls,
             detail,
             format,

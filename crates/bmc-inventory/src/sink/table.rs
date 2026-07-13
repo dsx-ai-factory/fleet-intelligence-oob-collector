@@ -14,6 +14,7 @@ pub struct TableSink {
 
 #[derive(Debug)]
 struct SummaryRow {
+    mac: String,
     address: String,
     source_type: String,
     redfish_version: String,
@@ -32,6 +33,7 @@ struct SummaryRow {
 #[derive(Debug)]
 struct SourceDetailRow {
     source_type: String,
+    mac: String,
     address: String,
     redfish_version: String,
     service_uuid: String,
@@ -150,6 +152,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
     let mut out = render_table(
         &[
+            "MAC",
             "Address",
             "Source",
             "Redfish",
@@ -179,6 +182,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
 impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
+            mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
             source_type: inventory.source.source_type.clone(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
@@ -201,8 +205,9 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 13] {
+    fn values(&self) -> [String; 14] {
         [
+            self.mac.clone(),
             self.address.clone(),
             self.source_type.clone(),
             self.redfish_version.clone(),
@@ -224,6 +229,7 @@ impl From<&NodeInventory> for SourceDetailRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
             source_type: inventory.source.source_type.clone(),
+            mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
             service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
@@ -236,6 +242,7 @@ impl SourceDetailRow {
     fn values(&self) -> Vec<[String; 2]> {
         vec![
             ["Source".to_string(), self.source_type.clone()],
+            ["MAC".to_string(), self.mac.clone()],
             ["Address".to_string(), self.address.clone()],
             ["Redfish Version".to_string(), self.redfish_version.clone()],
             ["Service UUID".to_string(), self.service_uuid.clone()],
@@ -868,6 +875,7 @@ mod tests {
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
+                mac: "00:11:22:33:44:55".to_string(),
                 address: "10.0.0.1".to_string(),
                 redfish_version: Some("1.15.1".to_string()),
                 service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),

@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html build container-build chart-lint chart-template
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template
 
 test:
 	cargo test --workspace
@@ -8,6 +8,11 @@ build:
 
 container-build:
 	docker build --tag fleet-intelligence-oob-collector:dev .
+
+# NICO_SOURCE points to a local checkout of NVIDIA/infra-controller.
+nico-container-build:
+	docker build --file Dockerfile.nico-hardware-health \
+		--tag nico-hardware-health:dev "$${NICO_SOURCE:?set NICO_SOURCE to the infra-controller checkout}"
 
 chart-lint:
 	helm lint deployments/helm/fleet-intelligence-oob-collector \

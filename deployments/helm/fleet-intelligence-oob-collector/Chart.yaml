@@ -1,6 +1,6 @@
 apiVersion: v2
 name: fleet-intelligence-oob-collector
-description: Fleet Intelligence out-of-band BMC collector
+description: Fleet Intelligence out-of-band collector
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
