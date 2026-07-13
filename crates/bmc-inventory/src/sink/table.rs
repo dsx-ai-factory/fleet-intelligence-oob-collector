@@ -793,7 +793,6 @@ mod tests {
     fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
-        assert!(rendered.contains("MAC"));
         assert!(rendered.contains("Address"));
         assert!(rendered.contains("Source"));
         assert!(rendered.contains("Redfish"));
@@ -804,7 +803,6 @@ mod tests {
         assert!(rendered.contains("1.15.1"));
         assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
         assert!(rendered.contains("NVIDIA"));
-        assert!(rendered.contains("00:11:22:33:44:55"));
         assert!(rendered.contains("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));

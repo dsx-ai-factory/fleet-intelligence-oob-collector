@@ -151,9 +151,6 @@ fn build_attestation_targets(
                 }
             })?;
             Some(attestation_config::Target {
-                // The attestation model retains this diagnostic label for its
-                // existing backend payload; use the endpoint MAC rather than
-                // introducing a separate target name into shared config.
                 name: target.mac,
                 node_uuid: uuid,
                 address: target.address,

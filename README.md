@@ -96,8 +96,7 @@ service-only collector, processor, sink, and metrics settings. The endpoint MAC
 address identifies the BMC and is included in the collected inventory. Static
 endpoints must include a password for OOB inventory and attestation. API
 discovery alone is not sufficient for the OOB collector; the shared file must
-contain at least one static endpoint. The previous INI-style target format is no
-longer accepted.
+contain at least one static endpoint.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between

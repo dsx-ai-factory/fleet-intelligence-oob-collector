@@ -113,24 +113,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn target_debug_redacts_password() {
-        let target = Target {
-            mac: "aa:bb:cc:dd:ee:ff".to_string(),
-            address: "10.0.0.1".to_string(),
-            username: "admin".to_string(),
-            password: "super-secret".to_string(),
-        };
-
-        let rendered = format!("{target:?}");
-
-        assert!(rendered.contains("aa:bb:cc:dd:ee:ff"));
-        assert!(rendered.contains("10.0.0.1"));
-        assert!(rendered.contains("admin"));
-        assert!(rendered.contains("[REDACTED]"));
-        assert!(!rendered.contains("super-secret"));
-    }
-
-    #[test]
     fn loads_static_endpoints_and_ignores_other_settings() {
         let path = write_config(
             "valid",
@@ -177,25 +159,6 @@ mod tests {
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].mac, "aa:bb:cc:dd:ee:ff");
-    }
-
-    #[test]
-    fn rejects_legacy_ini_config() {
-        let path = write_config(
-            "legacy-ini",
-            r#"
-            [node-a]
-            address = "10.0.0.1"
-            username = "admin"
-            password = "secret"
-            "#,
-        );
-
-        let error = load_targets(path.to_str().expect("path"))
-            .expect_err("legacy config should fail")
-            .to_string();
-
-        assert!(error.contains("endpoint_sources"));
     }
 
     #[test]

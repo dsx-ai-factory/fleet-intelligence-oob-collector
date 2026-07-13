@@ -45,7 +45,7 @@ release state. Omit `imagePullSecrets` when the images are public.
 
 The shared TOML must define at least one
 `endpoint_sources.static_bmc_endpoints` entry. The BMC collector does not use
-NICo API endpoint discovery and no longer accepts the legacy INI target format.
+NICo API endpoint discovery.
 
 By default, the collector sends data to
 `https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
