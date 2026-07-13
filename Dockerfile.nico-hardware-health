@@ -17,6 +17,7 @@ RUN apt-get update && \
       build-essential \
       clang \
       cmake \
+      libprotobuf-dev \
       libssl-dev \
       pkg-config \
       protobuf-compiler && \
