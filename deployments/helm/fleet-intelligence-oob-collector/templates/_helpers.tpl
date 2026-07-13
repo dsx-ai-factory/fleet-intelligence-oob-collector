@@ -28,7 +28,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthName" -}}
-{{- printf "%s-nico-hardware-health" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- "nico-hardware-health" }}
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
