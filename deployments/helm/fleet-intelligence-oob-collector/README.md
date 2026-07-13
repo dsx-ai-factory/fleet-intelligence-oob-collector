@@ -68,12 +68,11 @@ helm upgrade --install fleet-intelligence-oob-collector \
   --set nicoHardwareHealth.enabled=false
 ```
 
-The service image defaults to
-`ghcr.io/nvidia/nico-hardware-health:0.0.1-rc.2`. The configuration can use NICo
-API discovery or static BMC endpoints. When using NICo API mTLS, create a Secret
-containing `ca.crt`, `tls.crt`, and `tls.key`, then set
-`nicoHardwareHealth.tlsSecretName`. The files are mounted at
-`/var/run/secrets/spiffe.io`, matching NICo defaults.
+The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
+the chart version. The configuration can use NICo API discovery or static BMC
+endpoints. When using NICo API mTLS, create a Secret containing `ca.crt`,
+`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The files
+are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
 
 The release workflow builds this image from the `infra-controller` `v0.10.7`
 tag configured in `.github/workflows/release.yml`, publishes amd64 and arm64

@@ -26,7 +26,8 @@ nicoHardwareHealth:
   enabled: true
   image:
     repository: ghcr.io/nvidia/nico-hardware-health
-    tag: "0.0.1-rc.2"
+    # Defaults to the chart version when empty.
+    tag: ""
     pullPolicy: IfNotPresent
   # Optional Secret with ca.crt, tls.crt, and tls.key for NICo API mTLS.
   tlsSecretName: ""
