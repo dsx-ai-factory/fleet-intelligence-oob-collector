@@ -27,7 +27,7 @@ enabled = false
 enabled = true
 
 [sinks.otlp]
-enabled = false
+enabled = true
 # From Docker Desktop Kubernetes, use http://host.docker.internal:4317.
 endpoint = "http://localhost:4317"
 include_diagnostics = false
@@ -36,4 +36,4 @@ flush_interval = "2s"
 
 [metrics]
 endpoint = "0.0.0.0:9009"
-prefix = "fleetint_"
+prefix = "fleetint"

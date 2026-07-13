@@ -74,6 +74,6 @@ endpoints. When using NICo API mTLS, create a Secret containing `ca.crt`,
 `tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The files
 are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
 
-The release workflow builds this image from the `infra-controller` `v0.10.7`
+The release workflow builds this image from the `infra-controller` `v2.0.0-rc.5`
 tag configured in `.github/workflows/release.yml`, publishes amd64 and arm64
 images, then publishes the chart only after both collector images are available.
