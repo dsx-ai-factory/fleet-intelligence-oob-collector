@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+
+# Build context: a versioned checkout of NVIDIA/infra-controller. The release
+# workflow supplies VERSION and REVISION from the Fleet Intelligence release.
+FROM --platform=$TARGETPLATFORM rust:1.96.0-slim-bookworm AS builder
+
+ARG VERSION=dev
+ARG REVISION=unknown
+ENV VERSION=$VERSION \
+    CI_COMMIT_SHORT_SHA=$REVISION \
+    CARBIDE_VERSION_AVOID_REBUILD=1 \
+    FORGE_VERSION_AVOID_REBUILD=1
+
+WORKDIR /src
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential \
+      clang \
+      cmake \
+      libprotobuf-dev \
+      libssl-dev \
+      pkg-config \
+      protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/src/target \
+    cargo build --locked --release -p carbide-health --bin forge-hw-health && \
+    cp target/release/forge-hw-health /nico-hardware-health && \
+    strip /nico-hardware-health
+
+FROM debian:12-slim
+
+ARG VERSION=dev
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.title="NICo Hardware Health" \
+      org.opencontainers.image.description="NICo Redfish hardware health collection service" \
+      org.opencontainers.image.source="https://github.com/NVIDIA/infra-controller" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$REVISION" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /nico-hardware-health /opt/nico/nico-hardware-health
+
+USER 65532:65532
+ENTRYPOINT ["/opt/nico/nico-hardware-health"]

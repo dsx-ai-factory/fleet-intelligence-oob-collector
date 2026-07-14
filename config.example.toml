@@ -1,0 +1,39 @@
+# Shared configuration for the Fleet Intelligence OOB collector and hardware
+# health service.
+
+[endpoint_sources.carbide_api]
+enabled = false
+
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.0.10"
+port = 443
+mac = "aa:bb:cc:dd:ee:ff"
+username = "bmc-username"
+password = "bmc-password"
+
+[sinks.health_report]
+enabled = false
+
+[sinks.rack_health_report]
+enabled = false
+
+[sinks.switch_health_report]
+enabled = false
+
+[sinks.power_shelf_health_report]
+enabled = false
+
+[sinks.prometheus]
+enabled = true
+
+[sinks.otlp]
+enabled = true
+# For Docker Desktop Kubernetes, replace `localhost` with `host.docker.internal`.
+endpoint = "http://localhost:4317"
+include_diagnostics = false
+batch_size = 512
+flush_interval = "2s"
+
+[metrics]
+endpoint = "0.0.0.0:9009"
+prefix = "fleetint"

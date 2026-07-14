@@ -1,5 +1,10 @@
-backendUrl: https://data.fleet-intelligence.nvidia.com
-agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
-bmcConfigSecretName: fleet-intelligence-oob-collector-bmc-config-test
+bmcCollector:
+  backendUrl: https://data.fleet-intelligence.nvidia.com
+  agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
+config:
+  secretName: fleet-intelligence-config-test
 imagePullSecrets:
   - name: ghcr-pull-secret-test
+nicoHardwareHealth:
+  enabled: true
+  tlsSecretName: nico-hardware-health-tls-test

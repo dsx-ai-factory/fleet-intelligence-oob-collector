@@ -1,0 +1,18 @@
+{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.nicoHardwareHealthName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nico-hardware-health
+spec:
+  selector:
+    {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nico-hardware-health
+  ports:
+    - name: metrics
+      port: {{ .Values.nicoHardwareHealth.service.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

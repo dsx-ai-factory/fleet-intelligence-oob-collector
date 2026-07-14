@@ -20,6 +20,7 @@ impl InventoryMapper for RedfishMapper {
             Ok(report) => {
                 let source = InventorySourceInfo {
                     source_type: "redfish".to_string(),
+                    mac: target.mac,
                     address: target.address,
                     redfish_version: report.service_root.redfish_version,
                     service_uuid: report.service_root.uuid,
@@ -74,6 +75,7 @@ impl InventoryMapper for RedfishMapper {
                 uuid: None,
                 source: InventorySourceInfo {
                     source_type: "redfish".to_string(),
+                    mac: target.mac,
                     address: target.address,
                     redfish_version: None,
                     service_uuid: None,
@@ -305,6 +307,7 @@ mod tests {
             "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
         );
         assert_eq!(inventory.primary_system_id.as_deref(), Some("System"));
+        assert_eq!(inventory.source.mac, "00:11:22:33:44:55");
         assert_eq!(inventory.systems.len(), 2);
         let system = inventory
             .systems
@@ -506,6 +509,7 @@ mod tests {
         assert_eq!(inventory.schema_version, INVENTORY_SCHEMA_VERSION);
         assert_eq!(inventory.collected_at, collected_at());
         assert_eq!(inventory.source.address, "10.0.0.1");
+        assert_eq!(inventory.source.mac, "00:11:22:33:44:55");
         assert_eq!(
             inventory.target_error.as_deref(),
             Some("systems collection: timeout")
@@ -587,7 +591,7 @@ mod tests {
 
     fn target() -> Target {
         Target {
-            name: "node-a".to_string(),
+            mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             username: "user".to_string(),
             password: "pass".to_string(),

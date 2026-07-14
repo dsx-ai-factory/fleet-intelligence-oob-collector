@@ -49,6 +49,7 @@ fn node_inventory_serializes_as_backend_payload() {
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
+            mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             redfish_version: Some("1.15.1".to_string()),
             service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
@@ -167,6 +168,7 @@ fn node_inventory_serializes_as_backend_payload() {
             }],
             "source": {
                 "sourceType": "redfish",
+                "mac": "00:11:22:33:44:55",
                 "address": "10.0.0.1",
                 "redfishVersion": "1.15.1",
                 "serviceUuid": "870155dd-d474-aca8-11ee-6e809af87c0c",
@@ -247,6 +249,7 @@ fn target_error_inventory_serializes_absent_uuid() {
         uuid: None,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
+            mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             redfish_version: None,
             service_uuid: None,

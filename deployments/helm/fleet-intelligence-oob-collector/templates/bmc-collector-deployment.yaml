@@ -31,7 +31,7 @@ spec:
       containers:
         - name: collector
           image: {{ include "fleet-intelligence-oob-collector.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.bmcCollector.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -41,29 +41,29 @@ spec:
           args:
             - run
             - --config
-            - /etc/fleet-intelligence-oob-collector/targets.config
+            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
             - --interval-seconds
-            - {{ .Values.intervalSeconds | quote }}
-            {{- if .Values.insecureTls }}
+            - {{ .Values.bmcCollector.intervalSeconds | quote }}
+            {{- if .Values.bmcCollector.insecureTls }}
             - --insecure-tls
             {{- end }}
           env:
             - name: FLEETINT_BACKEND_URL
-              value: {{ required "backendUrl is required" .Values.backendUrl | quote }}
+              value: {{ required "bmcCollector.backendUrl is required" .Values.bmcCollector.backendUrl | quote }}
             - name: FLEETINT_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "agentTokenSecretName is required" .Values.agentTokenSecretName | quote }}
+                  name: {{ required "bmcCollector.agentTokenSecretName is required" .Values.bmcCollector.agentTokenSecretName | quote }}
                   key: agent-token
           volumeMounts:
-            - name: target-config
-              mountPath: /etc/fleet-intelligence-oob-collector
+            - name: hardware-config
+              mountPath: /etc/fleet-intelligence
               readOnly: true
       volumes:
-        - name: target-config
+        - name: hardware-config
           secret:
-            secretName: {{ required "bmcConfigSecretName is required" .Values.bmcConfigSecretName | quote }}
+            secretName: {{ required "config.secretName is required" .Values.config.secretName | quote }}
             items:
-              - key: targets.config
-                path: targets.config
+              - key: {{ .Values.config.secretKey | quote }}
+                path: {{ .Values.config.secretKey | quote }}
                 mode: 0440

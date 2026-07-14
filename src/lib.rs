@@ -32,7 +32,6 @@ pub enum InventoryFormat {
 #[derive(Clone, Debug)]
 pub struct InventoryOptions {
     pub config: String,
-    pub target: Option<String>,
     pub insecure_tls: bool,
     pub detail: bool,
     pub format: InventoryFormat,
@@ -144,14 +143,14 @@ fn build_attestation_targets(
         .into_iter()
         .filter_map(|target| {
             let uuid = inventories.iter().find_map(|inv| {
-                if inv.source.address == target.address {
+                if inv.source.mac == target.mac {
                     inv.uuid.as_ref().map(|u| u.to_string())
                 } else {
                     None
                 }
             })?;
             Some(attestation_config::Target {
-                name: target.name,
+                name: target.mac,
                 node_uuid: uuid,
                 address: target.address,
                 username: target.username,
@@ -170,18 +169,18 @@ async fn collect_and_upload_attestation(
     let outcome = match collect_attestation(targets, attestation_settings, endpoints, session.jwt())
         .await
     {
-        Ok(outcome) => outcome,
-        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
-        // and re-run the whole batch with a fresh token before giving up.
-        Err(err) if is_auth_failure(err.as_ref()) => {
-            tracing::info!(
-                error = %err,
-                "backend JWT rejected during nonce collection; enrolling again before retry"
-            );
-            session.reenroll().await?;
-            collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
-        }
-        Err(err) => return Err(err),
+            Ok(outcome) => outcome,
+            // A rejected JWT during nonce collection cannot be retried per target; re-enroll
+            // and re-run the whole batch with a fresh token before giving up.
+            Err(err) if is_auth_failure(err.as_ref()) => {
+                tracing::info!(
+                    error = %err,
+                    "backend JWT rejected during nonce collection; enrolling again before retry"
+                );
+                session.reenroll().await?;
+                collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
+            }
+            Err(err) => return Err(err),
     };
     // Carry any rotated token forward so the upload and subsequent cycles authenticate
     // with the freshest JWT instead of the one we started the cycle with.
@@ -326,13 +325,7 @@ impl Error for UploadError {}
 async fn collect_inventory(
     options: InventoryOptions,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
-    let mut targets = config::load_targets(&options.config)?;
-    if let Some(target_name) = &options.target {
-        targets.retain(|target| target.name == *target_name);
-        if targets.is_empty() {
-            return Err(format!("target {target_name:?} not found").into());
-        }
-    }
+    let targets = config::load_targets(&options.config)?;
 
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let source = RedfishSource::new(options.insecure_tls, timeout)?;
