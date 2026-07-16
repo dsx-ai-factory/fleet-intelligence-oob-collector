@@ -51,6 +51,7 @@ fn node_inventory_serializes_as_backend_payload() {
             source_type: "redfish".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
+            host_name: Some("bmc-a.example.com".to_string()),
             redfish_version: Some("1.15.1".to_string()),
             service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
             vendor: Some("NVIDIA".to_string()),
@@ -170,6 +171,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "sourceType": "redfish",
                 "mac": "00:11:22:33:44:55",
                 "address": "10.0.0.1",
+                "hostName": "bmc-a.example.com",
                 "redfishVersion": "1.15.1",
                 "serviceUuid": "870155dd-d474-aca8-11ee-6e809af87c0c",
                 "vendor": "NVIDIA"
@@ -251,6 +253,7 @@ fn target_error_inventory_serializes_absent_uuid() {
             source_type: "redfish".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
+            host_name: None,
             redfish_version: None,
             service_uuid: None,
             vendor: None,

@@ -877,6 +877,7 @@ mod tests {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: "10.0.0.1".to_string(),
+                host_name: None,
                 redfish_version: Some("1.15.1".to_string()),
                 service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
                 vendor: Some("NVIDIA".to_string()),

@@ -115,7 +115,10 @@ pub async fn collect(
                     }
                 };
                 // The backend may rotate the agent token on a nonce response.
-                let refreshed_jwt = nonce.jwt_assertion.clone().filter(|token| !token.is_empty());
+                let refreshed_jwt = nonce
+                    .jwt_assertion
+                    .clone()
+                    .filter(|token| !token.is_empty());
                 let record = source
                     .collect(
                         target,
@@ -157,7 +160,10 @@ mod tests {
     fn classifies_jwt_rejections_as_auth_failures() {
         for status in [401, 403] {
             let err: Box<dyn Error> = Box::new(BackendHttpError::new(status, "denied"));
-            assert!(is_auth_failure(err.as_ref()), "status {status} should be auth failure");
+            assert!(
+                is_auth_failure(err.as_ref()),
+                "status {status} should be auth failure"
+            );
         }
     }
 

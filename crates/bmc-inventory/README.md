@@ -17,7 +17,8 @@ Target
 ```
 
 `RedfishSource` collects raw-ish Redfish data into source structs. `RedfishMapper`
-normalizes that report into the backend payload shape.
+acts as the processing stage: it enriches source metadata with best-effort
+reverse DNS and normalizes the report into the backend payload shape.
 
 ## Node Identity
 
@@ -34,6 +35,9 @@ normalizes that report into the backend payload shape.
   not used as the node UUID.
 - `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then falls
   back to `Product`.
+- `InventorySourceInfo.hostName` is populated from a best-effort reverse DNS
+  lookup of the configured BMC IP. A missing PTR record, resolver error, or
+  lookup timeout does not fail inventory collection.
 
 The BIOS-based selection is a host-system heuristic. Some BMCs expose auxiliary
 systems, such as BMC, DPU, or baseboard systems, in the same collection as the

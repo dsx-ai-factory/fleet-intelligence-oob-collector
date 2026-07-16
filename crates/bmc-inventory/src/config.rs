@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 #[derive(Clone)]
 pub struct Target {
+    pub ip: IpAddr,
     pub mac: String,
     pub address: String,
     pub username: String,
@@ -100,6 +101,7 @@ impl StaticBmcEndpoint {
         };
 
         Ok(Target {
+            ip: self.ip,
             mac: self.mac,
             address,
             username: self.username,

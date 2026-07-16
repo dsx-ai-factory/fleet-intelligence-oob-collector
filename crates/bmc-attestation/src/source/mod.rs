@@ -596,6 +596,9 @@ mod tests {
             .expect_err("plaintext http should be rejected")
             .to_string();
 
-        assert!(error.contains("must use https://"), "unexpected error: {error}");
+        assert!(
+            error.contains("must use https://"),
+            "unexpected error: {error}"
+        );
     }
 }

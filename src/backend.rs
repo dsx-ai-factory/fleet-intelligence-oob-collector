@@ -34,7 +34,9 @@ impl BackendEndpoints {
             || base_url.ends_with("/v1/agent/enroll")
             || base_url.ends_with("/v1/agent/oob_nodes")
         {
-            return Err("backend URL must be the API base URL without a /v1/agent path suffix".into());
+            return Err(
+                "backend URL must be the API base URL without a /v1/agent path suffix".into(),
+            );
         }
 
         Ok(Self {
@@ -112,7 +114,10 @@ struct Enrollment {
     enrolled_at: String,
 }
 
-async fn enroll_once(enroll_endpoint: &str, agent_token: &str) -> Result<Enrollment, Box<dyn Error>> {
+async fn enroll_once(
+    enroll_endpoint: &str,
+    agent_token: &str,
+) -> Result<Enrollment, Box<dyn Error>> {
     let enroll_endpoint = enroll_endpoint.to_string();
     let agent_token = agent_token.to_string();
     let jwt = tokio::task::spawn_blocking(move || {
@@ -198,10 +203,8 @@ mod tests {
     #[test]
     fn is_auth_failure_detects_jwt_rejection_statuses() {
         let unauthorized: Box<dyn Error> = Box::new(InventoryHttpError::new(401, "expired token"));
-        let forbidden: Box<dyn Error> =
-            Box::new(AttestationHttpError::new(403, "invalid token"));
-        let server_error: Box<dyn Error> =
-            Box::new(InventoryHttpError::new(500, "backend failed"));
+        let forbidden: Box<dyn Error> = Box::new(AttestationHttpError::new(403, "invalid token"));
+        let server_error: Box<dyn Error> = Box::new(InventoryHttpError::new(500, "backend failed"));
 
         assert!(is_auth_failure(unauthorized.as_ref()));
         assert!(is_auth_failure(forbidden.as_ref()));

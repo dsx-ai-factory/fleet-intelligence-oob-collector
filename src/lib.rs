@@ -53,7 +53,8 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
-    let mut session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token).await?;
+    let mut session =
+        BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token).await?;
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
     let attestation_settings = {
@@ -116,7 +117,10 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             ),
         }
 
-        tracing::info!(next_sync_seconds = interval.as_secs(), "sleeping until next cycle");
+        tracing::info!(
+            next_sync_seconds = interval.as_secs(),
+            "sleeping until next cycle"
+        );
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
             signal = tokio::signal::ctrl_c() => {
@@ -166,9 +170,8 @@ async fn collect_and_upload_attestation(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
 ) -> Result<(), Box<dyn Error>> {
-    let outcome = match collect_attestation(targets, attestation_settings, endpoints, session.jwt())
-        .await
-    {
+    let outcome =
+        match collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await {
             Ok(outcome) => outcome,
             // A rejected JWT during nonce collection cannot be retried per target; re-enroll
             // and re-run the whole batch with a fresh token before giving up.
@@ -181,7 +184,7 @@ async fn collect_and_upload_attestation(
                 collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
             }
             Err(err) => return Err(err),
-    };
+        };
     // Carry any rotated token forward so the upload and subsequent cycles authenticate
     // with the freshest JWT instead of the one we started the cycle with.
     if let Some(token) = outcome.refreshed_jwt {
@@ -254,8 +257,12 @@ async fn collect_and_upload_inventory(
     let mut inventory_vec = collect_inventory(options).await?;
     stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
     let inventories = Arc::new(inventory_vec);
-    match upload_inventory(endpoint.clone(), session.jwt().to_string(), Arc::clone(&inventories))
-        .await
+    match upload_inventory(
+        endpoint.clone(),
+        session.jwt().to_string(),
+        Arc::clone(&inventories),
+    )
+    .await
     {
         Ok(()) => Ok(inventories),
         Err(UploadError::AuthFailure(message)) => {
@@ -266,13 +273,17 @@ async fn collect_and_upload_inventory(
             // Re-enroll refreshes both the JWT and enrolled_at; re-stamp the nodes
             // so the retry carries the updated enrollment timestamp.
             session.reenroll().await?;
-            let mut inventory_vec = Arc::try_unwrap(inventories)
-                .expect("upload task released its inventory reference");
+            let mut inventory_vec =
+                Arc::try_unwrap(inventories).expect("upload task released its inventory reference");
             stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
             let inventories = Arc::new(inventory_vec);
-            upload_inventory(endpoint, session.jwt().to_string(), Arc::clone(&inventories))
-                .await
-                .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
+            upload_inventory(
+                endpoint,
+                session.jwt().to_string(),
+                Arc::clone(&inventories),
+            )
+            .await
+            .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
             Ok(inventories)
         }
         Err(err) => Err(err.to_string().into()),
@@ -329,13 +340,13 @@ async fn collect_inventory(
 
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let source = RedfishSource::new(options.insecure_tls, timeout)?;
-    let mapper = RedfishMapper;
+    let mapper = RedfishMapper::new();
     let concurrency = options.concurrency.max(1);
 
     Ok(stream::iter(targets)
         .map(|target| async {
             let record = source.collect(target).await;
-            mapper.map(record)
+            mapper.map(record).await
         })
         .buffered(concurrency)
         .collect()
