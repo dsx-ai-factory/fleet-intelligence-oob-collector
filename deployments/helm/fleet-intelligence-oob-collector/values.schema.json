@@ -27,7 +27,7 @@
     "bmcCollector": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["image", "backendUrl", "agentTokenSecretName", "intervalSeconds", "insecureTls"],
+      "required": ["image", "backendUrl", "agentTokenSecretName", "proxy", "intervalSeconds", "insecureTls"],
       "properties": {
         "image": {
           "type": "object",
@@ -41,6 +41,17 @@
         },
         "backendUrl": { "type": "string", "minLength": 1 },
         "agentTokenSecretName": { "type": "string", "minLength": 1 },
+        "proxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["httpProxy", "httpsProxy", "allProxy", "noProxy"],
+          "properties": {
+            "httpProxy": { "type": "string" },
+            "httpsProxy": { "type": "string" },
+            "allProxy": { "type": "string" },
+            "noProxy": { "type": "string" }
+          }
+        },
         "intervalSeconds": { "type": "integer", "minimum": 1 },
         "insecureTls": { "type": "boolean" }
       }

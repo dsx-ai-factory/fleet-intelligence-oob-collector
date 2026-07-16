@@ -102,6 +102,30 @@ Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
 inventory and attestation collection.
 
+### Proxy support
+
+The collector honors the standard proxy environment variables for Redfish and
+Fleet Intelligence backend requests:
+
+- `HTTP_PROXY` / `http_proxy` for HTTP destinations.
+- `HTTPS_PROXY` / `https_proxy` for HTTPS destinations.
+- `ALL_PROXY` / `all_proxy` as the fallback for either scheme.
+- `NO_PROXY` / `no_proxy` for destinations that must connect directly.
+
+HTTP, HTTPS, SOCKS4, and SOCKS5 proxy URLs are supported. Use `socks5h://` when
+DNS resolution must happen through the proxy. For example, a local inventory
+run through a Teleport SOCKS tunnel can use:
+
+```bash
+HTTPS_PROXY=socks5h://127.0.0.1:8888 \
+  target/debug/bmc-collector inventory \
+  --config /path/to/config.toml \
+  --insecure-tls
+```
+
+Proxy credentials should be supplied through environment variables or a
+Kubernetes Secret and must not be stored in the collector TOML.
+
 ## Run Inventory Collection
 
 Print inventory locally (for debugging/testing):

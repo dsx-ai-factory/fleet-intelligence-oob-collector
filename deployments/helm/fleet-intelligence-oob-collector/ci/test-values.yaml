@@ -1,6 +1,11 @@
 bmcCollector:
   backendUrl: https://data.fleet-intelligence.nvidia.com
   agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
+  proxy:
+    httpProxy: http://proxy.test.example:3128
+    httpsProxy: http://proxy.test.example:3128
+    allProxy: ""
+    noProxy: localhost,127.0.0.1,.svc,.cluster.local
 config:
   secretName: fleet-intelligence-config-test
 imagePullSecrets:

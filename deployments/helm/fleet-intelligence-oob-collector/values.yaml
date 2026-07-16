@@ -17,6 +17,12 @@ bmcCollector:
   backendUrl: https://data.fleet-intelligence.nvidia.com
   # Secret containing the `agent-token` key.
   agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
+  # Optional plain proxy settings rendered as container environment variables.
+  proxy:
+    httpProxy: ""
+    httpsProxy: ""
+    allProxy: ""
+    noProxy: ""
   intervalSeconds: 86400
   insecureTls: false
 

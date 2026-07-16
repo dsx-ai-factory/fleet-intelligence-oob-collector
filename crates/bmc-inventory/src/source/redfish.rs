@@ -19,6 +19,8 @@ use crate::config::Target;
 
 type RedfishBmc = HttpBmc<nv_redfish::bmc_http::reqwest::Client>;
 
+const MAX_REDIRECTS: usize = 3;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PcieTraversalPolicy {
     All,
@@ -42,7 +44,10 @@ impl RedfishSource {
                 .timeout(request_timeout)
                 .connect_timeout(connect_timeout)
                 .accept_invalid_certs(insecure_tls)
-                .max_redirects(0),
+                // Some BMCs canonicalize the service root (for example,
+                // /redfish/v1 -> /redfish/v1/). Keep redirects bounded while
+                // allowing those standards-compatible endpoints to work.
+                .max_redirects(MAX_REDIRECTS),
         )?;
         Ok(Self { client })
     }

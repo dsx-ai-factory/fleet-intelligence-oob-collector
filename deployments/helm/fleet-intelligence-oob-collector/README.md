@@ -47,6 +47,27 @@ The shared TOML must define at least one
 `endpoint_sources.static_bmc_endpoints` entry. The BMC collector does not use
 NICo API endpoint discovery.
 
+## Proxy configuration
+
+The collector honors `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`
+(including their lowercase forms). HTTP, HTTPS, and SOCKS proxy URLs are
+supported. Configure a plain, cluster-reachable proxy directly in Helm values:
+
+```yaml
+bmcCollector:
+  proxy:
+    httpProxy: http://proxy.example.internal:3128
+    httpsProxy: http://proxy.example.internal:3128
+    allProxy: ""
+    noProxy: localhost,127.0.0.1,.svc,.cluster.local
+```
+
+A Teleport SOCKS tunnel listening on a developer workstation is suitable for
+local collector runs, but Kubernetes cannot use `127.0.0.1` on that workstation.
+The cluster deployment requires a cluster-reachable proxy or a proxy sidecar.
+Authenticated proxy URLs are not supported by the chart yet and must not be
+committed to values files.
+
 By default, the collector sends data to
 `https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
 use a different Fleet Intelligence endpoint.
