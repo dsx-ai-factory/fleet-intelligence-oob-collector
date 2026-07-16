@@ -55,6 +55,22 @@ spec:
                 secretKeyRef:
                   name: {{ required "bmcCollector.agentTokenSecretName is required" .Values.bmcCollector.agentTokenSecretName | quote }}
                   key: agent-token
+            {{- with .Values.bmcCollector.proxy.httpProxy }}
+            - name: HTTP_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.bmcCollector.proxy.httpsProxy }}
+            - name: HTTPS_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.bmcCollector.proxy.allProxy }}
+            - name: ALL_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.bmcCollector.proxy.noProxy }}
+            - name: NO_PROXY
+              value: {{ . | quote }}
+            {{- end }}
           volumeMounts:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence

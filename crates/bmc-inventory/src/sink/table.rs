@@ -669,6 +669,19 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         &["Service", "ID", "Name", "Version", "Release Date"],
         firmware_rows,
     ));
+
+    let domain_error_rows = inventory.domain_errors.iter().map(|error| {
+        [
+            error.domain.clone(),
+            error.resource.clone().unwrap_or_default(),
+            error.message.clone(),
+        ]
+    });
+    out.push_str("Domain Errors\n");
+    out.push_str(&render_table(
+        &["Domain", "Resource", "Message"],
+        domain_error_rows,
+    ));
 }
 
 fn format_cpu(system: &SystemInventory) -> String {
@@ -724,8 +737,8 @@ fn write_row<T: fmt::Display>(out: &mut String, values: &[T], widths: &[usize]) 
 mod tests {
     use super::*;
     use crate::models::{
-        INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, ManagerInventory,
-        PcieDeviceInventory, SystemInventory,
+        DomainError, INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid,
+        ManagerInventory, PcieDeviceInventory, SystemInventory,
     };
 
     #[test]
@@ -810,7 +823,13 @@ mod tests {
 
     #[test]
     fn render_inventory_tables_includes_node_chassis_and_firmware_details() {
-        let rendered = render_inventory_tables(&[full_inventory()], true);
+        let mut inventory = full_inventory();
+        inventory.domain_errors.push(DomainError {
+            domain: "managers".to_string(),
+            resource: Some("/redfish/v1/Managers".to_string()),
+            message: "unexpected status 404".to_string(),
+        });
+        let rendered = render_inventory_tables(&[inventory], true);
 
         assert!(rendered.contains("Node: 10.0.0.1"));
         assert!(rendered.contains("Source Information\n"));
@@ -836,6 +855,8 @@ mod tests {
         assert!(rendered.contains("| GPU1"));
         assert!(rendered.contains("Firmware\n"));
         assert!(rendered.contains("| FirmwareInventory | BMC"));
+        assert!(rendered.contains("Domain Errors\n"));
+        assert!(rendered.contains("| managers | /redfish/v1/Managers | unexpected status 404 |"));
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
@@ -844,12 +865,14 @@ mod tests {
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
+        let domain_errors = rendered.find("Domain Errors\n").expect("domain errors");
         assert!(source < manager);
         assert!(manager < system);
         assert!(system < processor);
         assert!(processor < chassis);
         assert!(chassis < pcie);
         assert!(pcie < firmware);
+        assert!(firmware < domain_errors);
     }
 
     #[test]
