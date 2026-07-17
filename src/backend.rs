@@ -132,14 +132,15 @@ async fn enroll_once(
     })
 }
 
-/// Whether a backend error represents a JWT rejection (HTTP 401/403) from either
-/// the inventory or attestation upload path, i.e. a signal to re-enroll.
+/// Whether a backend error represents a JWT rejection from either the inventory
+/// or attestation upload path. A generic 403 may be emitted by an ingress or WAF
+/// and must not be treated as proof that the JWT is invalid.
 pub fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
     if let Some(err) = err.downcast_ref::<InventoryHttpError>() {
-        return matches!(err.status(), 401 | 403);
+        return err.status() == 401;
     }
     if let Some(err) = err.downcast_ref::<AttestationHttpError>() {
-        return matches!(err.status(), 401 | 403);
+        return err.status() == 401;
     }
     false
 }
@@ -201,13 +202,13 @@ mod tests {
     }
 
     #[test]
-    fn is_auth_failure_detects_jwt_rejection_statuses() {
+    fn is_auth_failure_only_treats_unauthorized_as_jwt_rejection() {
         let unauthorized: Box<dyn Error> = Box::new(InventoryHttpError::new(401, "expired token"));
         let forbidden: Box<dyn Error> = Box::new(AttestationHttpError::new(403, "invalid token"));
         let server_error: Box<dyn Error> = Box::new(InventoryHttpError::new(500, "backend failed"));
 
         assert!(is_auth_failure(unauthorized.as_ref()));
-        assert!(is_auth_failure(forbidden.as_ref()));
+        assert!(!is_auth_failure(forbidden.as_ref()));
         assert!(!is_auth_failure(server_error.as_ref()));
     }
 }

@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
-        .with_target(false)
+        .with_target(true)
         .compact()
         .init();
 

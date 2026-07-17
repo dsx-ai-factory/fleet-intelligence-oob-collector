@@ -9,6 +9,7 @@ use super::InventorySink;
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
+const MAX_ERROR_BODY_PREVIEW_CHARS: usize = 1024;
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -98,8 +99,19 @@ impl HttpBackendClient {
         let client = backend_http_client(request_timeout)?;
         let response = backend_request(&client, reqwest::Method::POST, endpoint)
             .bearer_auth(agent_token)
-            .send()?
-            .error_for_status()?;
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            let server = response_header(&response, reqwest::header::SERVER.as_str());
+            let request_id = response_header(&response, "x-request-id");
+            let body = response.text().unwrap_or_default();
+            return Err(Box::new(BackendHttpError::with_metadata(
+                status.as_u16(),
+                body,
+                server,
+                request_id,
+            )));
+        }
         let response: EnrollResponse = response.json()?;
 
         if response.jwt_assertion.trim().is_empty() {
@@ -131,6 +143,14 @@ fn backend_request(
         .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
 }
 
+fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
 impl BackendClient for HttpBackendClient {
     fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
@@ -139,8 +159,15 @@ impl BackendClient for HttpBackendClient {
             .send()?;
         let status = response.status();
         if !status.is_success() {
+            let server = response_header(&response, reqwest::header::SERVER.as_str());
+            let request_id = response_header(&response, "x-request-id");
             let body = response.text().unwrap_or_default();
-            return Err(Box::new(BackendHttpError::new(status.as_u16(), body)));
+            return Err(Box::new(BackendHttpError::with_metadata(
+                status.as_u16(),
+                body,
+                server,
+                request_id,
+            )));
         }
 
         let response: BatchUpsertResponse = response.json()?;
@@ -161,14 +188,45 @@ impl BackendClient for HttpBackendClient {
 #[derive(Debug)]
 pub struct BackendHttpError {
     status: u16,
-    body: String,
+    server: Option<String>,
+    request_id: Option<String>,
+    response_bytes: usize,
+    body_preview: String,
+    body_truncated: bool,
 }
 
 impl BackendHttpError {
     pub fn new(status: u16, body: impl Into<String>) -> Self {
+        Self::with_metadata(status, body, None, None)
+    }
+
+    pub fn with_metadata(
+        status: u16,
+        body: impl Into<String>,
+        server: Option<String>,
+        request_id: Option<String>,
+    ) -> Self {
+        let body = body.into();
+        let response_bytes = body.len();
+        let body_truncated = body.chars().count() > MAX_ERROR_BODY_PREVIEW_CHARS;
+        let body_preview = body
+            .chars()
+            .take(MAX_ERROR_BODY_PREVIEW_CHARS)
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect();
         Self {
             status,
-            body: body.into(),
+            server,
+            request_id,
+            response_bytes,
+            body_preview,
+            body_truncated,
         }
     }
 
@@ -179,15 +237,21 @@ impl BackendHttpError {
 
 impl fmt::Display for BackendHttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.body.trim().is_empty() {
-            write!(f, "backend request failed with HTTP {}", self.status)
-        } else {
-            write!(
-                f,
-                "backend request failed with HTTP {}: {}",
-                self.status, self.body
-            )
+        write!(f, "backend request failed http_status={}", self.status)?;
+        if let Some(server) = &self.server {
+            write!(f, " server={server:?}")?;
         }
+        if let Some(request_id) = &self.request_id {
+            write!(f, " request_id={request_id:?}")?;
+        }
+        write!(f, " response_bytes={}", self.response_bytes)?;
+        if !self.body_preview.trim().is_empty() {
+            write!(f, " response_body={:?}", self.body_preview)?;
+        }
+        if self.body_truncated {
+            write!(f, " response_body_truncated=true")?;
+        }
+        Ok(())
     }
 }
 
@@ -315,6 +379,29 @@ mod tests {
         };
 
         assert!(err.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn backend_error_bounds_body_and_includes_response_metadata() {
+        let body = format!(
+            "first line\n{}",
+            "x".repeat(MAX_ERROR_BODY_PREVIEW_CHARS + 1)
+        );
+        let error = BackendHttpError::with_metadata(
+            403,
+            body.clone(),
+            Some("awselb/2.0".to_string()),
+            Some("request-123".to_string()),
+        );
+        let message = error.to_string();
+
+        assert!(message.contains("http_status=403"));
+        assert!(message.contains("server=\"awselb/2.0\""));
+        assert!(message.contains("request_id=\"request-123\""));
+        assert!(message.contains(&format!("response_bytes={}", body.len())));
+        assert!(message.contains("response_body=\"first line "));
+        assert!(message.contains("response_body_truncated=true"));
+        assert!(!message.contains('\n'));
     }
 
     #[derive(Clone)]

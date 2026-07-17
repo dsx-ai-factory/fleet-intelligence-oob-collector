@@ -83,29 +83,34 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
                 );
 
                 // Phase 2: Collect and upload attestation for nodes with discovered UUIDs only when inventory succeeds
-                let attestation_targets =
-                    build_attestation_targets(&options.inventory, &inventories);
-                if attestation_targets.is_empty() {
-                    tracing::warn!("no nodes with discovered UUID; skipping attestation");
-                } else {
-                    match collect_and_upload_attestation(
-                        &attestation_targets,
-                        &attestation_settings,
-                        &endpoints,
-                        &mut session,
-                    )
-                    .await
-                    {
-                        Ok(()) => tracing::info!(
-                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                            node_count = attestation_targets.len(),
-                            "attestation backend sync completed"
-                        ),
-                        Err(err) => tracing::error!(
-                            elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                            error = %err,
-                            "attestation backend sync failed"
-                        ),
+                match build_attestation_targets(&options.inventory, &inventories) {
+                    Err(err) => tracing::error!(
+                        error = %err,
+                        "failed to load targets for attestation; skipping attestation"
+                    ),
+                    Ok(attestation_targets) if attestation_targets.is_empty() => {
+                        tracing::warn!("no nodes with discovered UUID; skipping attestation");
+                    }
+                    Ok(attestation_targets) => {
+                        match collect_and_upload_attestation(
+                            &attestation_targets,
+                            &attestation_settings,
+                            &endpoints,
+                            &mut session,
+                        )
+                        .await
+                        {
+                            Ok(()) => tracing::info!(
+                                elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                                node_count = attestation_targets.len(),
+                                "attestation backend sync completed"
+                            ),
+                            Err(err) => tracing::error!(
+                                elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                                error = %err,
+                                "attestation backend sync failed"
+                            ),
+                        }
                     }
                 }
             }
@@ -137,13 +142,10 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
 fn build_attestation_targets(
     options: &InventoryOptions,
     inventories: &[NodeInventory],
-) -> Vec<attestation_config::Target> {
-    let targets = match config::load_targets(&options.config) {
-        Ok(targets) => targets,
-        Err(_) => return Vec::new(),
-    };
+) -> Result<Vec<attestation_config::Target>, Box<dyn Error>> {
+    let targets = config::load_targets(&options.config)?;
 
-    targets
+    Ok(targets
         .into_iter()
         .filter_map(|target| {
             let uuid = inventories.iter().find_map(|inv| {
@@ -161,7 +163,7 @@ fn build_attestation_targets(
                 password: target.password,
             })
         })
-        .collect()
+        .collect())
 }
 
 async fn collect_and_upload_attestation(
@@ -176,7 +178,7 @@ async fn collect_and_upload_attestation(
             // A rejected JWT during nonce collection cannot be retried per target; re-enroll
             // and re-run the whole batch with a fresh token before giving up.
             Err(err) if is_auth_failure(err.as_ref()) => {
-                tracing::info!(
+                tracing::warn!(
                     error = %err,
                     "backend JWT rejected during nonce collection; enrolling again before retry"
                 );
@@ -185,6 +187,26 @@ async fn collect_and_upload_attestation(
             }
             Err(err) => return Err(err),
         };
+    let summary = summarize_attestation_collection(&outcome.batch);
+    if summary.failed > 0 || summary.component_errors > 0 {
+        tracing::warn!(
+            node_count = summary.total,
+            successful_count = summary.successful,
+            failed_count = summary.failed,
+            evidence_count = summary.evidences,
+            component_error_count = summary.component_errors,
+            "attestation collection completed with failures"
+        );
+    } else {
+        tracing::info!(
+            node_count = summary.total,
+            successful_count = summary.successful,
+            failed_count = summary.failed,
+            evidence_count = summary.evidences,
+            component_error_count = summary.component_errors,
+            "attestation collection completed"
+        );
+    }
     // Carry any rotated token forward so the upload and subsequent cycles authenticate
     // with the freshest JWT instead of the one we started the cycle with.
     if let Some(token) = outcome.refreshed_jwt {
@@ -195,7 +217,7 @@ async fn collect_and_upload_attestation(
     match upload_attestation(endpoints, session.jwt(), &outcome.batch, timeout).await {
         Ok(()) => Ok(()),
         Err(err) if is_auth_failure(err.as_ref()) => {
-            tracing::info!(
+            tracing::warn!(
                 error = %err,
                 "backend JWT rejected on attestation upload; enrolling again before retry"
             );
@@ -255,6 +277,24 @@ async fn collect_and_upload_inventory(
     session: &mut BackendSession,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
     let mut inventory_vec = collect_inventory(options).await?;
+    let summary = summarize_inventory_collection(&inventory_vec);
+    if summary.partial > 0 || summary.failed > 0 {
+        tracing::warn!(
+            target_count = summary.total,
+            successful_count = summary.successful,
+            partial_count = summary.partial,
+            failed_count = summary.failed,
+            "inventory collection completed with partial or failed targets"
+        );
+    } else {
+        tracing::info!(
+            target_count = summary.total,
+            successful_count = summary.successful,
+            partial_count = summary.partial,
+            failed_count = summary.failed,
+            "inventory collection completed"
+        );
+    }
     stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
     let inventories = Arc::new(inventory_vec);
     match upload_inventory(
@@ -266,7 +306,7 @@ async fn collect_and_upload_inventory(
     {
         Ok(()) => Ok(inventories),
         Err(UploadError::AuthFailure(message)) => {
-            tracing::info!(
+            tracing::warn!(
                 error = %message,
                 "backend JWT rejected; enrolling again before retry"
             );
@@ -287,6 +327,63 @@ async fn collect_and_upload_inventory(
             Ok(inventories)
         }
         Err(err) => Err(err.to_string().into()),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct InventoryCollectionSummary {
+    total: usize,
+    successful: usize,
+    partial: usize,
+    failed: usize,
+}
+
+fn summarize_inventory_collection(inventories: &[NodeInventory]) -> InventoryCollectionSummary {
+    let failed = inventories
+        .iter()
+        .filter(|inventory| inventory.target_error.is_some())
+        .count();
+    let partial = inventories
+        .iter()
+        .filter(|inventory| inventory.target_error.is_none() && !inventory.domain_errors.is_empty())
+        .count();
+    InventoryCollectionSummary {
+        total: inventories.len(),
+        successful: inventories.len().saturating_sub(failed + partial),
+        partial,
+        failed,
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct AttestationCollectionSummary {
+    total: usize,
+    successful: usize,
+    failed: usize,
+    evidences: usize,
+    component_errors: usize,
+}
+
+fn summarize_attestation_collection(batch: &BatchAttestation) -> AttestationCollectionSummary {
+    let successful = batch
+        .results_by_node_uuid
+        .values()
+        .filter(|attestation| attestation.success)
+        .count();
+    AttestationCollectionSummary {
+        total: batch.results_by_node_uuid.len(),
+        successful,
+        failed: batch.results_by_node_uuid.len().saturating_sub(successful),
+        evidences: batch
+            .results_by_node_uuid
+            .values()
+            .map(|attestation| attestation.evidences.len())
+            .sum(),
+        component_errors: batch
+            .results_by_node_uuid
+            .values()
+            .map(|attestation| attestation.component_errors.len())
+            .sum(),
     }
 }
 
@@ -351,4 +448,119 @@ async fn collect_inventory(
         .buffered(concurrency)
         .collect()
         .await)
+}
+
+#[cfg(test)]
+mod tests {
+    use bmc_attestation::models::{AttestationEvidence, ComponentError, NodeAttestation};
+    use bmc_inventory::models::{DomainError, InventorySourceInfo};
+
+    use super::*;
+
+    #[test]
+    fn inventory_summary_distinguishes_success_partial_and_failure() {
+        let successful = inventory("10.0.0.1");
+        let mut partial = inventory("10.0.0.2");
+        partial.domain_errors.push(DomainError {
+            domain: "firmware".to_string(),
+            resource: None,
+            message: "not supported".to_string(),
+        });
+        let mut failed = inventory("10.0.0.3");
+        failed.target_error = Some("connection refused".to_string());
+
+        assert_eq!(
+            summarize_inventory_collection(&[successful, partial, failed]),
+            InventoryCollectionSummary {
+                total: 3,
+                successful: 1,
+                partial: 1,
+                failed: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn attestation_summary_counts_results_evidence_and_component_errors() {
+        let successful = NodeAttestation {
+            node_uuid: "node-1".to_string(),
+            target_name: "target-1".to_string(),
+            bmc_address: "10.0.0.1".to_string(),
+            success: true,
+            error_message: None,
+            nonce_refresh_timestamp: None,
+            evidences: vec![AttestationEvidence {
+                component_id: "GPU_0".to_string(),
+                arch: None,
+                vbios_version: None,
+                nonce: "secret-nonce".to_string(),
+                evidence: "evidence".to_string(),
+                certificate: "certificate".to_string(),
+                version: None,
+            }],
+            component_errors: vec![],
+        };
+        let mut failed = NodeAttestation::failed(
+            "node-2".to_string(),
+            "target-2".to_string(),
+            "10.0.0.2".to_string(),
+            "unsupported",
+        );
+        failed.component_errors.push(ComponentError {
+            component_id: Some("GPU_0".to_string()),
+            message: "unsupported".to_string(),
+        });
+        let batch =
+            BatchAttestation::new("2026-01-01T00:00:00Z".to_string(), vec![successful, failed]);
+
+        assert_eq!(
+            summarize_attestation_collection(&batch),
+            AttestationCollectionSummary {
+                total: 2,
+                successful: 1,
+                failed: 1,
+                evidences: 1,
+                component_errors: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn build_attestation_targets_surfaces_config_errors() {
+        let options = InventoryOptions {
+            config: "/definitely/missing/oob-config.toml".to_string(),
+            insecure_tls: false,
+            detail: false,
+            format: InventoryFormat::Json,
+            concurrency: 1,
+            timeout_seconds: 1,
+        };
+
+        assert!(build_attestation_targets(&options, &[]).is_err());
+    }
+
+    fn inventory(address: &str) -> NodeInventory {
+        NodeInventory {
+            schema_version: bmc_inventory::models::INVENTORY_SCHEMA_VERSION.to_string(),
+            collected_at: "2026-01-01T00:00:00Z".to_string(),
+            enrolled_at: None,
+            uuid: None,
+            source: InventorySourceInfo {
+                source_type: "redfish".to_string(),
+                mac: "00:11:22:33:44:55".to_string(),
+                address: address.to_string(),
+                host_name: None,
+                redfish_version: None,
+                service_uuid: None,
+                vendor: None,
+            },
+            primary_system_id: None,
+            managers: vec![],
+            systems: vec![],
+            chassis: vec![],
+            firmware: vec![],
+            domain_errors: vec![],
+            target_error: None,
+        }
+    }
 }
