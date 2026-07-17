@@ -8,7 +8,7 @@ use url::Url;
 use crate::models::BatchAttestation;
 
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
-const MAX_ERROR_BODY_PREVIEW_CHARS: usize = 1024;
+const MAX_ERROR_BODY_PREVIEW_BYTES: usize = 1024;
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -164,10 +164,12 @@ impl BackendClient for HttpBackendClient {
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
+            let content_length = response.content_length();
+            let body = read_bounded_response_body(response).await;
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
+                content_length,
                 server,
                 request_id,
             )));
@@ -217,14 +219,6 @@ impl BackendClient for HttpBackendClient {
             request_bytes = body.len(),
             "attestation request prepared"
         );
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            let mut redacted_request = serde_json::to_value(&request)?;
-            redact_json_field(&mut redacted_request, "nonce");
-            tracing::debug!(
-                request = %serde_json::to_string_pretty(&redacted_request)?,
-                "attestation request body"
-            );
-        }
         let response = self
             .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
@@ -236,10 +230,12 @@ impl BackendClient for HttpBackendClient {
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
+            let content_length = response.content_length();
+            let body = read_bounded_response_body(response).await;
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
+                content_length,
                 server,
                 request_id,
             )));
@@ -256,23 +252,57 @@ fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn redact_json_field(value: &mut serde_json::Value, field_name: &str) {
-    match value {
-        serde_json::Value::Object(object) => {
-            for (name, value) in object {
-                if name == field_name {
-                    *value = serde_json::Value::String("<redacted>".to_string());
-                } else {
-                    redact_json_field(value, field_name);
+#[derive(Debug)]
+struct BoundedBodyPreview {
+    body: String,
+    preview_bytes: usize,
+    truncated: bool,
+}
+
+async fn read_bounded_response_body(mut response: reqwest::Response) -> BoundedBodyPreview {
+    let mut bytes = Vec::with_capacity(MAX_ERROR_BODY_PREVIEW_BYTES + 1);
+    let mut truncated = false;
+
+    while bytes.len() <= MAX_ERROR_BODY_PREVIEW_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = MAX_ERROR_BODY_PREVIEW_BYTES + 1 - bytes.len();
+                let consumed = chunk.len().min(remaining);
+                bytes.extend_from_slice(&chunk[..consumed]);
+                if consumed < chunk.len() || bytes.len() > MAX_ERROR_BODY_PREVIEW_BYTES {
+                    truncated = true;
+                    break;
                 }
             }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                redact_json_field(value, field_name);
+            Ok(None) => break,
+            Err(_) => {
+                truncated = true;
+                break;
             }
         }
-        _ => {}
+    }
+
+    bounded_body_preview(bytes, truncated)
+}
+
+fn bounded_body_preview(mut bytes: Vec<u8>, truncated: bool) -> BoundedBodyPreview {
+    let truncated = truncated || bytes.len() > MAX_ERROR_BODY_PREVIEW_BYTES;
+    bytes.truncate(MAX_ERROR_BODY_PREVIEW_BYTES);
+    let preview_bytes = bytes.len();
+    let body = String::from_utf8_lossy(&bytes)
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    BoundedBodyPreview {
+        body,
+        preview_bytes,
+        truncated,
     }
 }
 
@@ -283,43 +313,40 @@ pub struct BackendHttpError {
     status: u16,
     server: Option<String>,
     request_id: Option<String>,
-    response_bytes: usize,
+    response_content_length: Option<u64>,
+    response_preview_bytes: usize,
     body_preview: String,
     body_truncated: bool,
 }
 
 impl BackendHttpError {
     pub fn new(status: u16, body: impl Into<String>) -> Self {
-        Self::with_metadata(status, body, None, None)
+        let body = body.into();
+        let content_length = body.len() as u64;
+        Self::with_metadata(
+            status,
+            bounded_body_preview(body.into_bytes(), false),
+            Some(content_length),
+            None,
+            None,
+        )
     }
 
-    pub fn with_metadata(
+    fn with_metadata(
         status: u16,
-        body: impl Into<String>,
+        body: BoundedBodyPreview,
+        response_content_length: Option<u64>,
         server: Option<String>,
         request_id: Option<String>,
     ) -> Self {
-        let body = body.into();
-        let response_bytes = body.len();
-        let body_truncated = body.chars().count() > MAX_ERROR_BODY_PREVIEW_CHARS;
-        let body_preview = body
-            .chars()
-            .take(MAX_ERROR_BODY_PREVIEW_CHARS)
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect();
         Self {
             status,
             server,
             request_id,
-            response_bytes,
-            body_preview,
-            body_truncated,
+            response_content_length,
+            response_preview_bytes: body.preview_bytes,
+            body_preview: body.body,
+            body_truncated: body.truncated,
         }
     }
 
@@ -337,7 +364,10 @@ impl fmt::Display for BackendHttpError {
         if let Some(request_id) = &self.request_id {
             write!(f, " request_id={request_id:?}")?;
         }
-        write!(f, " response_bytes={}", self.response_bytes)?;
+        if let Some(content_length) = self.response_content_length {
+            write!(f, " response_content_length={content_length}")?;
+        }
+        write!(f, " response_preview_bytes={}", self.response_preview_bytes)?;
         if !self.body_preview.trim().is_empty() {
             write!(f, " response_body={:?}", self.body_preview)?;
         }
@@ -404,11 +434,12 @@ mod tests {
     fn backend_error_bounds_body_and_includes_response_metadata() {
         let body = format!(
             "first line\n{}",
-            "x".repeat(MAX_ERROR_BODY_PREVIEW_CHARS + 1)
+            "x".repeat(MAX_ERROR_BODY_PREVIEW_BYTES + 1)
         );
         let error = BackendHttpError::with_metadata(
             403,
-            body.clone(),
+            bounded_body_preview(body.clone().into_bytes(), false),
+            Some(body.len() as u64),
             Some("awselb/2.0".to_string()),
             Some("request-123".to_string()),
         );
@@ -417,40 +448,21 @@ mod tests {
         assert!(message.contains("http_status=403"));
         assert!(message.contains("server=\"awselb/2.0\""));
         assert!(message.contains("request_id=\"request-123\""));
-        assert!(message.contains(&format!("response_bytes={}", body.len())));
+        assert!(message.contains(&format!("response_content_length={}", body.len())));
+        assert!(message.contains(&format!(
+            "response_preview_bytes={MAX_ERROR_BODY_PREVIEW_BYTES}"
+        )));
         assert!(message.contains("response_body=\"first line "));
         assert!(message.contains("response_body_truncated=true"));
         assert!(!message.contains('\n'));
     }
 
     #[test]
-    fn redacts_nonce_fields_without_removing_attestation_evidence() {
-        let mut request = serde_json::json!({
-            "attestations": {
-                "node-1": {
-                    "evidences": [{
-                        "nonce": "secret-nonce",
-                        "evidence": "signed-evidence",
-                        "certificate": "device-certificate"
-                    }]
-                }
-            }
-        });
+    fn bounded_body_preview_stores_at_most_the_configured_limit() {
+        let preview = bounded_body_preview(vec![b'x'; MAX_ERROR_BODY_PREVIEW_BYTES + 10], false);
 
-        redact_json_field(&mut request, "nonce");
-
-        assert_eq!(
-            request["attestations"]["node-1"]["evidences"][0]["nonce"],
-            "<redacted>"
-        );
-        assert_eq!(
-            request["attestations"]["node-1"]["evidences"][0]["evidence"],
-            "signed-evidence"
-        );
-        assert_eq!(
-            request["attestations"]["node-1"]["evidences"][0]["certificate"],
-            "device-certificate"
-        );
-        assert!(!request.to_string().contains("secret-nonce"));
+        assert_eq!(preview.preview_bytes, MAX_ERROR_BODY_PREVIEW_BYTES);
+        assert_eq!(preview.body.len(), MAX_ERROR_BODY_PREVIEW_BYTES);
+        assert!(preview.truncated);
     }
 }

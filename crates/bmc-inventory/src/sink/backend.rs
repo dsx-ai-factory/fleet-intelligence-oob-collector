@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+use std::io::Read;
 use std::time::Duration;
 
 use crate::models::NodeInventory;
@@ -9,7 +10,7 @@ use super::InventorySink;
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
-const MAX_ERROR_BODY_PREVIEW_CHARS: usize = 1024;
+const MAX_ERROR_BODY_PREVIEW_BYTES: usize = 1024;
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -104,10 +105,12 @@ impl HttpBackendClient {
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().unwrap_or_default();
+            let content_length = response.content_length();
+            let body = read_bounded_response_body(response);
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
+                content_length,
                 server,
                 request_id,
             )));
@@ -151,6 +154,47 @@ fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option
         .map(str::to_string)
 }
 
+#[derive(Debug)]
+struct BoundedBodyPreview {
+    body: String,
+    preview_bytes: usize,
+    truncated: bool,
+}
+
+fn read_bounded_response_body(mut response: reqwest::blocking::Response) -> BoundedBodyPreview {
+    read_bounded_body(&mut response)
+}
+
+fn read_bounded_body(reader: &mut impl Read) -> BoundedBodyPreview {
+    let mut bytes = Vec::with_capacity(MAX_ERROR_BODY_PREVIEW_BYTES + 1);
+    let read_failed = reader
+        .take((MAX_ERROR_BODY_PREVIEW_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err();
+    bounded_body_preview(bytes, read_failed)
+}
+
+fn bounded_body_preview(mut bytes: Vec<u8>, truncated: bool) -> BoundedBodyPreview {
+    let truncated = truncated || bytes.len() > MAX_ERROR_BODY_PREVIEW_BYTES;
+    bytes.truncate(MAX_ERROR_BODY_PREVIEW_BYTES);
+    let preview_bytes = bytes.len();
+    let body = String::from_utf8_lossy(&bytes)
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    BoundedBodyPreview {
+        body,
+        preview_bytes,
+        truncated,
+    }
+}
+
 impl BackendClient for HttpBackendClient {
     fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
@@ -161,10 +205,12 @@ impl BackendClient for HttpBackendClient {
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().unwrap_or_default();
+            let content_length = response.content_length();
+            let body = read_bounded_response_body(response);
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
+                content_length,
                 server,
                 request_id,
             )));
@@ -190,43 +236,40 @@ pub struct BackendHttpError {
     status: u16,
     server: Option<String>,
     request_id: Option<String>,
-    response_bytes: usize,
+    response_content_length: Option<u64>,
+    response_preview_bytes: usize,
     body_preview: String,
     body_truncated: bool,
 }
 
 impl BackendHttpError {
     pub fn new(status: u16, body: impl Into<String>) -> Self {
-        Self::with_metadata(status, body, None, None)
+        let body = body.into();
+        let content_length = body.len() as u64;
+        Self::with_metadata(
+            status,
+            bounded_body_preview(body.into_bytes(), false),
+            Some(content_length),
+            None,
+            None,
+        )
     }
 
-    pub fn with_metadata(
+    fn with_metadata(
         status: u16,
-        body: impl Into<String>,
+        body: BoundedBodyPreview,
+        response_content_length: Option<u64>,
         server: Option<String>,
         request_id: Option<String>,
     ) -> Self {
-        let body = body.into();
-        let response_bytes = body.len();
-        let body_truncated = body.chars().count() > MAX_ERROR_BODY_PREVIEW_CHARS;
-        let body_preview = body
-            .chars()
-            .take(MAX_ERROR_BODY_PREVIEW_CHARS)
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect();
         Self {
             status,
             server,
             request_id,
-            response_bytes,
-            body_preview,
-            body_truncated,
+            response_content_length,
+            response_preview_bytes: body.preview_bytes,
+            body_preview: body.body,
+            body_truncated: body.truncated,
         }
     }
 
@@ -244,7 +287,10 @@ impl fmt::Display for BackendHttpError {
         if let Some(request_id) = &self.request_id {
             write!(f, " request_id={request_id:?}")?;
         }
-        write!(f, " response_bytes={}", self.response_bytes)?;
+        if let Some(content_length) = self.response_content_length {
+            write!(f, " response_content_length={content_length}")?;
+        }
+        write!(f, " response_preview_bytes={}", self.response_preview_bytes)?;
         if !self.body_preview.trim().is_empty() {
             write!(f, " response_body={:?}", self.body_preview)?;
         }
@@ -385,11 +431,12 @@ mod tests {
     fn backend_error_bounds_body_and_includes_response_metadata() {
         let body = format!(
             "first line\n{}",
-            "x".repeat(MAX_ERROR_BODY_PREVIEW_CHARS + 1)
+            "x".repeat(MAX_ERROR_BODY_PREVIEW_BYTES + 1)
         );
         let error = BackendHttpError::with_metadata(
             403,
-            body.clone(),
+            bounded_body_preview(body.clone().into_bytes(), false),
+            Some(body.len() as u64),
             Some("awselb/2.0".to_string()),
             Some("request-123".to_string()),
         );
@@ -398,10 +445,33 @@ mod tests {
         assert!(message.contains("http_status=403"));
         assert!(message.contains("server=\"awselb/2.0\""));
         assert!(message.contains("request_id=\"request-123\""));
-        assert!(message.contains(&format!("response_bytes={}", body.len())));
+        assert!(message.contains(&format!("response_content_length={}", body.len())));
+        assert!(message.contains(&format!(
+            "response_preview_bytes={MAX_ERROR_BODY_PREVIEW_BYTES}"
+        )));
         assert!(message.contains("response_body=\"first line "));
         assert!(message.contains("response_body_truncated=true"));
         assert!(!message.contains('\n'));
+    }
+
+    #[test]
+    fn bounded_body_preview_stores_at_most_the_configured_limit() {
+        let preview = bounded_body_preview(vec![b'x'; MAX_ERROR_BODY_PREVIEW_BYTES + 10], false);
+
+        assert_eq!(preview.preview_bytes, MAX_ERROR_BODY_PREVIEW_BYTES);
+        assert_eq!(preview.body.len(), MAX_ERROR_BODY_PREVIEW_BYTES);
+        assert!(preview.truncated);
+    }
+
+    #[test]
+    fn bounded_body_reader_consumes_only_limit_plus_one_byte() {
+        let mut reader = std::io::Cursor::new(vec![b'x'; MAX_ERROR_BODY_PREVIEW_BYTES * 2]);
+
+        let preview = read_bounded_body(&mut reader);
+
+        assert_eq!(reader.position(), (MAX_ERROR_BODY_PREVIEW_BYTES + 1) as u64);
+        assert_eq!(preview.preview_bytes, MAX_ERROR_BODY_PREVIEW_BYTES);
+        assert!(preview.truncated);
     }
 
     #[derive(Clone)]
