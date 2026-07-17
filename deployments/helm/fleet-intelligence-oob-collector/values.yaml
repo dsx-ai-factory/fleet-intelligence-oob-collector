@@ -17,6 +17,8 @@ bmcCollector:
   backendUrl: https://data.fleet-intelligence.nvidia.com
   # Secret containing the `agent-token` key.
   agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
+  # Rust tracing filter. Accepts levels such as debug or full RUST_LOG directives.
+  logLevel: info
   # Optional plain proxy settings rendered as container environment variables.
   proxy:
     httpProxy: ""

@@ -48,6 +48,8 @@ spec:
             - --insecure-tls
             {{- end }}
           env:
+            - name: RUST_LOG
+              value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}
             - name: FLEETINT_BACKEND_URL
               value: {{ required "bmcCollector.backendUrl is required" .Values.bmcCollector.backendUrl | quote }}
             - name: FLEETINT_AGENT_TOKEN

@@ -142,18 +142,7 @@ impl BackendClient for HttpBackendClient {
         }
         let path = self.nonce_path.replace("{node_uuid}", node_uuid);
         let endpoint = self.endpoint(&path)?;
-        tracing::info!(%endpoint, node_uuid, "requesting attestation nonce from backend");
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            let request = serde_json::json!({
-                "method": "POST",
-                "url": endpoint.as_str(),
-                "headers": {
-                    "authorization": "Bearer <redacted>"
-                },
-                "body": null
-            });
-            tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "nonce request");
-        }
+        tracing::debug!(%endpoint, node_uuid, method = "POST", "requesting attestation nonce");
         let response = self
             .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
@@ -161,11 +150,18 @@ impl BackendClient for HttpBackendClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
+            let server = response_header(&response, reqwest::header::SERVER.as_str());
+            let request_id = response_header(&response, "x-request-id");
             let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::new(status.as_u16(), body)));
+            return Err(Box::new(BackendHttpError::with_metadata(
+                status.as_u16(),
+                body,
+                server,
+                request_id,
+            )));
         }
         let response = response.json::<NonceResponse>().await?;
-        tracing::info!(
+        tracing::debug!(
             nonce_refresh_timestamp = response.nonce_refresh_timestamp.as_deref(),
             jwt_rotated = response.jwt_assertion.is_some(),
             "received attestation nonce response"
@@ -173,10 +169,11 @@ impl BackendClient for HttpBackendClient {
         if response.nonce.is_empty() {
             return Err("nonce response missing nonce".into());
         }
-        if let Some(jwt) = &response.jwt_assertion {
-            if !jwt.is_empty() && jwt != &self.jwt {
-                self.jwt = jwt.clone();
-            }
+        if let Some(jwt) = &response.jwt_assertion
+            && !jwt.is_empty()
+            && jwt != &self.jwt
+        {
+            self.jwt = jwt.clone();
         }
         Ok(response)
     }
@@ -188,9 +185,24 @@ impl BackendClient for HttpBackendClient {
         let endpoint = self.endpoint(&self.attestation_path)?;
         let request = batch.backend_request();
         tracing::info!(%endpoint, "exporting attestation data to backend");
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            tracing::debug!(request = %serde_json::to_string_pretty(&request)?, "attestation request body");
-        }
+        let successful_count = request
+            .attestations
+            .values()
+            .filter(|attestation| attestation.success)
+            .count();
+        let evidence_count: usize = request
+            .attestations
+            .values()
+            .map(|attestation| attestation.evidences.len())
+            .sum();
+        tracing::debug!(
+            schema_version = %request.schema_version,
+            node_count = request.attestations.len(),
+            successful_count,
+            failed_count = request.attestations.len().saturating_sub(successful_count),
+            evidence_count,
+            "attestation request prepared"
+        );
         let response = self
             .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
@@ -199,26 +211,65 @@ impl BackendClient for HttpBackendClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
+            let server = response_header(&response, reqwest::header::SERVER.as_str());
+            let request_id = response_header(&response, "x-request-id");
             let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::new(status.as_u16(), body)));
+            return Err(Box::new(BackendHttpError::with_metadata(
+                status.as_u16(),
+                body,
+                server,
+                request_id,
+            )));
         }
         Ok(())
     }
 }
 
+fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
 /// A non-success HTTP response from the attestation backend, preserving the
-/// status code so callers can distinguish JWT rejections (401/403) and re-enroll.
+/// status code so callers can distinguish JWT rejections and re-enroll.
 #[derive(Debug)]
 pub struct BackendHttpError {
     status: u16,
+    server: Option<String>,
+    request_id: Option<String>,
     body: String,
 }
 
 impl BackendHttpError {
     pub fn new(status: u16, body: impl Into<String>) -> Self {
+        Self::with_metadata(status, body, None, None)
+    }
+
+    fn with_metadata(
+        status: u16,
+        body: impl Into<String>,
+        server: Option<String>,
+        request_id: Option<String>,
+    ) -> Self {
+        let body = body.into();
+        let body = body
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect();
         Self {
             status,
-            body: body.into(),
+            server,
+            request_id,
+            body,
         }
     }
 
@@ -229,15 +280,17 @@ impl BackendHttpError {
 
 impl fmt::Display for BackendHttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.body.trim().is_empty() {
-            write!(f, "backend request failed with HTTP {}", self.status)
-        } else {
-            write!(
-                f,
-                "backend request failed with HTTP {}: {}",
-                self.status, self.body
-            )
+        write!(f, "backend request failed http_status={}", self.status)?;
+        if let Some(server) = &self.server {
+            write!(f, " server={server:?}")?;
         }
+        if let Some(request_id) = &self.request_id {
+            write!(f, " request_id={request_id:?}")?;
+        }
+        if !self.body.trim().is_empty() {
+            write!(f, " response_body={:?}", self.body)?;
+        }
+        Ok(())
     }
 }
 
@@ -291,5 +344,23 @@ mod tests {
                 .as_str(),
             "https://backend.example.com/v1/oob/nodes/node-1/nonce"
         );
+    }
+
+    #[test]
+    fn backend_error_includes_full_body_and_response_metadata() {
+        let body = "first line\nsecond line".to_string();
+        let error = BackendHttpError::with_metadata(
+            403,
+            body.clone(),
+            Some("awselb/2.0".to_string()),
+            Some("request-123".to_string()),
+        );
+        let message = error.to_string();
+
+        assert!(message.contains("http_status=403"));
+        assert!(message.contains("server=\"awselb/2.0\""));
+        assert!(message.contains("request_id=\"request-123\""));
+        assert!(message.contains("response_body=\"first line second line\""));
+        assert!(!message.contains('\n'));
     }
 }

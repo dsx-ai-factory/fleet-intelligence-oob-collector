@@ -24,11 +24,12 @@ pub struct CollectionOutcome {
     pub refreshed_jwt: Option<String>,
 }
 
-/// Whether a backend error is a JWT rejection (HTTP 401/403), signalling that the
-/// agent must re-enroll rather than record per-target failures with a dead token.
+/// Whether a backend error is a JWT rejection, signalling that the agent must
+/// re-enroll rather than record per-target failures with a dead token. A generic
+/// 403 may come from an ingress or WAF and is not sufficient evidence by itself.
 fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
     err.downcast_ref::<BackendHttpError>()
-        .is_some_and(|err| matches!(err.status(), 401 | 403))
+        .is_some_and(|err| err.status() == 401)
 }
 
 /// Collect attestation evidence for every target concurrently.
@@ -36,7 +37,7 @@ fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
 /// Per target: build a backend client from `jwt`, request a nonce, collect signed
 /// measurements over Redfish, and map them. A non-auth target-level failure
 /// (client/nonce error) becomes a failed `NodeAttestation` rather than aborting the
-/// batch. A backend auth failure (HTTP 401/403) is propagated as a batch-level
+/// batch. A backend auth failure (HTTP 401) is propagated as a batch-level
 /// error instead, so the caller can re-enroll and retry the whole batch with a
 /// fresh token rather than uploading failures collected under a rejected JWT.
 pub async fn collect(
@@ -157,18 +158,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_jwt_rejections_as_auth_failures() {
-        for status in [401, 403] {
-            let err: Box<dyn Error> = Box::new(BackendHttpError::new(status, "denied"));
-            assert!(
-                is_auth_failure(err.as_ref()),
-                "status {status} should be auth failure"
-            );
-        }
+    fn classifies_unauthorized_as_auth_failure() {
+        let err: Box<dyn Error> = Box::new(BackendHttpError::new(401, "denied"));
+        assert!(is_auth_failure(err.as_ref()));
     }
 
     #[test]
     fn other_errors_are_not_auth_failures() {
+        let forbidden: Box<dyn Error> = Box::new(BackendHttpError::new(403, "blocked by WAF"));
+        assert!(!is_auth_failure(forbidden.as_ref()));
+
         let http: Box<dyn Error> = Box::new(BackendHttpError::new(500, "boom"));
         assert!(!is_auth_failure(http.as_ref()));
 

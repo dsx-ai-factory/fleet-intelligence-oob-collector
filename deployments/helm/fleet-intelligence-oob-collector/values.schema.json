@@ -27,7 +27,7 @@
     "bmcCollector": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["image", "backendUrl", "agentTokenSecretName", "proxy", "intervalSeconds", "insecureTls"],
+      "required": ["image", "backendUrl", "agentTokenSecretName", "logLevel", "proxy", "intervalSeconds", "insecureTls"],
       "properties": {
         "image": {
           "type": "object",
@@ -41,6 +41,7 @@
         },
         "backendUrl": { "type": "string", "minLength": 1 },
         "agentTokenSecretName": { "type": "string", "minLength": 1 },
+        "logLevel": { "type": "string", "minLength": 1 },
         "proxy": {
           "type": "object",
           "additionalProperties": false,
