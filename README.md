@@ -205,6 +205,8 @@ collector image. Validate local chart changes with `make chart-lint`.
 By default, the collector sends data to
 `https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
 use a different Fleet Intelligence endpoint.
+Set `bmcCollector.logLevel` to change the Rust tracing filter from its `info`
+default, for example `--set-string bmcCollector.logLevel=debug`.
 By default, the chart version is also used as the collector image tag.
 
 ## Releases

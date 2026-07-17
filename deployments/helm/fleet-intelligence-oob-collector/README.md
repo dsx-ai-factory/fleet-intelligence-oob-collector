@@ -72,6 +72,9 @@ By default, the collector sends data to
 `https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
 use a different Fleet Intelligence endpoint.
 
+The collector logs at `info` by default. Set `bmcCollector.logLevel` to a Rust
+tracing filter such as `debug` or `fleet_intelligence_oob=debug,bmc_attestation=trace`.
+
 See `values.yaml` for the small set of supported settings.
 When `bmcCollector.image.tag` is empty, the chart uses its own version as the
 image tag.
