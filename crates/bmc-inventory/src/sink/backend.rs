@@ -344,6 +344,7 @@ mod tests {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: address.to_string(),
+                host_name: None,
                 redfish_version: None,
                 service_uuid: None,
                 vendor: None,

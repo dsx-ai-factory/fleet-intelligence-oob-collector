@@ -1,4 +1,7 @@
+use async_trait::async_trait;
+
 use super::InventoryMapper;
+use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
     InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory, PcieDeviceInventory,
@@ -9,87 +12,123 @@ use crate::source::{ChassisData, SystemData};
 
 const DERIVED_NODE_UUID_KEY_PREFIX: &str = "fleet-intelligence-oob:redfish:";
 
-#[derive(Default)]
-pub struct RedfishMapper;
+pub struct RedfishMapper {
+    reverse_dns: Option<ReverseDnsResolver>,
+}
 
-impl InventoryMapper for RedfishMapper {
-    fn map(&self, record: SourceRecord) -> NodeInventory {
-        let target = record.target;
-        let collected_at = record.collected_at;
-        match record.result {
-            Ok(report) => {
-                let source = InventorySourceInfo {
-                    source_type: "redfish".to_string(),
-                    mac: target.mac,
-                    address: target.address,
-                    redfish_version: report.service_root.redfish_version,
-                    service_uuid: report.service_root.uuid,
-                    vendor: report.service_root.vendor.or(report.service_root.product),
-                };
-                let selected_system = select_primary_system(&report.systems);
-                let node_uuid = node_uuid(selected_system.as_ref(), &source);
-                let primary_system_id = selected_system.map(|system| system.id);
-                let chassis = report
-                    .chassis
-                    .into_iter()
-                    .map(map_chassis)
-                    .collect::<Vec<_>>();
-                NodeInventory {
-                    schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
-                    collected_at,
-                    enrolled_at: None,
-                    uuid: Some(node_uuid.clone()),
-                    source,
-                    primary_system_id: primary_system_id.clone(),
-                    managers: report.managers.into_iter().map(map_manager).collect(),
-                    systems: report
-                        .systems
-                        .into_iter()
-                        .map(|system| {
-                            let uuid = if primary_system_id.as_ref() == Some(&system.id) {
-                                Some(node_uuid.clone())
-                            } else {
-                                system_uuid(&system)
-                            };
-                            map_system(system, uuid)
-                        })
-                        .collect(),
-                    chassis,
-                    firmware: report.firmware.into_iter().map(map_firmware).collect(),
-                    domain_errors: report
-                        .errors
-                        .into_iter()
-                        .map(|error| DomainError {
-                            domain: error.domain,
-                            resource: error.resource,
-                            message: error.message,
-                        })
-                        .collect(),
-                    target_error: None,
-                }
+impl RedfishMapper {
+    pub fn new() -> Self {
+        let reverse_dns = match ReverseDnsResolver::new() {
+            Ok(resolver) => Some(resolver),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "reverse DNS is unavailable; BMC source host names will be omitted"
+                );
+                None
             }
-            Err(error) => NodeInventory {
+        };
+        Self { reverse_dns }
+    }
+}
+
+impl Default for RedfishMapper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl InventoryMapper for RedfishMapper {
+    async fn map(&self, record: SourceRecord) -> NodeInventory {
+        let host_name = resolve_hostname(
+            self.reverse_dns.as_ref(),
+            record.target.ip,
+            DEFAULT_REVERSE_DNS_TIMEOUT,
+        )
+        .await;
+        map_record(record, host_name)
+    }
+}
+
+fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory {
+    let target = record.target;
+    let collected_at = record.collected_at;
+    match record.result {
+        Ok(report) => {
+            let source = InventorySourceInfo {
+                source_type: "redfish".to_string(),
+                mac: target.mac,
+                address: target.address,
+                host_name,
+                redfish_version: report.service_root.redfish_version,
+                service_uuid: report.service_root.uuid,
+                vendor: report.service_root.vendor.or(report.service_root.product),
+            };
+            let selected_system = select_primary_system(&report.systems);
+            let node_uuid = node_uuid(selected_system.as_ref(), &source);
+            let primary_system_id = selected_system.map(|system| system.id);
+            let chassis = report
+                .chassis
+                .into_iter()
+                .map(map_chassis)
+                .collect::<Vec<_>>();
+            NodeInventory {
                 schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                 collected_at,
                 enrolled_at: None,
-                uuid: None,
-                source: InventorySourceInfo {
-                    source_type: "redfish".to_string(),
-                    mac: target.mac,
-                    address: target.address,
-                    redfish_version: None,
-                    service_uuid: None,
-                    vendor: None,
-                },
-                primary_system_id: None,
-                managers: Vec::new(),
-                systems: Vec::new(),
-                chassis: Vec::new(),
-                firmware: Vec::new(),
-                domain_errors: Vec::new(),
-                target_error: Some(error),
-            },
+                uuid: Some(node_uuid.clone()),
+                source,
+                primary_system_id: primary_system_id.clone(),
+                managers: report.managers.into_iter().map(map_manager).collect(),
+                systems: report
+                    .systems
+                    .into_iter()
+                    .map(|system| {
+                        let uuid = if primary_system_id.as_ref() == Some(&system.id) {
+                            Some(node_uuid.clone())
+                        } else {
+                            system_uuid(&system)
+                        };
+                        map_system(system, uuid)
+                    })
+                    .collect(),
+                chassis,
+                firmware: report.firmware.into_iter().map(map_firmware).collect(),
+                domain_errors: report
+                    .errors
+                    .into_iter()
+                    .map(|error| DomainError {
+                        domain: error.domain,
+                        resource: error.resource,
+                        message: error.message,
+                    })
+                    .collect(),
+                target_error: None,
+            }
         }
+        Err(error) => NodeInventory {
+            schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
+            collected_at,
+            enrolled_at: None,
+            uuid: None,
+            source: InventorySourceInfo {
+                source_type: "redfish".to_string(),
+                mac: target.mac,
+                address: target.address,
+                host_name,
+                redfish_version: None,
+                service_uuid: None,
+                vendor: None,
+            },
+            primary_system_id: None,
+            managers: Vec::new(),
+            systems: Vec::new(),
+            chassis: Vec::new(),
+            firmware: Vec::new(),
+            domain_errors: Vec::new(),
+            target_error: Some(error),
+        },
     }
 }
 
@@ -273,8 +312,32 @@ mod tests {
     };
 
     #[test]
+    fn maps_resolved_bmc_hostname_to_source_info() {
+        let inventory = map_record(
+            SourceRecord {
+                target: target(),
+                collected_at: collected_at(),
+                result: Ok(RedfishReport {
+                    service_root: ServiceRootData::default(),
+                    managers: Vec::new(),
+                    systems: Vec::new(),
+                    chassis: Vec::new(),
+                    firmware: Vec::new(),
+                    errors: Vec::new(),
+                }),
+            },
+            Some("bmc-a.example.com".to_string()),
+        );
+
+        assert_eq!(
+            inventory.source.host_name.as_deref(),
+            Some("bmc-a.example.com")
+        );
+    }
+
+    #[test]
     fn prefers_system_with_bios() {
-        let inventory = RedfishMapper.map(SourceRecord {
+        let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Ok(RedfishReport {
@@ -332,7 +395,7 @@ mod tests {
 
     #[test]
     fn maps_chassis_serials_without_normalization() {
-        let inventory = RedfishMapper.map(SourceRecord {
+        let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Ok(RedfishReport {
@@ -500,7 +563,7 @@ mod tests {
 
     #[test]
     fn maps_error_record_without_partial_inventory() {
-        let inventory = RedfishMapper.map(SourceRecord {
+        let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Err("systems collection: timeout".to_string()),
@@ -578,11 +641,15 @@ mod tests {
     }
 
     fn map_report(report: RedfishReport) -> NodeInventory {
-        RedfishMapper.map(SourceRecord {
+        map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Ok(report),
         })
+    }
+
+    fn map(record: SourceRecord) -> NodeInventory {
+        map_record(record, None)
     }
 
     fn collected_at() -> String {
@@ -591,6 +658,7 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            ip: "10.0.0.1".parse().expect("IP address"),
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             username: "user".to_string(),
