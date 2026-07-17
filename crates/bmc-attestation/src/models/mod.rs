@@ -123,7 +123,12 @@ impl NodeAttestation {
         BackendNodeAttestation {
             nonce_refresh_timestamp: self.nonce_refresh_timestamp.clone(),
             success: self.success,
-            error_message: self.error_message.clone(),
+            // Strip absolute URLs before upload: AWS WAF GenericRFI_BODY blocks
+            // http(s):// with an IPv4 host in the request body.
+            error_message: self
+                .error_message
+                .as_deref()
+                .map(sanitize_backend_error_message),
             evidences: self
                 .evidences
                 .iter()
@@ -139,6 +144,43 @@ impl NodeAttestation {
                 .collect(),
         }
     }
+}
+
+/// Drop absolute URLs from error text destined for the attestation backend.
+///
+/// Reqwest status errors look like:
+/// `HTTP status client error (404 Not Found) for url (https://10.x.x.x/...)`.
+/// Keep the status description; omit the URL so WAF RFI rules do not fire.
+fn sanitize_backend_error_message(message: &str) -> String {
+    match message.find(" for url (") {
+        Some(idx) => message[..idx].trim_end().to_string(),
+        None => strip_absolute_urls(message),
+    }
+}
+
+fn strip_absolute_urls(message: &str) -> String {
+    const SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://"];
+    let lower = message.to_ascii_lowercase();
+    let mut out = String::with_capacity(message.len());
+    let mut i = 0;
+    while i < message.len() {
+        if let Some(scheme) = SCHEMES.iter().find(|scheme| lower[i..].starts_with(*scheme)) {
+            i += scheme.len();
+            while i < message.len() {
+                let ch = message[i..].chars().next().expect("char at i");
+                if ch.is_whitespace() {
+                    break;
+                }
+                i += ch.len_utf8();
+            }
+            continue;
+        }
+        let ch = message[i..].chars().next().expect("char at i");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    // Collapse runs of whitespace left by removals.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -208,6 +250,47 @@ mod tests {
                     }
                 }
             })
+        );
+    }
+
+    #[test]
+    fn backend_payload_strips_reqwest_url_from_error_message() {
+        let batch = BatchAttestation::new(
+            "2026-01-01T00:00:00Z".to_string(),
+            vec![NodeAttestation::failed(
+                "node-1".to_string(),
+                "node-a".to_string(),
+                "10.91.54.137".to_string(),
+                "HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
+            )],
+        );
+
+        let value = serde_json::to_value(batch.backend_request()).expect("json");
+        assert_eq!(
+            value["attestations"]["node-1"]["errorMessage"],
+            "HTTP status client error (404 Not Found)"
+        );
+        // Local record keeps the full message for debugging.
+        assert!(
+            batch.results_by_node_uuid["node-1"]
+                .error_message
+                .as_deref()
+                .unwrap()
+                .contains("https://10.91.54.137/")
+        );
+    }
+
+    #[test]
+    fn sanitize_backend_error_message_strips_embedded_urls() {
+        assert_eq!(
+            sanitize_backend_error_message(
+                "fetch failed contacting https://10.0.0.1/redfish/v1/ComponentIntegrity"
+            ),
+            "fetch failed contacting"
+        );
+        assert_eq!(
+            sanitize_backend_error_message("no GPU IRoT ComponentIntegrity resources found"),
+            "no GPU IRoT ComponentIntegrity resources found"
         );
     }
 }
