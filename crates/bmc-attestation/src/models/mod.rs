@@ -152,10 +152,11 @@ impl NodeAttestation {
 /// `HTTP status client error (404 Not Found) for url (https://10.x.x.x/...)`.
 /// Keep the status description; omit the URL so WAF RFI rules do not fire.
 fn sanitize_backend_error_message(message: &str) -> String {
-    match message.find(" for url (") {
-        Some(idx) => message[..idx].trim_end().to_string(),
-        None => strip_absolute_urls(message),
-    }
+    let without_reqwest_url = match message.find(" for url (") {
+        Some(idx) => message[..idx].trim_end(),
+        None => message,
+    };
+    strip_absolute_urls(without_reqwest_url)
 }
 
 fn strip_absolute_urls(message: &str) -> String {
@@ -292,5 +293,18 @@ mod tests {
             sanitize_backend_error_message("no GPU IRoT ComponentIntegrity resources found"),
             "no GPU IRoT ComponentIntegrity resources found"
         );
+    }
+
+    #[test]
+    fn sanitize_backend_error_message_strips_prefix_url_and_reqwest_suffix() {
+        let sanitized = sanitize_backend_error_message(
+            "proxy https://10.0.0.1/redfish/v1 failed: HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
+        );
+        assert_eq!(
+            sanitized,
+            "proxy failed: HTTP status client error (404 Not Found)"
+        );
+        assert!(!sanitized.contains("http://") && !sanitized.contains("https://"));
+        assert!(!sanitized.contains(" for url ("));
     }
 }
