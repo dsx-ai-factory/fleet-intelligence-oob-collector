@@ -49,7 +49,7 @@ fn node_inventory_serializes_as_backend_payload() {
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
-            mac: "00:11:22:33:44:55".to_string(),
+            mac: Some("00:11:22:33:44:55".to_string()),
             address: "10.0.0.1".to_string(),
             host_name: Some("bmc-a.example.com".to_string()),
             redfish_version: Some("1.15.1".to_string()),
@@ -251,7 +251,7 @@ fn target_error_inventory_serializes_absent_uuid() {
         uuid: None,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
-            mac: "00:11:22:33:44:55".to_string(),
+            mac: Some("00:11:22:33:44:55".to_string()),
             address: "10.0.0.1".to_string(),
             host_name: None,
             redfish_version: None,

@@ -185,7 +185,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
 impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
-            mac: inventory.source.mac.clone(),
+            mac: inventory.source.mac.clone().unwrap_or_default(),
             address: inventory.source.address.clone(),
             host_name: inventory.source.host_name.clone().unwrap_or_default(),
             source_type: inventory.source.source_type.clone(),
@@ -234,7 +234,7 @@ impl From<&NodeInventory> for SourceDetailRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
             source_type: inventory.source.source_type.clone(),
-            mac: inventory.source.mac.clone(),
+            mac: inventory.source.mac.clone().unwrap_or_default(),
             address: inventory.source.address.clone(),
             host_name: inventory.source.host_name.clone().unwrap_or_default(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
@@ -886,7 +886,7 @@ mod tests {
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
-                mac: "00:11:22:33:44:55".to_string(),
+                mac: Some("00:11:22:33:44:55".to_string()),
                 address: "10.0.0.1".to_string(),
                 host_name: Some("bmc-a.example.com".to_string()),
                 redfish_version: Some("1.15.1".to_string()),

@@ -60,9 +60,19 @@
     "nicoHardwareHealth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "image", "tlsSecretName", "service"],
+      "required": ["enabled", "inventoryOutputPath", "config", "image", "tlsSecretName", "service"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "inventoryOutputPath": { "type": "string", "pattern": "^/" },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "secretKey"],
+          "properties": {
+            "secretName": { "type": "string" },
+            "secretKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "image": {
           "type": "object",
           "additionalProperties": false,

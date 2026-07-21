@@ -8,8 +8,7 @@ metadata:
     app.kubernetes.io/component: nico-hardware-health
 spec:
   selector:
-    {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: nico-hardware-health
+    {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 4 }}
   ports:
     - name: metrics
       port: {{ .Values.nicoHardwareHealth.service.port }}

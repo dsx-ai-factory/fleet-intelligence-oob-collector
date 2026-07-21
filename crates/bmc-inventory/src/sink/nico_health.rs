@@ -53,7 +53,8 @@ struct NicoHealthNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     hostname: Option<String>,
     bmc_ip: std::net::IpAddr,
-    bmc_mac: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bmc_mac: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rack: Option<String>,
     uuid: String,
@@ -76,13 +77,13 @@ fn render_json(
         .map(|target| -> Result<NicoHealthNode, Box<dyn Error>> {
             let inventory = inventories
                 .iter()
-                .find(|inventory| inventory.source.mac.eq_ignore_ascii_case(&target.mac));
+                .find(|inventory| inventory.source.address == target.address);
             let uuid = inventory
                 .and_then(|inventory| inventory.uuid.as_ref())
                 .ok_or_else(|| {
                     format!(
-                        "inventory discovery did not produce a node UUID for BMC MAC {}",
-                        target.mac
+                        "inventory discovery did not produce a node UUID for BMC address {}",
+                        target.address
                     )
                 })?
                 .to_string();
@@ -159,7 +160,7 @@ mod tests {
         let targets = vec![
             target(
                 "10.0.0.1",
-                "00:11:22:33:44:55",
+                Some("00:11:22:33:44:55"),
                 "admin",
                 "default-secret",
                 Some("rack-01"),
@@ -170,7 +171,7 @@ mod tests {
             ),
             target(
                 "10.0.0.2",
-                "00:11:22:33:44:66",
+                Some("00:11:22:33:44:66"),
                 "root",
                 "node-secret",
                 None,
@@ -179,12 +180,14 @@ mod tests {
         ];
         let inventories = vec![
             inventory(
-                "00:11:22:33:44:55",
+                "10.0.0.1",
+                Some("00:11:22:33:44:55"),
                 Some("node-01"),
                 Some("550e8400-e29b-41d4-a716-446655440000"),
             ),
             inventory(
-                "00:11:22:33:44:66",
+                "10.0.0.2",
+                Some("00:11:22:33:44:66"),
                 None,
                 Some("98f3a1e0-2fbb-4a89-b540-f5ee17011536"),
             ),
@@ -219,20 +222,47 @@ mod tests {
     fn rejects_inventory_without_a_discovered_node_uuid() {
         let targets = vec![target(
             "10.0.0.1",
-            "00:11:22:33:44:55",
+            Some("00:11:22:33:44:55"),
             "admin",
             "secret",
             None,
             BTreeMap::new(),
         )];
-        let inventories = vec![inventory("00:11:22:33:44:55", None, None)];
+        let inventories = vec![inventory("10.0.0.1", Some("00:11:22:33:44:55"), None, None)];
 
         let error = render_json(&targets, &inventories)
             .expect_err("missing node UUID should fail")
             .to_string();
 
         assert!(error.contains("did not produce a node UUID"));
-        assert!(error.contains("00:11:22:33:44:55"));
+        assert!(error.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn omits_bmc_mac_when_not_configured() {
+        let targets = vec![target(
+            "10.0.0.1",
+            None,
+            "admin",
+            "secret",
+            None,
+            BTreeMap::new(),
+        )];
+        let inventories = vec![inventory(
+            "10.0.0.1",
+            None,
+            None,
+            Some("550e8400-e29b-41d4-a716-446655440000"),
+        )];
+
+        let rendered = render_json(&targets, &inventories).expect("NICo health JSON");
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+
+        assert!(value["nodes"][0].get("bmc_mac").is_none());
+        assert_eq!(
+            value["nodes"][0]["uuid"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[cfg(unix)]
@@ -250,14 +280,15 @@ mod tests {
         let output = directory.join("inventory.json");
         let targets = vec![target(
             "10.0.0.1",
-            "00:11:22:33:44:55",
+            Some("00:11:22:33:44:55"),
             "admin",
             "secret",
             None,
             BTreeMap::new(),
         )];
         let inventories = vec![inventory(
-            "00:11:22:33:44:55",
+            "10.0.0.1",
+            Some("00:11:22:33:44:55"),
             None,
             Some("550e8400-e29b-41d4-a716-446655440000"),
         )];
@@ -283,7 +314,7 @@ mod tests {
 
     fn target(
         ip: &str,
-        mac: &str,
+        mac: Option<&str>,
         username: &str,
         password: &str,
         rack: Option<&str>,
@@ -291,7 +322,7 @@ mod tests {
     ) -> Target {
         Target {
             ip: ip.parse().expect("IP"),
-            mac: mac.to_string(),
+            mac: mac.map(str::to_string),
             address: ip.to_string(),
             username: username.to_string(),
             password: password.to_string(),
@@ -300,7 +331,12 @@ mod tests {
         }
     }
 
-    fn inventory(mac: &str, hostname: Option<&str>, uuid: Option<&str>) -> NodeInventory {
+    fn inventory(
+        address: &str,
+        mac: Option<&str>,
+        hostname: Option<&str>,
+        uuid: Option<&str>,
+    ) -> NodeInventory {
         NodeInventory {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
@@ -308,8 +344,8 @@ mod tests {
             uuid: uuid.and_then(InventoryUuid::parse),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
-                mac: mac.to_string(),
-                address: "10.0.0.1".to_string(),
+                mac: mac.map(str::to_string),
+                address: address.to_string(),
                 host_name: hostname.map(str::to_string),
                 redfish_version: None,
                 service_uuid: None,

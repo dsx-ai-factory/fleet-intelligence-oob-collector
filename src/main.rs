@@ -67,6 +67,10 @@ struct RuntimeArgs {
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]
     interval_seconds: u64,
+
+    /// Generated cluster inventory file consumed by NICo health.
+    #[arg(long, env = "FLEETINT_NICO_HEALTH_OUTPUT", value_name = "PATH")]
+    nico_health_output: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -134,6 +138,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,
+                nico_health_output: args.nico_health_output,
             })
             .await?
         }

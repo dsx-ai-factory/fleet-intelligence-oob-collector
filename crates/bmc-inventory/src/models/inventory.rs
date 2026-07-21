@@ -6,7 +6,7 @@ use super::InventoryUuid;
 #[serde(rename_all = "camelCase")]
 pub struct InventorySourceInfo {
     pub source_type: String,
-    pub mac: String,
+    pub mac: Option<String>,
     pub address: String,
     pub host_name: Option<String>,
     pub redfish_version: Option<String>,

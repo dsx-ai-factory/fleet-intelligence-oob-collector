@@ -47,6 +47,7 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
+    pub nico_health_output: Option<String>,
 }
 
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
@@ -74,6 +75,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
         match collect_and_upload_inventory(
             options.inventory.clone(),
             endpoints.oob_nodes_endpoint.clone(),
+            options.nico_health_output.as_deref(),
             &mut session,
         )
         .await
@@ -151,14 +153,14 @@ fn build_attestation_targets(
         .into_iter()
         .filter_map(|target| {
             let uuid = inventories.iter().find_map(|inv| {
-                if inv.source.mac == target.mac {
+                if inv.source.address == target.address {
                     inv.uuid.as_ref().map(|u| u.to_string())
                 } else {
                     None
                 }
             })?;
             Some(attestation_config::Target {
-                name: target.mac,
+                name: target.mac.unwrap_or_else(|| target.address.clone()),
                 node_uuid: uuid,
                 address: target.address,
                 username: target.username,
@@ -277,8 +279,7 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
                 .output
                 .as_deref()
                 .expect("NICo health output validated before collection");
-            let targets = config::load_targets(&options.config)?;
-            NicoHealthSink::new(output, targets).write(&inventories)?;
+            write_nico_health_inventory(&options.config, output, &inventories)?;
         }
     }
     Ok(())
@@ -287,9 +288,10 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
     endpoint: String,
+    nico_health_output: Option<&str>,
     session: &mut BackendSession,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
-    let mut inventory_vec = collect_inventory(options).await?;
+    let mut inventory_vec = collect_inventory(options.clone()).await?;
     let summary = summarize_inventory_collection(&inventory_vec);
     if summary.partial > 0 || summary.failed > 0 {
         tracing::warn!(
@@ -307,6 +309,19 @@ async fn collect_and_upload_inventory(
             failed_count = summary.failed,
             "inventory collection completed"
         );
+    }
+    if let Some(nico_health_output) = nico_health_output {
+        match write_nico_health_inventory(&options.config, nico_health_output, &inventory_vec) {
+            Ok(()) => tracing::info!(
+                output_path = nico_health_output,
+                "NICo health inventory file updated"
+            ),
+            Err(err) => tracing::error!(
+                output_path = nico_health_output,
+                error = %err,
+                "failed to update NICo health inventory file; backend export will continue"
+            ),
+        }
     }
     stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
     let inventories = Arc::new(inventory_vec);
@@ -341,6 +356,15 @@ async fn collect_and_upload_inventory(
         }
         Err(err) => Err(err.to_string().into()),
     }
+}
+
+fn write_nico_health_inventory(
+    config_path: &str,
+    output_path: &str,
+    inventories: &[NodeInventory],
+) -> Result<(), Box<dyn Error>> {
+    let targets = config::load_targets(config_path)?;
+    NicoHealthSink::new(output_path, targets).write(inventories)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -581,7 +605,7 @@ mod tests {
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
-                mac: "00:11:22:33:44:55".to_string(),
+                mac: Some("00:11:22:33:44:55".to_string()),
                 address: address.to_string(),
                 host_name: None,
                 redfish_version: None,

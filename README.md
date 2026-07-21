@@ -79,27 +79,23 @@ certificates.
 
 ## Configuration
 
-The collector reads a TOML configuration. BMC targets come from
-`endpoint_sources.static_bmc_endpoints`:
+The collector reads an OOB-native TOML configuration containing a list of
+machines:
 
 ```toml
-[[endpoint_sources.static_bmc_endpoints]]
+[[machines]]
 ip = "10.0.0.10"
 port = 443
-mac = "00:11:22:33:44:55"
 username = "root"
 password = "secret"
 rack = "rack-01"
 labels = { compute_zone = "az51", node_group = "dev3-dh1" }
 ```
 
-The OOB collector reads the static endpoint fields it needs and ignores
-service-only collector, processor, sink, and metrics settings. The optional
-`rack` and `labels` fields are copied to generated NICo health cluster
-inventory. The endpoint MAC address identifies the BMC and is included in the
-collected inventory. Static endpoints must include a password for OOB inventory
-and attestation. API discovery alone is not sufficient for the OOB collector;
-the file must contain at least one static endpoint.
+Each machine requires `ip`, `username`, and `password`; `port` defaults to the
+Redfish HTTPS port. The optional `mac`, `rack`, and `labels` fields are copied to
+generated NICo health cluster inventory when present. NICo health generates its
+synthetic endpoint MAC when `mac` is omitted.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
@@ -176,6 +172,18 @@ target/debug/bmc-collector run --config /path/to/config.toml --insecure-tls \
 
 `--backend-url` and `--agent-token` can also be provided via `FLEETINT_BACKEND_URL`
 and `FLEETINT_AGENT_TOKEN` environment variables.
+
+When `--nico-health-output` or `FLEETINT_NICO_HEALTH_OUTPUT` is set, every
+runtime inventory cycle also refreshes the NICo health cluster inventory at
+that path. Without either option, runtime file generation is disabled. The Helm
+chart sets the option to `nicoHardwareHealth.inventoryOutputPath` only when
+`nicoHardwareHealth.enabled` is true. File-generation errors are logged but do
+not prevent inventory upload to the backend. The parent directory must exist
+and be writable by the collector's non-root user. When enabled, the bundled
+Helm chart runs NICo health as a sidecar and mounts a shared `emptyDir` at the
+configured path. Endpoint assignment belongs to the OOB collector; each NICo
+sidecar consumes its complete local inventory with NICo configured as a single
+shard (`shard = 0`, `shards_count = 1`).
 
 Each `run` cycle:
 

@@ -44,6 +44,10 @@ spec:
             - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
             - --interval-seconds
             - {{ .Values.bmcCollector.intervalSeconds | quote }}
+            {{- if .Values.nicoHardwareHealth.enabled }}
+            - --nico-health-output
+            - {{ .Values.nicoHardwareHealth.inventoryOutputPath | quote }}
+            {{- end }}
             {{- if .Values.bmcCollector.insecureTls }}
             - --insecure-tls
             {{- end }}
@@ -77,6 +81,46 @@ spec:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
+            {{- if .Values.nicoHardwareHealth.enabled }}
+            - name: nico-inventory
+              mountPath: {{ dir .Values.nicoHardwareHealth.inventoryOutputPath | quote }}
+            {{- end }}
+        {{- if .Values.nicoHardwareHealth.enabled }}
+        - name: nico-hardware-health
+          image: {{ include "fleet-intelligence-oob-collector.nicoHardwareHealthImage" . | quote }}
+          imagePullPolicy: {{ .Values.nicoHardwareHealth.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          args:
+            - /etc/nico-health/{{ .Values.nicoHardwareHealth.config.secretKey }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.nicoHardwareHealth.service.port }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 300
+            failureThreshold: 3
+          volumeMounts:
+            - name: nico-config
+              mountPath: /etc/nico-health
+              readOnly: true
+            - name: nico-inventory
+              mountPath: {{ dir .Values.nicoHardwareHealth.inventoryOutputPath | quote }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.nicoHardwareHealth.tlsSecretName }}
+            - name: tls
+              mountPath: /var/run/secrets/spiffe.io
+              readOnly: true
+            {{- end }}
+        {{- end }}
       volumes:
         - name: hardware-config
           secret:
@@ -85,3 +129,21 @@ spec:
               - key: {{ .Values.config.secretKey | quote }}
                 path: {{ .Values.config.secretKey | quote }}
                 mode: 0440
+        {{- if .Values.nicoHardwareHealth.enabled }}
+        - name: nico-config
+          secret:
+            secretName: {{ required "nicoHardwareHealth.config.secretName is required when NICo hardware health is enabled" .Values.nicoHardwareHealth.config.secretName | quote }}
+            items:
+              - key: {{ .Values.nicoHardwareHealth.config.secretKey | quote }}
+                path: {{ .Values.nicoHardwareHealth.config.secretKey | quote }}
+                mode: 0440
+        - name: nico-inventory
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.nicoHardwareHealth.tlsSecretName }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.nicoHardwareHealth.tlsSecretName | quote }}
+        {{- end }}
+        {{- end }}
