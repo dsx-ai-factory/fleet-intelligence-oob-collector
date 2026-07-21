@@ -79,7 +79,7 @@ certificates.
 
 ## Configuration
 
-The collector reads a shared TOML configuration. BMC targets come from
+The collector reads a TOML configuration. BMC targets come from
 `endpoint_sources.static_bmc_endpoints`:
 
 ```toml
@@ -89,14 +89,17 @@ port = 443
 mac = "00:11:22:33:44:55"
 username = "root"
 password = "secret"
+rack = "rack-01"
+labels = { compute_zone = "az51", node_group = "dev3-dh1" }
 ```
 
 The OOB collector reads the static endpoint fields it needs and ignores
-service-only collector, processor, sink, and metrics settings. The endpoint MAC
-address identifies the BMC and is included in the collected inventory. Static
-endpoints must include a password for OOB inventory and attestation. API
-discovery alone is not sufficient for the OOB collector; the shared file must
-contain at least one static endpoint.
+service-only collector, processor, sink, and metrics settings. The optional
+`rack` and `labels` fields are copied to generated NICo health cluster
+inventory. The endpoint MAC address identifies the BMC and is included in the
+collected inventory. Static endpoints must include a password for OOB inventory
+and attestation. API discovery alone is not sufficient for the OOB collector;
+the file must contain at least one static endpoint.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
@@ -136,6 +139,29 @@ target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tl
 target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls --detail
 ```
 
+Generate an atomic, permission-restricted cluster inventory file for NICo
+hardware health:
+
+```bash
+target/debug/bmc-collector inventory \
+  --config /path/to/config.toml \
+  --insecure-tls \
+  --format nico-health \
+  --output /var/lib/fleetint/nico-health-inventory.json
+```
+
+The generated file includes the discovered node UUID and hostname, configured
+BMC IP/MAC, optional rack and labels, and the credentials NICo health needs to
+connect. The first endpoint's credentials become `default_credentials`; nodes
+with different credentials receive a per-node override. The output file is
+written atomically with mode `0600` so NICo health never observes a partial
+inventory and other users cannot read BMC credentials.
+
+NICo health's cluster source config owns the BMC port, so all generated nodes
+must use the same port configured in `endpoint_sources.cluster.port`. Inventory
+label names are passed through to telemetry unchanged and should use
+Prometheus-compatible names such as `compute_zone` or `node_group`.
+
 ## Run Agent (Inventory + Attestation)
 
 Run continuously and send both inventory and attestation to the backend:
@@ -169,8 +195,9 @@ reaches the agent API.
 then repeats every 24 hours by default. Override the cadence with
 `--interval-seconds`.
 
-See `config.example.toml` for a shared configuration that can be
-mounted into both the OOB collector and NICo hardware-health service.
+See `config.example.toml` for an OOB collector configuration. When using the
+NICo health sink, point NICo hardware health at the generated cluster inventory
+file rather than the collector's source TOML.
 
 ## Helm Chart
 

@@ -33,6 +33,10 @@ struct InventoryArgs {
 
     #[arg(long, default_value = "table", value_enum)]
     format: CliInventoryFormat,
+
+    /// Output file required when --format nico-health is selected.
+    #[arg(long, value_name = "PATH")]
+    output: Option<String>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -69,6 +73,7 @@ struct RuntimeArgs {
 enum CliInventoryFormat {
     Table,
     Json,
+    NicoHealth,
 }
 
 impl From<CliInventoryFormat> for InventoryFormat {
@@ -76,12 +81,18 @@ impl From<CliInventoryFormat> for InventoryFormat {
         match format {
             CliInventoryFormat::Table => Self::Table,
             CliInventoryFormat::Json => Self::Json,
+            CliInventoryFormat::NicoHealth => Self::NicoHealth,
         }
     }
 }
 
 impl CollectorArgs {
-    fn into_inventory_options(self, detail: bool, format: InventoryFormat) -> InventoryOptions {
+    fn into_inventory_options(
+        self,
+        detail: bool,
+        format: InventoryFormat,
+        output: Option<String>,
+    ) -> InventoryOptions {
         InventoryOptions {
             config: self.config,
             insecure_tls: self.insecure_tls,
@@ -89,6 +100,7 @@ impl CollectorArgs {
             format,
             concurrency: self.concurrency,
             timeout_seconds: self.timeout_seconds,
+            output,
         }
     }
 }
@@ -109,12 +121,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Inventory(args) => {
             let format = args.format.into();
-            run_inventory(args.collector.into_inventory_options(args.detail, format)).await?
+            run_inventory(
+                args.collector
+                    .into_inventory_options(args.detail, format, args.output),
+            )
+            .await?
         }
         Command::Run(args) => {
             let format = InventoryFormat::Json;
             run_runtime(RuntimeOptions {
-                inventory: args.collector.into_inventory_options(false, format),
+                inventory: args.collector.into_inventory_options(false, format, None),
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,

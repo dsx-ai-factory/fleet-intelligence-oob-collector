@@ -12,7 +12,7 @@ use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
-    BackendSink as InventoryBackendSink, InventorySink, JsonSink, TableSink,
+    BackendSink as InventoryBackendSink, InventorySink, JsonSink, NicoHealthSink, TableSink,
 };
 use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
@@ -27,6 +27,7 @@ pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 pub enum InventoryFormat {
     Table,
     Json,
+    NicoHealth,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +38,7 @@ pub struct InventoryOptions {
     pub format: InventoryFormat,
     pub concurrency: usize,
     pub timeout_seconds: u64,
+    pub output: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,11 +264,22 @@ async fn upload_attestation(
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
+    if options.format == InventoryFormat::NicoHealth && options.output.is_none() {
+        return Err("--output is required when --format nico-health is selected".into());
+    }
     let inventories = collect_inventory(options.clone()).await?;
 
     match options.format {
         InventoryFormat::Table => TableSink::new(options.detail).write(&inventories)?,
         InventoryFormat::Json => JsonSink.write(&inventories)?,
+        InventoryFormat::NicoHealth => {
+            let output = options
+                .output
+                .as_deref()
+                .expect("NICo health output validated before collection");
+            let targets = config::load_targets(&options.config)?;
+            NicoHealthSink::new(output, targets).write(&inventories)?;
+        }
     }
     Ok(())
 }
@@ -534,9 +547,30 @@ mod tests {
             format: InventoryFormat::Json,
             concurrency: 1,
             timeout_seconds: 1,
+            output: None,
         };
 
         assert!(build_attestation_targets(&options, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn nico_health_format_requires_output_before_collection() {
+        let options = InventoryOptions {
+            config: "/definitely/missing/oob-config.toml".to_string(),
+            insecure_tls: false,
+            detail: false,
+            format: InventoryFormat::NicoHealth,
+            concurrency: 1,
+            timeout_seconds: 1,
+            output: None,
+        };
+
+        let error = run_inventory(options)
+            .await
+            .expect_err("missing output should fail")
+            .to_string();
+
+        assert!(error.contains("--output is required"));
     }
 
     fn inventory(address: &str) -> NodeInventory {

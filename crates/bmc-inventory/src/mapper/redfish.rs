@@ -663,6 +663,8 @@ mod tests {
             address: "10.0.0.1".to_string(),
             username: "user".to_string(),
             password: "pass".to_string(),
+            rack: None,
+            labels: Default::default(),
         }
     }
 

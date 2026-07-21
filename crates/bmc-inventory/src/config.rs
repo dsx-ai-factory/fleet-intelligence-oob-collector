@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::net::IpAddr;
@@ -12,6 +12,8 @@ pub struct Target {
     pub address: String,
     pub username: String,
     pub password: String,
+    pub rack: Option<String>,
+    pub labels: BTreeMap<String, String>,
 }
 
 impl fmt::Debug for Target {
@@ -22,6 +24,8 @@ impl fmt::Debug for Target {
             .field("address", &self.address)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
+            .field("rack", &self.rack)
+            .field("labels", &self.labels)
             .finish()
     }
 }
@@ -45,6 +49,9 @@ struct StaticBmcEndpoint {
     mac: String,
     username: String,
     password: String,
+    rack: Option<String>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
 }
 
 pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
@@ -106,6 +113,8 @@ impl StaticBmcEndpoint {
             address,
             username: self.username,
             password: self.password,
+            rack: self.rack.filter(|rack| !rack.trim().is_empty()),
+            labels: self.labels,
         })
     }
 }
@@ -131,6 +140,8 @@ mod tests {
             mac = "00:11:22:33:44:55"
             username = "admin"
             password = "secret"
+            rack = "rack-01"
+            labels = { compute_zone = "az51", node_group = "dev3-dh1" }
             [[endpoint_sources.static_bmc_endpoints]]
             ip = "2001:db8::1"
             mac = "00:11:22:33:44:66"
@@ -147,6 +158,15 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].mac, "00:11:22:33:44:55");
         assert_eq!(targets[0].address, "10.0.0.1:8443");
+        assert_eq!(targets[0].rack.as_deref(), Some("rack-01"));
+        assert_eq!(
+            targets[0].labels.get("compute_zone").map(String::as_str),
+            Some("az51")
+        );
+        assert_eq!(
+            targets[0].labels.get("node_group").map(String::as_str),
+            Some("dev3-dh1")
+        );
         assert_eq!(targets[1].mac, "00:11:22:33:44:66");
         assert_eq!(targets[1].address, "[2001:db8::1]");
     }
