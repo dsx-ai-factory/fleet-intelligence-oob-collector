@@ -56,8 +56,7 @@ struct NicoHealthNode {
     bmc_mac: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     rack: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uuid: Option<String>,
+    uuid: String,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,25 +73,32 @@ fn render_json(
     let default_credentials = credentials(first_target);
     let nodes = targets
         .iter()
-        .map(|target| {
+        .map(|target| -> Result<NicoHealthNode, Box<dyn Error>> {
             let inventory = inventories
                 .iter()
                 .find(|inventory| inventory.source.mac.eq_ignore_ascii_case(&target.mac));
+            let uuid = inventory
+                .and_then(|inventory| inventory.uuid.as_ref())
+                .ok_or_else(|| {
+                    format!(
+                        "inventory discovery did not produce a node UUID for BMC MAC {}",
+                        target.mac
+                    )
+                })?
+                .to_string();
             let target_credentials = credentials(target);
-            NicoHealthNode {
+            Ok(NicoHealthNode {
                 hostname: inventory.and_then(|inventory| inventory.source.host_name.clone()),
                 bmc_ip: target.ip,
                 bmc_mac: target.mac.clone(),
                 rack: target.rack.clone(),
-                uuid: inventory
-                    .and_then(|inventory| inventory.uuid.as_ref())
-                    .map(ToString::to_string),
+                uuid,
                 labels: target.labels.clone(),
                 credentials: (target_credentials != default_credentials)
                     .then_some(target_credentials),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut rendered = serde_json::to_string_pretty(&NicoHealthInventory {
         default_credentials,
@@ -177,7 +183,11 @@ mod tests {
                 Some("node-01"),
                 Some("550e8400-e29b-41d4-a716-446655440000"),
             ),
-            inventory("00:11:22:33:44:66", None, None),
+            inventory(
+                "00:11:22:33:44:66",
+                None,
+                Some("98f3a1e0-2fbb-4a89-b540-f5ee17011536"),
+            ),
         ];
 
         let rendered = render_json(&targets, &inventories).expect("NICo health JSON");
@@ -198,8 +208,31 @@ mod tests {
         assert!(value["nodes"][0].get("credentials").is_none());
         assert_eq!(value["nodes"][1]["credentials"]["username"], "root");
         assert_eq!(value["nodes"][1]["credentials"]["password"], "node-secret");
-        assert!(value["nodes"][1].get("uuid").is_none());
+        assert_eq!(
+            value["nodes"][1]["uuid"],
+            "98f3a1e0-2fbb-4a89-b540-f5ee17011536"
+        );
         assert!(value["nodes"][1].get("labels").is_none());
+    }
+
+    #[test]
+    fn rejects_inventory_without_a_discovered_node_uuid() {
+        let targets = vec![target(
+            "10.0.0.1",
+            "00:11:22:33:44:55",
+            "admin",
+            "secret",
+            None,
+            BTreeMap::new(),
+        )];
+        let inventories = vec![inventory("00:11:22:33:44:55", None, None)];
+
+        let error = render_json(&targets, &inventories)
+            .expect_err("missing node UUID should fail")
+            .to_string();
+
+        assert!(error.contains("did not produce a node UUID"));
+        assert!(error.contains("00:11:22:33:44:55"));
     }
 
     #[cfg(unix)]

@@ -155,7 +155,9 @@ BMC IP/MAC, optional rack and labels, and the credentials NICo health needs to
 connect. The first endpoint's credentials become `default_credentials`; nodes
 with different credentials receive a per-node override. The output file is
 written atomically with mode `0600` so NICo health never observes a partial
-inventory and other users cannot read BMC credentials.
+inventory and other users cannot read BMC credentials. Every configured target
+must complete inventory discovery with a node UUID; otherwise the command fails
+and leaves any previously generated NICo inventory file unchanged.
 
 NICo health's cluster source config owns the BMC port, so all generated nodes
 must use the same port configured in `endpoint_sources.cluster.port`. Inventory
