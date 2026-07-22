@@ -28,7 +28,9 @@ enabled = true
 
 [sinks.otlp]
 enabled = true
-# For Docker Desktop Kubernetes, replace `localhost` with `host.docker.internal`.
+# Local POC: http://localhost:4317
+# In-cluster with otelGateway.enabled=true (gRPC):
+# endpoint = "http://fleet-intelligence-oob-collector-otel-gateway:4317"
 endpoint = "http://localhost:4317"
 include_diagnostics = false
 batch_size = 512

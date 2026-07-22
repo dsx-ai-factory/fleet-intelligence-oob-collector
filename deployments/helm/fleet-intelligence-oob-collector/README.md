@@ -1,9 +1,9 @@
 # Fleet Intelligence OOB Collector
 
 This chart deploys one long-running Fleet Intelligence out-of-band collector.
-It can also deploy the NICo hardware-health service. Both workloads use a
-`Recreate` deployment strategy so duplicate collectors do not run during an
-update.
+It can also deploy the NICo hardware-health service and an authenticated
+OpenTelemetry gateway. BMC and NICo workloads use a `Recreate` deployment
+strategy so duplicate collectors do not run during an update.
 
 ## Prerequisites
 
@@ -101,3 +101,40 @@ are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
 The release workflow builds this image from the `infra-controller` `v2.0.0-rc.5`
 tag configured in `.github/workflows/release.yml`, publishes amd64 and arm64
 images, then publishes the chart only after both collector images are available.
+
+## OpenTelemetry gateway
+
+The chart can also deploy the authenticated Fleet Intelligence OTel gateway used
+by the in-band agent ([PR #231](https://github.com/NVIDIA/fleet-intelligence-agent/pull/231)).
+It reuses `ghcr.io/nvidia/fleetint-otelcol` rather than rebuilding the collector
+in this repository. The gateway is disabled by default.
+
+Enable it alongside NICo so hardware-health OTLP stays in-cluster and the
+gateway alone holds backend enrollment credentials:
+
+```bash
+helm upgrade --install fleet-intelligence-oob-collector \
+  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  --version 0.1.0 \
+  --set otelGateway.enabled=true \
+  --set otelGateway.enroll.endpoint=https://data.fleet-intelligence.nvidia.com/v1/agent/enroll \
+  --set otelGateway.enroll.existingSecret=fleet-intelligence-oob-collector-agent-token \
+  --set otelGateway.backendEndpoint=https://data.fleet-intelligence.nvidia.com/v1/health
+```
+
+The default image is `ghcr.io/nvidia/fleetint-otelcol:0.0.1-poc.otelgateway`
+(from agent release `v0.0.1-poc.otelgateway`). Override `otelGateway.image.tag`
+only when you need a different published build.
+
+Point NICo's shared TOML OTLP sink at the gateway Service (gRPC):
+
+```toml
+[sinks.otlp]
+enabled = true
+endpoint = "http://fleet-intelligence-oob-collector-otel-gateway:4317"
+```
+
+Replace the Service hostname with
+`<release-fullname>-otel-gateway` when the release name differs. The chart does
+not accept gateway tokens as Helm values; use an existing Secret (commonly the
+same `agent-token` Secret as the BMC collector).

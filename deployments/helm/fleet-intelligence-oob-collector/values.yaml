@@ -42,3 +42,62 @@ nicoHardwareHealth:
   service:
     enabled: true
     port: 9009
+
+# Optional OpenTelemetry gateway for NICo (and future OOB) OTLP export.
+# Reuses the authenticated collector image from fleet-intelligence-agent
+# (ghcr.io/nvidia/fleetint-otelcol). Disabled by default.
+#
+# Flow:
+#   NICo -> ClusterIP OTLP (gRPC :4317 / HTTP :4318) -> gateway
+#        -> Fleet Intelligence backend (JWT via SAK/agent-token enrollment)
+otelGateway:
+  enabled: false
+
+  image:
+    repository: ghcr.io/nvidia/fleetint-otelcol
+    # Published by fleet-intelligence-agent release tag v0.0.1-poc.otelgateway
+    # (image tag strips the leading v). Override when a newer build is needed.
+    tag: "0.0.1-poc.otelgateway"
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+  terminationGracePeriodSeconds: 30
+
+  # Enrollment credentials for gateway→backend authentication.
+  # The chart never stores tokens in values; point at an existing Secret.
+  enroll:
+    # Example: https://data.fleet-intelligence.nvidia.com/v1/agent/enroll
+    endpoint: ""
+    # Typically the same Secret as bmcCollector.agentTokenSecretName.
+    existingSecret: ""
+    # Key inside existingSecret. Defaults to the OOB agent-token key.
+    secretKey: agent-token
+
+  # Backend OTLP HTTP base URL (gateway appends /metrics and /logs).
+  # Example: https://data.fleet-intelligence.nvidia.com/v1/health
+  backendEndpoint: ""
+
+  service:
+    grpcPort: 4317
+    httpPort: 4318
+
+  # Restrict unauthenticated OTLP ingress to pods from this Helm release.
+  # Requires a CNI that enforces Kubernetes NetworkPolicy.
+  networkPolicy:
+    enabled: true
+
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+
+  memoryLimiter:
+    limitPercentage: 80
+    spikeLimitPercentage: 20
+
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"

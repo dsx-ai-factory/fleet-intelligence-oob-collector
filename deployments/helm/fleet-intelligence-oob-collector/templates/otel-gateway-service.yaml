@@ -1,0 +1,22 @@
+{{- if .Values.otelGateway.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp-grpc
+      port: {{ .Values.otelGateway.service.grpcPort }}
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: {{ .Values.otelGateway.service.httpPort }}
+      targetPort: otlp-http
+      protocol: TCP
+{{- end }}

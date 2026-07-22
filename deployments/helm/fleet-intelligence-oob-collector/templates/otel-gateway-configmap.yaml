@@ -1,0 +1,71 @@
+{{- if .Values.otelGateway.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+data:
+  config.yaml: |
+    extensions:
+      # Fleet Intelligence auth from ghcr.io/nvidia/fleetint-otelcol (PR #231).
+      # Enrolls with the backend using the agent/SAK token, refreshes JWT, and
+      # authenticates outbound OTLP export. NICo never holds backend credentials.
+      sakauth:
+        enroll_endpoint: ${env:ENROLL_ENDPOINT}
+        sak_token: ${env:SAK_TOKEN}
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          # NICo hardware-health exports OTLP over gRPC (tonic).
+          grpc:
+            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.grpcPort }}
+          # HTTP retained for parity with the in-band agent gateway.
+          http:
+            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.httpPort }}
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: {{ .Values.otelGateway.memoryLimiter.limitPercentage }}
+        spike_limit_percentage: {{ .Values.otelGateway.memoryLimiter.spikeLimitPercentage }}
+      batch:
+        timeout: 10s
+        send_batch_size: 1000
+
+    exporters:
+      otlp_http/backend:
+        metrics_endpoint: ${env:BACKEND_ENDPOINT}/metrics
+        logs_endpoint: ${env:BACKEND_ENDPOINT}/logs
+        compression: none
+        auth:
+          authenticator: sakauth
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 4
+          queue_size: 1000
+
+    service:
+      extensions: [sakauth, health_check]
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/backend]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/backend]
+      telemetry:
+        logs:
+          level: warn
+{{- end }}

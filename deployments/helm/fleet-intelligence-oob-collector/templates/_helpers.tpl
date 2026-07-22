@@ -39,3 +39,22 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
 {{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayName" -}}
+{{- printf "%s-otel-gateway" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fleet-intelligence-oob-collector.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: otel-gateway
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayImage" -}}
+{{- $tag := required "otelGateway.image.tag is required when otelGateway.enabled=true" .Values.otelGateway.image.tag -}}
+{{- printf "%s:%s" .Values.otelGateway.image.repository $tag -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayEnrollSecretName" -}}
+{{- required "otelGateway.enroll.existingSecret is required when otelGateway.enabled=true" .Values.otelGateway.enroll.existingSecret -}}
+{{- end }}

@@ -1,0 +1,14 @@
+{{- if and .Values.otelGateway.enabled .Values.otelGateway.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+spec:
+  minAvailable: {{ .Values.otelGateway.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 6 }}
+{{- end }}
