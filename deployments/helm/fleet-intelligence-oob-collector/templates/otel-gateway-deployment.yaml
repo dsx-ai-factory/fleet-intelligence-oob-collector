@@ -1,4 +1,4 @@
-{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.otelGateway.enabled }}
+{{- if .Values.otelGateway.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +7,7 @@ metadata:
     {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
     app.kubernetes.io/component: otel-gateway
 spec:
-  replicas: {{ .Values.nicoHardwareHealth.otelGateway.replicas }}
+  replicas: {{ .Values.otelGateway.replicas }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -30,17 +30,26 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: {{ .Values.nicoHardwareHealth.otelGateway.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.otelGateway.terminationGracePeriodSeconds }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: otel-gateway
       containers:
         - name: otel-gateway
           image: {{ include "fleet-intelligence-oob-collector.otelGatewayImage" . | quote }}
-          imagePullPolicy: {{ .Values.nicoHardwareHealth.otelGateway.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.otelGateway.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -51,14 +60,14 @@ spec:
             - --config=/etc/otelcol/config.yaml
           env:
             - name: BACKEND_ENDPOINT
-              value: {{ printf "%s/api/v1/health" (trimSuffix "/" .Values.bmcCollector.backendUrl) | quote }}
+              value: {{ include "fleet-intelligence-oob-collector.otelGatewayBackendEndpoint" . | quote }}
             - name: ENROLL_ENDPOINT
-              value: {{ printf "%s/api/v1/health/enroll" (trimSuffix "/" .Values.bmcCollector.backendUrl) | quote }}
+              value: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollEndpoint" . | quote }}
             - name: SAK_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "bmcCollector.agentTokenSecretName is required" .Values.bmcCollector.agentTokenSecretName | quote }}
-                  key: agent-token
+                  name: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollSecretName" . | quote }}
+                  key: {{ .Values.otelGateway.enroll.secretKey | quote }}
             - name: HTTP_PROXY
               value: {{ .Values.bmcCollector.proxy.httpProxy | quote }}
             - name: HTTPS_PROXY
@@ -69,7 +78,10 @@ spec:
               value: {{ .Values.bmcCollector.proxy.noProxy | quote }}
           ports:
             - name: otlp-grpc
-              containerPort: {{ .Values.nicoHardwareHealth.otelGateway.service.port }}
+              containerPort: {{ .Values.otelGateway.service.grpcPort }}
+              protocol: TCP
+            - name: otlp-http
+              containerPort: {{ .Values.otelGateway.service.httpPort }}
               protocol: TCP
             - name: health
               containerPort: 13133
@@ -96,7 +108,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           resources:
-            {{- toYaml .Values.nicoHardwareHealth.otelGateway.resources | nindent 12 }}
+            {{- toYaml .Values.otelGateway.resources | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/otelcol

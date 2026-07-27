@@ -1,4 +1,4 @@
-{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.otelGateway.enabled }}
+{{- if .Values.otelGateway.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,13 +19,15 @@ data:
       otlp:
         protocols:
           grpc:
-            endpoint: 0.0.0.0:{{ .Values.nicoHardwareHealth.otelGateway.service.port }}
+            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.grpcPort }}
+          http:
+            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.httpPort }}
 
     processors:
       memory_limiter:
         check_interval: 5s
-        limit_percentage: {{ .Values.nicoHardwareHealth.otelGateway.memoryLimiter.limitPercentage }}
-        spike_limit_percentage: {{ .Values.nicoHardwareHealth.otelGateway.memoryLimiter.spikeLimitPercentage }}
+        limit_percentage: {{ .Values.otelGateway.memoryLimiter.limitPercentage }}
+        spike_limit_percentage: {{ .Values.otelGateway.memoryLimiter.spikeLimitPercentage }}
       batch:
         timeout: 10s
         send_batch_size: 1000
@@ -33,6 +35,7 @@ data:
     exporters:
       otlp_http/backend:
         metrics_endpoint: ${env:BACKEND_ENDPOINT}/metrics
+        logs_endpoint: ${env:BACKEND_ENDPOINT}/logs
         compression: none
         auth:
           authenticator: sakauth
@@ -50,6 +53,10 @@ data:
       extensions: [sakauth, health_check]
       pipelines:
         metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/backend]
+        logs:
           receivers: [otlp]
           processors: [memory_limiter, batch]
           exporters: [otlp_http/backend]

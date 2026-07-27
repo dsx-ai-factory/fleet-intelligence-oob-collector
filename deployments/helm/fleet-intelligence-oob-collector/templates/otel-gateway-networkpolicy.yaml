@@ -1,4 +1,4 @@
-{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.otelGateway.enabled .Values.nicoHardwareHealth.otelGateway.networkPolicy.enabled }}
+{{- if and .Values.otelGateway.enabled .Values.otelGateway.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -17,9 +17,10 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 14 }}
-              app.kubernetes.io/component: nico-hardware-health
+              app.kubernetes.io/instance: {{ .Release.Name | quote }}
       ports:
         - protocol: TCP
-          port: {{ .Values.nicoHardwareHealth.otelGateway.service.port }}
+          port: {{ .Values.otelGateway.service.grpcPort }}
+        - protocol: TCP
+          port: {{ .Values.otelGateway.service.httpPort }}
 {{- end }}

@@ -1,4 +1,4 @@
-{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.otelGateway.enabled }}
+{{- if .Values.otelGateway.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -13,7 +13,11 @@ spec:
     app.kubernetes.io/component: otel-gateway
   ports:
     - name: otlp-grpc
-      port: {{ .Values.nicoHardwareHealth.otelGateway.service.port }}
+      port: {{ .Values.otelGateway.service.grpcPort }}
       targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: {{ .Values.otelGateway.service.httpPort }}
+      targetPort: otlp-http
       protocol: TCP
 {{- end }}

@@ -111,7 +111,8 @@ is needed. It can be disabled when only inventory and attestation are needed:
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
   --version 0.1.0 \
-  --set nicoHardwareHealth.enabled=false
+  --set nicoHardwareHealth.enabled=false \
+  --set otelGateway.enabled=false
 ```
 
 After changing the external collector config Secret, restart the NICo
@@ -122,11 +123,36 @@ the chart version. By default, NICo sends OTLP/gRPC to a separate gateway
 Deployment and ClusterIP Service running
 `ghcr.io/nvidia/fleetint-otelcol:0.0.2-poc.otelgateway`. The gateway reuses
 `bmcCollector.backendUrl` and the `agent-token` Secret to authenticate to the
-Fleet Intelligence telemetry API. Its NetworkPolicy accepts OTLP only from the
-NICo workload when supported by the cluster CNI.
+Fleet Intelligence telemetry API. Its NetworkPolicy accepts OTLP only from
+workloads in the same Helm release when supported by the cluster CNI.
 
-Disable `nicoHardwareHealth.otelGateway.enabled` and set
+Disable `otelGateway.enabled` and set
 `nicoHardwareHealth.otlpEndpoint` to use an external collector instead.
+
+## OpenTelemetry gateway
+
+The gateway is a top-level chart component with an independent Deployment,
+ClusterIP Service, configuration, rollout, and scaling lifecycle. It receives
+OTLP/gRPC on port `4317` and OTLP/HTTP on port `4318`. NICo's generated
+configuration automatically uses the gateway Service when
+`otelGateway.enabled=true`.
+
+By default, the gateway derives its enrollment URL, telemetry backend URL, and
+Secret name from `bmcCollector.backendUrl` and
+`bmcCollector.agentTokenSecretName`. Override them when the telemetry API uses
+different routing or credentials:
+
+```yaml
+otelGateway:
+  enroll:
+    endpoint: https://data.example.com/api/v1/health/enroll
+    existingSecret: fleet-intelligence-otel-gateway-token
+    secretKey: agent-token
+  backendEndpoint: https://data.example.com/api/v1/health
+```
+
+The chart supports gateway replica scaling, topology spreading, an optional
+PodDisruptionBudget, resource configuration, and an ingress NetworkPolicy.
 
 Set `nicoHardwareHealth.metricsPrefix` when a non-default metric prefix is
 needed. When using NICo API mTLS, create a Secret containing `ca.crt`,

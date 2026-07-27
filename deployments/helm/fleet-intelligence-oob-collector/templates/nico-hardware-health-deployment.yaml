@@ -49,8 +49,8 @@ spec:
             - --output
             - /etc/nico-health/config.toml
             - --otlp-endpoint
-            {{- if .Values.nicoHardwareHealth.otelGateway.enabled }}
-            - {{ printf "http://%s:%v" (include "fleet-intelligence-oob-collector.otelGatewayName" .) .Values.nicoHardwareHealth.otelGateway.service.port | quote }}
+            {{- if .Values.otelGateway.enabled }}
+            - {{ printf "http://%s:%v" (include "fleet-intelligence-oob-collector.otelGatewayName" .) .Values.otelGateway.service.grpcPort | quote }}
             {{- else }}
             - {{ required "nicoHardwareHealth.otlpEndpoint is required when the OTEL gateway is disabled" (.Values.nicoHardwareHealth.otlpEndpoint | trim) | quote }}
             {{- end }}
