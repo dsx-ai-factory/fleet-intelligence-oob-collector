@@ -1,0 +1,120 @@
+{{- if .Values.otelGateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+spec:
+  replicas: {{ .Values.otelGateway.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-gateway
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/otel-gateway-configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.otelGateway.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: otel-gateway
+      containers:
+        - name: otel-gateway
+          image: {{ include "fleet-intelligence-oob-collector.otelGatewayImage" . | quote }}
+          imagePullPolicy: {{ .Values.otelGateway.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          args:
+            - --config=/etc/otelcol/config.yaml
+          env:
+            - name: BACKEND_ENDPOINT
+              value: {{ include "fleet-intelligence-oob-collector.otelGatewayBackendEndpoint" . | quote }}
+            - name: ENROLL_ENDPOINT
+              value: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollEndpoint" . | quote }}
+            - name: SAK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollSecretName" . | quote }}
+                  key: {{ .Values.otelGateway.enroll.secretKey | quote }}
+            - name: HTTP_PROXY
+              value: {{ .Values.bmcCollector.proxy.httpProxy | quote }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.bmcCollector.proxy.httpsProxy | quote }}
+            - name: ALL_PROXY
+              value: {{ .Values.bmcCollector.proxy.allProxy | quote }}
+            - name: NO_PROXY
+              value: {{ .Values.bmcCollector.proxy.noProxy | quote }}
+          ports:
+            - name: otlp-grpc
+              containerPort: {{ .Values.otelGateway.service.grpcPort }}
+              protocol: TCP
+            - name: otlp-http
+              containerPort: {{ .Values.otelGateway.service.httpPort }}
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.otelGateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+{{- end }}

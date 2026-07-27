@@ -13,3 +13,10 @@ imagePullSecrets:
 nicoHardwareHealth:
   enabled: true
   tlsSecretName: nico-hardware-health-tls-test
+otelGateway:
+  enroll:
+    endpoint: https://telemetry.test.example/api/v1/health/enroll
+    existingSecret: fleet-intelligence-otel-gateway-token-test
+  backendEndpoint: https://telemetry.test.example/api/v1/health
+  podDisruptionBudget:
+    enabled: true

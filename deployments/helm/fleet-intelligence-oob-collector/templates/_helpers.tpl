@@ -39,3 +39,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
 {{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayImage" -}}
+{{- printf "%s:%s" .Values.otelGateway.image.repository .Values.otelGateway.image.tag -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayName" -}}
+{{- printf "%s-otel-gateway" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayEnrollSecretName" -}}
+{{- default .Values.bmcCollector.agentTokenSecretName .Values.otelGateway.enroll.existingSecret -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayEnrollEndpoint" -}}
+{{- default (printf "%s/api/v1/health/enroll" (trimSuffix "/" .Values.bmcCollector.backendUrl)) .Values.otelGateway.enroll.endpoint -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayBackendEndpoint" -}}
+{{- default (printf "%s/api/v1/health" (trimSuffix "/" .Values.bmcCollector.backendUrl)) .Values.otelGateway.backendEndpoint | trimSuffix "/" -}}
+{{- end }}

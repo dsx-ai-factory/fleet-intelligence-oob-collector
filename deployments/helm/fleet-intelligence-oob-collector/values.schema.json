@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["imagePullSecrets", "config", "bmcCollector", "nicoHardwareHealth"],
+  "required": ["imagePullSecrets", "config", "bmcCollector", "nicoHardwareHealth", "otelGateway"],
   "properties": {
     "imagePullSecrets": {
       "type": "array",
@@ -60,9 +60,11 @@
     "nicoHardwareHealth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "image", "tlsSecretName", "service"],
+      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "image", "tlsSecretName", "service"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "otlpEndpoint": { "type": "string", "pattern": "^$|.*\\S.*" },
+        "metricsPrefix": { "type": "string", "pattern": ".*\\S.*" },
         "image": {
           "type": "object",
           "additionalProperties": false,
@@ -82,6 +84,88 @@
             "enabled": { "type": "boolean" },
             "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
           }
+        }
+      }
+    },
+    "otelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "image",
+        "replicas",
+        "terminationGracePeriodSeconds",
+        "enroll",
+        "backendEndpoint",
+        "service",
+        "networkPolicy",
+        "podDisruptionBudget",
+        "memoryLimiter",
+        "resources"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "pattern": ".*\\S.*" },
+            "tag": { "type": "string", "pattern": ".*\\S.*" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+        "enroll": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoint", "existingSecret", "secretKey"],
+          "properties": {
+            "endpoint": { "type": "string", "pattern": "^$|.*\\S.*" },
+            "existingSecret": { "type": "string", "pattern": "^$|.*\\S.*" },
+            "secretKey": { "type": "string", "pattern": ".*\\S.*" }
+          }
+        },
+        "backendEndpoint": { "type": "string", "pattern": "^$|.*\\S.*" },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["grpcPort", "httpPort"],
+          "properties": {
+            "grpcPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "httpPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minAvailable"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "memoryLimiter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["limitPercentage", "spikeLimitPercentage"],
+          "properties": {
+            "limitPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "spikeLimitPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": true
         }
       }
     }

@@ -262,7 +262,8 @@ async fn upload_attestation(
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
-    let inventories = collect_inventory(options.clone()).await?;
+    let collector_config = config::load_config(&options.config)?;
+    let inventories = collect_inventory_targets(&options, collector_config.targets).await?;
 
     match options.format {
         InventoryFormat::Table => TableSink::new(options.detail).write(&inventories)?,
@@ -276,7 +277,9 @@ async fn collect_and_upload_inventory(
     endpoint: String,
     session: &mut BackendSession,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
-    let mut inventory_vec = collect_inventory(options).await?;
+    let collector_config = config::load_config(&options.config)?;
+    let placement = collector_config.placement;
+    let mut inventory_vec = collect_inventory_targets(&options, collector_config.targets).await?;
     let summary = summarize_inventory_collection(&inventory_vec);
     if summary.partial > 0 || summary.failed > 0 {
         tracing::warn!(
@@ -301,6 +304,7 @@ async fn collect_and_upload_inventory(
         endpoint.clone(),
         session.jwt().to_string(),
         Arc::clone(&inventories),
+        placement.clone(),
     )
     .await
     {
@@ -321,6 +325,7 @@ async fn collect_and_upload_inventory(
                 endpoint,
                 session.jwt().to_string(),
                 Arc::clone(&inventories),
+                placement,
             )
             .await
             .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
@@ -397,9 +402,10 @@ async fn upload_inventory(
     endpoint: String,
     jwt: String,
     inventories: Arc<Vec<NodeInventory>>,
+    placement: config::Placement,
 ) -> Result<(), UploadError> {
     tokio::task::spawn_blocking(move || {
-        InventoryBackendSink::new(endpoint, jwt)
+        InventoryBackendSink::new(endpoint, jwt, placement)
             .map_err(|err| UploadError::Other(err.to_string()))?
             .write(inventories.as_slice())
             .map_err(|err| {
@@ -430,11 +436,10 @@ impl fmt::Display for UploadError {
 
 impl Error for UploadError {}
 
-async fn collect_inventory(
-    options: InventoryOptions,
+async fn collect_inventory_targets(
+    options: &InventoryOptions,
+    targets: Vec<config::Target>,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
-    let targets = config::load_targets(&options.config)?;
-
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let source = RedfishSource::new(options.insecure_tls, timeout)?;
     let mapper = RedfishMapper::new();

@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+use crate::config::Placement;
 use crate::models::NodeInventory;
 
 use super::InventorySink;
@@ -12,20 +13,25 @@ const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
+    placement: Placement,
 }
 
 impl BackendSink<HttpBackendClient> {
     pub fn new(
         endpoint: impl Into<String>,
         jwt: impl Into<String>,
+        placement: Placement,
     ) -> Result<Self, Box<dyn Error>> {
-        Ok(Self::with_client(HttpBackendClient::new(endpoint, jwt)?))
+        Ok(Self::with_client(
+            HttpBackendClient::new(endpoint, jwt)?,
+            placement,
+        ))
     }
 }
 
 impl<C> BackendSink<C> {
-    pub fn with_client(client: C) -> Self {
-        Self { client }
+    pub fn with_client(client: C, placement: Placement) -> Self {
+        Self { client, placement }
     }
 }
 
@@ -34,12 +40,16 @@ where
     C: BackendClient,
 {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.client.put_inventory(inventories)
+        self.client.put_inventory(inventories, &self.placement)
     }
 }
 
 pub trait BackendClient {
-    fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>>;
+    fn put_inventory(
+        &self,
+        inventories: &[NodeInventory],
+        placement: &Placement,
+    ) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct HttpBackendClient {
@@ -151,10 +161,22 @@ fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option
 }
 
 impl BackendClient for HttpBackendClient {
-    fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
+    fn put_inventory(
+        &self,
+        inventories: &[NodeInventory],
+        placement: &Placement,
+    ) -> Result<(), Box<dyn Error>> {
+        let data = inventories
+            .iter()
+            .map(|inventory| NodeUpsertRequest {
+                inventory,
+                compute_zone: &placement.compute_zone,
+                node_group: &placement.node_group,
+            })
+            .collect();
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
-            .json(&BatchUpsertRequest { data: inventories })
+            .json(&BatchUpsertRequest { data })
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -254,7 +276,18 @@ struct EnrollResponse {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchUpsertRequest<'a> {
-    data: &'a [NodeInventory],
+    data: Vec<NodeUpsertRequest<'a>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeUpsertRequest<'a> {
+    #[serde(flatten)]
+    inventory: &'a NodeInventory,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    compute_zone: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    node_group: &'a str,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -328,9 +361,18 @@ mod tests {
     #[test]
     fn backend_sink_puts_node_inventory_batch() {
         let put_batches = Rc::new(RefCell::new(Vec::new()));
-        let sink = BackendSink::with_client(RecordingClient {
-            put_batches: Rc::clone(&put_batches),
-        });
+        let placements = Rc::new(RefCell::new(Vec::new()));
+        let placement = Placement {
+            compute_zone: "az51".to_string(),
+            node_group: "dev3-dh1".to_string(),
+        };
+        let sink = BackendSink::with_client(
+            RecordingClient {
+                put_batches: Rc::clone(&put_batches),
+                placements: Rc::clone(&placements),
+            },
+            placement.clone(),
+        );
 
         sink.write(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
             .expect("write");
@@ -340,6 +382,40 @@ mod tests {
         assert_eq!(put_batches[0].len(), 2);
         assert_eq!(put_batches[0][0], "10.0.0.1");
         assert_eq!(put_batches[0][1], "10.0.0.2");
+        assert_eq!(placements.borrow().as_slice(), &[placement]);
+    }
+
+    #[test]
+    fn batch_request_adds_camel_case_placement_to_each_inventory() {
+        let inventory = inventory("10.0.0.1");
+        let request = BatchUpsertRequest {
+            data: vec![NodeUpsertRequest {
+                inventory: &inventory,
+                compute_zone: "az51",
+                node_group: "dev3-dh1",
+            }],
+        };
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(value["data"][0]["computeZone"], "az51");
+        assert_eq!(value["data"][0]["nodeGroup"], "dev3-dh1");
+        assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
+    }
+
+    #[test]
+    fn batch_request_omits_empty_placement() {
+        let inventory = inventory("10.0.0.1");
+        let request = BatchUpsertRequest {
+            data: vec![NodeUpsertRequest {
+                inventory: &inventory,
+                compute_zone: "",
+                node_group: "",
+            }],
+        };
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert!(value["data"][0].get("computeZone").is_none());
+        assert!(value["data"][0].get("nodeGroup").is_none());
     }
 
     #[test]
@@ -390,16 +466,22 @@ mod tests {
     #[derive(Clone)]
     struct RecordingClient {
         put_batches: Rc<RefCell<Vec<Vec<String>>>>,
+        placements: Rc<RefCell<Vec<Placement>>>,
     }
 
     impl BackendClient for RecordingClient {
-        fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
+        fn put_inventory(
+            &self,
+            inventories: &[NodeInventory],
+            placement: &Placement,
+        ) -> Result<(), Box<dyn Error>> {
             self.put_batches.borrow_mut().push(
                 inventories
                     .iter()
                     .map(|inventory| inventory.source.address.clone())
                     .collect(),
             );
+            self.placements.borrow_mut().push(placement.clone());
             Ok(())
         }
     }

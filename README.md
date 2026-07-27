@@ -79,24 +79,40 @@ certificates.
 
 ## Configuration
 
-The collector reads a shared TOML configuration. BMC targets come from
-`endpoint_sources.static_bmc_endpoints`:
+The collector has its own TOML configuration. Placement is declared once at
+the top level and applies to every configured machine:
 
 ```toml
-[[endpoint_sources.static_bmc_endpoints]]
+compute_zone = "az51"
+node_group = "dev3-dh1"
+
+[[machines]]
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
 username = "root"
 password = "secret"
+labels = { site = "dev", environment = "development" }
 ```
 
-The OOB collector reads the static endpoint fields it needs and ignores
-service-only collector, processor, sink, and metrics settings. The endpoint MAC
-address identifies the BMC and is included in the collected inventory. Static
-endpoints must include a password for OOB inventory and attestation. API
-discovery alone is not sufficient for the OOB collector; the shared file must
-contain at least one static endpoint.
+The endpoint MAC identifies the BMC and is included in inventory. Passwords are
+required for inventory and attestation. On each OOB inventory upsert, the
+backend applies the same placement semantics as the in-band agent: it
+finds or creates the compute zone and node group, then assigns the node.
+Omit both placement fields to leave nodes unassigned.
+
+`mac` is optional. When omitted, the collector derives a locally administered
+unicast MAC using `02:00` followed by the final four bytes of the IP address.
+For example, `10.0.0.10` becomes `02:00:0a:00:00:0a`. An explicit MAC always
+takes precedence.
+
+The Helm deployment generates NICo's static endpoint configuration from this
+same file in an init container. It copies placement into NICo labels and marks
+every endpoint as a compute machine so NICo discovers the primary Redfish
+ComputerSystem UUID and emits `system.uuid`. Users do not maintain a separate
+NICo configuration or duplicate BMC credentials. Optional per-machine `labels`
+are also copied into NICo telemetry; `compute_zone`, `node_group`, and NICo
+identity labels remain reserved.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
@@ -169,15 +185,13 @@ reaches the agent API.
 then repeats every 24 hours by default. Override the cadence with
 `--interval-seconds`.
 
-See `config.example.toml` for a shared configuration that can be
-mounted into both the OOB collector and NICo hardware-health service.
+See `config.example.toml` for the shared machine and placement input.
 
 ## Helm Chart
 
 The chart is published as an OCI artifact at
 `oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector`. Create separate
-Secrets for the backend bootstrap token and shared hardware configuration
-before installing it:
+Secrets for the backend bootstrap token and generic collector config:
 
 ```bash
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \

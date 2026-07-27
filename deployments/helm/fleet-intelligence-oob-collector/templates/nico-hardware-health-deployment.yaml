@@ -32,6 +32,38 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: generate-nico-config
+          image: {{ include "fleet-intelligence-oob-collector.image" . | quote }}
+          imagePullPolicy: {{ .Values.bmcCollector.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          args:
+            - render-nico-config
+            - --config
+            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
+            - --output
+            - /etc/nico-health/config.toml
+            - --otlp-endpoint
+            {{- if .Values.otelGateway.enabled }}
+            - {{ printf "http://%s:%v" (include "fleet-intelligence-oob-collector.otelGatewayName" .) .Values.otelGateway.service.grpcPort | quote }}
+            {{- else }}
+            - {{ required "nicoHardwareHealth.otlpEndpoint is required when the OTEL gateway is disabled" (.Values.nicoHardwareHealth.otlpEndpoint | trim) | quote }}
+            {{- end }}
+            - --metrics-endpoint
+            - {{ printf "0.0.0.0:%v" .Values.nicoHardwareHealth.service.port | quote }}
+            - --metrics-prefix
+            - {{ required "nicoHardwareHealth.metricsPrefix is required" .Values.nicoHardwareHealth.metricsPrefix | quote }}
+          volumeMounts:
+            - name: collector-config
+              mountPath: /etc/fleet-intelligence
+              readOnly: true
+            - name: generated-config
+              mountPath: /etc/nico-health
       containers:
         - name: nico-hardware-health
           image: {{ include "fleet-intelligence-oob-collector.nicoHardwareHealthImage" . | quote }}
@@ -43,7 +75,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
           args:
-            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
+            - /etc/nico-health/config.toml
           ports:
             - name: metrics
               containerPort: {{ .Values.nicoHardwareHealth.service.port }}
@@ -55,8 +87,8 @@ spec:
             periodSeconds: 300
             failureThreshold: 3
           volumeMounts:
-            - name: config
-              mountPath: /etc/fleet-intelligence
+            - name: generated-config
+              mountPath: /etc/nico-health
               readOnly: true
             - name: tmp
               mountPath: /tmp
@@ -66,13 +98,17 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
-        - name: config
+        - name: collector-config
           secret:
             secretName: {{ required "config.secretName is required" .Values.config.secretName | quote }}
             items:
               - key: {{ .Values.config.secretKey | quote }}
                 path: {{ .Values.config.secretKey | quote }}
                 mode: 0440
+        - name: generated-config
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
         - name: tmp
           emptyDir: {}
         {{- if .Values.nicoHardwareHealth.tlsSecretName }}

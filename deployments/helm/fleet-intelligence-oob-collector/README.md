@@ -7,14 +7,18 @@ update.
 
 ## Prerequisites
 
-Create one Secret for the backend bootstrap token and another for the shared
-TOML configuration:
+Create separate Secrets for the backend bootstrap token and generic collector
+configuration:
 
 ```bash
+kubectl create namespace fleet-intelligence
+
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
+  --namespace fleet-intelligence \
   --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
 
 kubectl create secret generic fleet-intelligence-config \
+  --namespace fleet-intelligence \
   --from-file=config.toml=/path/to/config.toml
 ```
 
@@ -23,6 +27,7 @@ token that has `read:packages` access:
 
 ```bash
 kubectl create secret docker-registry ghcr-pull-secret \
+  --namespace fleet-intelligence \
   --docker-server=ghcr.io \
   --docker-username="$GITHUB_USER" \
   --docker-password="$GITHUB_TOKEN"
@@ -30,22 +35,56 @@ kubectl create secret docker-registry ghcr-pull-secret \
 
 ## Install
 
+No values file is required when using the default Secret names, backend URL,
+and published images. The collector and NICo image tags default to the chart
+version; the OTel gateway uses its independently pinned image tag.
+
 ```bash
-helm install fleet-intelligence-oob-collector \
+export OOB_CHART_VERSION=0.1.0
+
+helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
-  --version 0.1.0 \
-  --set 'imagePullSecrets[0].name=ghcr-pull-secret'
+  --version "$OOB_CHART_VERSION" \
+  --namespace fleet-intelligence \
+  --create-namespace \
+  --wait \
+  --timeout 10m
 ```
 
-Set `bmcCollector.agentTokenSecretName` when the token Secret uses a different
-name. Set `config.secretName` or `config.secretKey` when the shared configuration
-is stored under a different Secret or key. The chart does
-not accept credentials as values, preventing them from being stored in Helm
-release state. Omit `imagePullSecrets` when the images are public.
+If the images require registry authentication, append
+`--set 'imagePullSecrets[0].name=ghcr-pull-secret'` to the Helm command.
 
-The shared TOML must define at least one
-`endpoint_sources.static_bmc_endpoints` entry. The BMC collector does not use
-NICo API endpoint discovery.
+Set `bmcCollector.agentTokenSecretName` when the token Secret uses a different
+name. Set `config.secretName` or `config.secretKey` when the generic
+configuration is stored under a different Secret or key. The chart does not
+accept credentials as values, preventing them from being stored in Helm release
+state. Override the collector or NICo image tag only for testing an image that
+does not match the chart version.
+
+The OOB TOML declares placement once and defines one or more machines:
+
+```toml
+compute_zone = "az51"
+node_group = "dev3-dh1"
+
+[[machines]]
+ip = "10.0.0.10"
+port = 443
+mac = "00:11:22:33:44:55"
+username = "root"
+password = "secret"
+labels = { site = "dev", environment = "development" }
+```
+
+The MAC is optional. If omitted, the collector and generated NICo config use a
+locally administered MAC formed as `02:00:<last four IP bytes>`.
+
+The backend uses the OOB placement to find or create the compute zone and node
+group and assign each node. An init container translates the same generic config
+into NICo static endpoints, copies placement into NICo labels, and marks every
+endpoint as a machine. NICo then emits those labels and the discovered primary
+Redfish ComputerSystem UUID (`system.uuid`) on OTLP resources. Optional
+per-machine labels are copied as well.
 
 ## Proxy configuration
 
@@ -81,23 +120,63 @@ image tag.
 
 ## NICo hardware health
 
-NICo hardware health is enabled by default and mounts the same `config`
-Secret as the BMC collector. It can be disabled when only inventory and
-attestation are needed:
+NICo hardware health is enabled by default. Its generated configuration is
+written to a memory-backed pod-local `emptyDir`; no second user-managed Secret
+is needed. It can be disabled when only inventory and attestation are needed:
 
 ```bash
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
   --version 0.1.0 \
-  --set nicoHardwareHealth.enabled=false
+  --set nicoHardwareHealth.enabled=false \
+  --set otelGateway.enabled=false
 ```
 
-The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
-the chart version. The configuration can use NICo API discovery or static BMC
-endpoints. When using NICo API mTLS, create a Secret containing `ca.crt`,
-`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The files
-are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
+After changing the external collector config Secret, restart the NICo
+Deployment so its init container regenerates the pod-local configuration.
 
-The release workflow builds this image from the `infra-controller` `v2.0.0-rc.5`
-tag configured in `.github/workflows/release.yml`, publishes amd64 and arm64
-images, then publishes the chart only after both collector images are available.
+The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
+the chart version. By default, NICo sends OTLP/gRPC to a separate gateway
+Deployment and ClusterIP Service running
+`ghcr.io/nvidia/fleetint-otelcol:0.0.2-poc.otelgateway`. The gateway reuses
+`bmcCollector.backendUrl` and the `agent-token` Secret to authenticate to the
+Fleet Intelligence telemetry API. Its NetworkPolicy accepts OTLP only from
+workloads in the same Helm release when supported by the cluster CNI.
+
+Disable `otelGateway.enabled` and set
+`nicoHardwareHealth.otlpEndpoint` to use an external collector instead.
+
+## OpenTelemetry gateway
+
+The gateway is a top-level chart component with an independent Deployment,
+ClusterIP Service, configuration, rollout, and scaling lifecycle. It receives
+OTLP/gRPC on port `4317` and OTLP/HTTP on port `4318`. NICo's generated
+configuration automatically uses the gateway Service when
+`otelGateway.enabled=true`.
+
+By default, the gateway derives its enrollment URL, telemetry backend URL, and
+Secret name from `bmcCollector.backendUrl` and
+`bmcCollector.agentTokenSecretName`. Override them when the telemetry API uses
+different routing or credentials:
+
+```yaml
+otelGateway:
+  enroll:
+    endpoint: https://data.example.com/api/v1/health/enroll
+    existingSecret: fleet-intelligence-otel-gateway-token
+    secretKey: agent-token
+  backendEndpoint: https://data.example.com/api/v1/health
+```
+
+The chart supports gateway replica scaling, topology spreading, an optional
+PodDisruptionBudget, resource configuration, and an ingress NetworkPolicy.
+
+Set `nicoHardwareHealth.metricsPrefix` when a non-default metric prefix is
+needed. When using NICo API mTLS, create a Secret containing `ca.crt`,
+`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The
+files are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
+
+The release workflow builds this image from the pinned `infra-controller`
+commit configured by `NICO_SOURCE_REF` in `.github/workflows/release.yml`,
+publishes amd64 and arm64 images, then publishes the chart only after both
+collector images are available.

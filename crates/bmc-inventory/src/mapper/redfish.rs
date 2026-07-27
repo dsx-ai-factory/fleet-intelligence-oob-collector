@@ -659,10 +659,12 @@ mod tests {
     fn target() -> Target {
         Target {
             ip: "10.0.0.1".parse().expect("IP address"),
+            port: None,
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             username: "user".to_string(),
             password: "pass".to_string(),
+            labels: Default::default(),
         }
     }
 
