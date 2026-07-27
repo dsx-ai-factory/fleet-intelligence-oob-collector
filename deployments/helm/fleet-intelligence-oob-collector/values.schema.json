@@ -60,9 +60,11 @@
     "nicoHardwareHealth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "image", "tlsSecretName", "service"],
+      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "image", "tlsSecretName", "service"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "otlpEndpoint": { "type": "string", "minLength": 1 },
+        "metricsPrefix": { "type": "string", "minLength": 1 },
         "image": {
           "type": "object",
           "additionalProperties": false,

@@ -1,7 +1,7 @@
 # Existing Docker registry Secrets used to pull chart images.
 imagePullSecrets: []
 
-# Existing Secret containing the TOML configuration shared by both collectors.
+# Existing Secret containing the Fleet Intelligence OOB collector TOML.
 config:
   secretName: fleet-intelligence-config
   secretKey: config.toml
@@ -32,6 +32,9 @@ bmcCollector:
 # contain BMC credentials, so it is only accepted through an existing Secret.
 nicoHardwareHealth:
   enabled: true
+  # NICo sink settings combined with the collector Secret by an init container.
+  otlpEndpoint: http://localhost:4317
+  metricsPrefix: fleetint
   image:
     repository: ghcr.io/nvidia/nico-hardware-health
     # Defaults to the chart version when empty.

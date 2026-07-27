@@ -7,8 +7,8 @@ update.
 
 ## Prerequisites
 
-Create one Secret for the backend bootstrap token and another for the shared
-TOML configuration:
+Create separate Secrets for the backend bootstrap token and generic collector
+configuration:
 
 ```bash
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
@@ -16,6 +16,7 @@ kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
 
 kubectl create secret generic fleet-intelligence-config \
   --from-file=config.toml=/path/to/config.toml
+
 ```
 
 If the collector image is private, create a Docker registry Secret with a GHCR
@@ -38,14 +39,35 @@ helm install fleet-intelligence-oob-collector \
 ```
 
 Set `bmcCollector.agentTokenSecretName` when the token Secret uses a different
-name. Set `config.secretName` or `config.secretKey` when the shared configuration
-is stored under a different Secret or key. The chart does
-not accept credentials as values, preventing them from being stored in Helm
-release state. Omit `imagePullSecrets` when the images are public.
+name. Set `config.secretName` or `config.secretKey` when the generic
+configuration is stored under a different Secret or key. The chart does not
+accept credentials as values, preventing them from being stored in Helm release
+state. Omit `imagePullSecrets` when the images are public.
 
-The shared TOML must define at least one
-`endpoint_sources.static_bmc_endpoints` entry. The BMC collector does not use
-NICo API endpoint discovery.
+The OOB TOML declares placement once and defines one or more machines:
+
+```toml
+compute_zone = "az51"
+node_group = "dev3-dh1"
+
+[[machines]]
+ip = "10.0.0.10"
+port = 443
+mac = "00:11:22:33:44:55"
+username = "root"
+password = "secret"
+labels = { site = "dev", environment = "development" }
+```
+
+The MAC is optional. If omitted, the collector and generated NICo config use a
+locally administered MAC formed as `02:00:<last four IP bytes>`.
+
+The backend uses the OOB placement to find or create the compute zone and node
+group and assign each node. An init container translates the same generic config
+into NICo static endpoints, copies placement into NICo labels, and marks every
+endpoint as a machine. NICo then emits those labels and the discovered primary
+Redfish ComputerSystem UUID (`system.uuid`) on OTLP resources. Optional
+per-machine labels are copied as well.
 
 ## Proxy configuration
 
@@ -81,9 +103,9 @@ image tag.
 
 ## NICo hardware health
 
-NICo hardware health is enabled by default and mounts the same `config`
-Secret as the BMC collector. It can be disabled when only inventory and
-attestation are needed:
+NICo hardware health is enabled by default. Its generated configuration is
+written to a pod-local `emptyDir`; no second user-managed Secret is needed. It
+can be disabled when only inventory and attestation are needed:
 
 ```bash
 helm upgrade --install fleet-intelligence-oob-collector \
@@ -92,12 +114,18 @@ helm upgrade --install fleet-intelligence-oob-collector \
   --set nicoHardwareHealth.enabled=false
 ```
 
-The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
-the chart version. The configuration can use NICo API discovery or static BMC
-endpoints. When using NICo API mTLS, create a Secret containing `ca.crt`,
-`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The files
-are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
+After changing the external collector config Secret, restart the NICo
+Deployment so its init container regenerates the pod-local configuration.
 
-The release workflow builds this image from the `infra-controller` `v2.0.0-rc.5`
-tag configured in `.github/workflows/release.yml`, publishes amd64 and arm64
-images, then publishes the chart only after both collector images are available.
+The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
+the chart version. Set `nicoHardwareHealth.otlpEndpoint` for the telemetry
+destination and `nicoHardwareHealth.metricsPrefix` when a non-default metric
+prefix is needed. When using NICo API mTLS, create a Secret containing
+`ca.crt`, `tls.crt`, and `tls.key`, then set
+`nicoHardwareHealth.tlsSecretName`. The files are mounted at
+`/var/run/secrets/spiffe.io`, matching NICo defaults.
+
+The release workflow builds this image from the pinned `infra-controller`
+commit configured by `NICO_SOURCE_REF` in `.github/workflows/release.yml`,
+publishes amd64 and arm64 images, then publishes the chart only after both
+collector images are available.

@@ -1,5 +1,10 @@
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+use bmc_inventory::config::{self, NicoConfigOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
     DEFAULT_INVENTORY_INTERVAL_SECONDS, DEFAULT_REDFISH_TIMEOUT_SECONDS,
@@ -21,6 +26,8 @@ enum Command {
     Inventory(InventoryArgs),
     #[command(about = "Continuously collect BMC data and export it to Fleet Intelligence")]
     Run(RuntimeArgs),
+    #[command(about = "Generate NICo static configuration from the collector config")]
+    RenderNicoConfig(RenderNicoConfigArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -65,6 +72,24 @@ struct RuntimeArgs {
     interval_seconds: u64,
 }
 
+#[derive(Debug, Parser)]
+struct RenderNicoConfigArgs {
+    #[arg(short, long, default_value = "config.toml")]
+    config: String,
+
+    #[arg(short, long)]
+    output: String,
+
+    #[arg(long, default_value = "http://localhost:4317")]
+    otlp_endpoint: String,
+
+    #[arg(long, default_value = "0.0.0.0:9009")]
+    metrics_endpoint: String,
+
+    #[arg(long, default_value = "fleetint")]
+    metrics_prefix: String,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum CliInventoryFormat {
     Table,
@@ -91,6 +116,18 @@ impl CollectorArgs {
             timeout_seconds: self.timeout_seconds,
         }
     }
+}
+
+fn write_private_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o640);
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(0o640))?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -120,6 +157,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 interval_seconds: args.interval_seconds,
             })
             .await?
+        }
+        Command::RenderNicoConfig(args) => {
+            let collector_config = config::load_config(&args.config)?;
+            let rendered = config::render_nico_config(
+                &collector_config,
+                &NicoConfigOptions {
+                    otlp_endpoint: args.otlp_endpoint,
+                    metrics_endpoint: args.metrics_endpoint,
+                    metrics_prefix: args.metrics_prefix,
+                },
+            )?;
+            write_private_file(&args.output, &rendered)?;
         }
     }
     Ok(())

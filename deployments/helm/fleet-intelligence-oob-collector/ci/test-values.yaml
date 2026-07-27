@@ -12,4 +12,5 @@ imagePullSecrets:
   - name: ghcr-pull-secret-test
 nicoHardwareHealth:
   enabled: true
+  otlpEndpoint: http://otel-collector.test.svc:4317
   tlsSecretName: nico-hardware-health-tls-test
