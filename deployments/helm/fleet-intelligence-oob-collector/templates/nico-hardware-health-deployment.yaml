@@ -49,7 +49,11 @@ spec:
             - --output
             - /etc/nico-health/config.toml
             - --otlp-endpoint
-            - {{ required "nicoHardwareHealth.otlpEndpoint is required" .Values.nicoHardwareHealth.otlpEndpoint | quote }}
+            {{- if .Values.nicoHardwareHealth.otelGateway.enabled }}
+            - {{ printf "http://%s:%v" (include "fleet-intelligence-oob-collector.otelGatewayName" .) .Values.nicoHardwareHealth.otelGateway.service.port | quote }}
+            {{- else }}
+            - {{ required "nicoHardwareHealth.otlpEndpoint is required when the OTEL gateway is disabled" (.Values.nicoHardwareHealth.otlpEndpoint | trim) | quote }}
+            {{- end }}
             - --metrics-endpoint
             - {{ printf "0.0.0.0:%v" .Values.nicoHardwareHealth.service.port | quote }}
             - --metrics-prefix
@@ -102,7 +106,9 @@ spec:
                 path: {{ .Values.config.secretKey | quote }}
                 mode: 0440
         - name: generated-config
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
         - name: tmp
           emptyDir: {}
         {{- if .Values.nicoHardwareHealth.tlsSecretName }}

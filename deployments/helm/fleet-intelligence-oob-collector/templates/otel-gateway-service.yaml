@@ -1,0 +1,19 @@
+{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.otelGateway.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-gateway
+  ports:
+    - name: otlp-grpc
+      port: {{ .Values.nicoHardwareHealth.otelGateway.service.port }}
+      targetPort: otlp-grpc
+      protocol: TCP
+{{- end }}

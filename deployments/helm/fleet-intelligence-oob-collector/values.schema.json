@@ -60,11 +60,11 @@
     "nicoHardwareHealth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "image", "tlsSecretName", "service"],
+      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "image", "tlsSecretName", "service", "otelGateway"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "otlpEndpoint": { "type": "string", "minLength": 1 },
-        "metricsPrefix": { "type": "string", "minLength": 1 },
+        "otlpEndpoint": { "type": "string", "pattern": "^$|.*\\S.*" },
+        "metricsPrefix": { "type": "string", "pattern": ".*\\S.*" },
         "image": {
           "type": "object",
           "additionalProperties": false,
@@ -83,6 +83,85 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "otelGateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "image",
+            "replicas",
+            "terminationGracePeriodSeconds",
+            "service",
+            "networkPolicy",
+            "memoryLimiter",
+            "resources"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repository", "tag", "pullPolicy"],
+              "properties": {
+                "repository": { "type": "string", "pattern": ".*\\S.*" },
+                "tag": { "type": "string", "pattern": ".*\\S.*" },
+                "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+              }
+            },
+            "replicas": { "type": "integer", "minimum": 1 },
+            "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["port"],
+              "properties": {
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              }
+            },
+            "networkPolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled"],
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "memoryLimiter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["limitPercentage", "spikeLimitPercentage"],
+              "properties": {
+                "limitPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "spikeLimitPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["limits", "requests"],
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": { "type": ["string", "number"] },
+                    "memory": { "type": ["string", "number"] }
+                  }
+                },
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": { "type": ["string", "number"] },
+                    "memory": { "type": ["string", "number"] }
+                  }
+                }
+              }
+            }
           }
         }
       }

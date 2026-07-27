@@ -28,12 +28,13 @@ bmcCollector:
   intervalSeconds: 86400
   insecureTls: false
 
-# Optional NICo Redfish hardware-health service. Its TOML configuration may
-# contain BMC credentials, so it is only accepted through an existing Secret.
+# Optional NICo Redfish hardware-health service. Its generated TOML
+# configuration may contain BMC credentials and is kept in a memory-backed
+# pod-local volume.
 nicoHardwareHealth:
   enabled: true
-  # NICo sink settings combined with the collector Secret by an init container.
-  otlpEndpoint: http://localhost:4317
+  # External OTLP/gRPC endpoint used only when otelGateway.enabled is false.
+  otlpEndpoint: ""
   metricsPrefix: fleetint
   image:
     repository: ghcr.io/nvidia/nico-hardware-health
@@ -45,3 +46,27 @@ nicoHardwareHealth:
   service:
     enabled: true
     port: 9009
+  # Local OTLP gateway that authenticates NICo telemetry to Fleet Intelligence.
+  # It reuses bmcCollector.backendUrl and the agent-token Secret.
+  otelGateway:
+    enabled: true
+    image:
+      repository: ghcr.io/nvidia/fleetint-otelcol
+      tag: 0.0.2-poc.otelgateway
+      pullPolicy: IfNotPresent
+    replicas: 1
+    terminationGracePeriodSeconds: 30
+    service:
+      port: 4317
+    networkPolicy:
+      enabled: true
+    memoryLimiter:
+      limitPercentage: 80
+      spikeLimitPercentage: 20
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi

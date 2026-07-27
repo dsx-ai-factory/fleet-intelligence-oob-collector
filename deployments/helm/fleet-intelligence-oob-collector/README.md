@@ -104,8 +104,8 @@ image tag.
 ## NICo hardware health
 
 NICo hardware health is enabled by default. Its generated configuration is
-written to a pod-local `emptyDir`; no second user-managed Secret is needed. It
-can be disabled when only inventory and attestation are needed:
+written to a memory-backed pod-local `emptyDir`; no second user-managed Secret
+is needed. It can be disabled when only inventory and attestation are needed:
 
 ```bash
 helm upgrade --install fleet-intelligence-oob-collector \
@@ -118,12 +118,20 @@ After changing the external collector config Secret, restart the NICo
 Deployment so its init container regenerates the pod-local configuration.
 
 The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
-the chart version. Set `nicoHardwareHealth.otlpEndpoint` for the telemetry
-destination and `nicoHardwareHealth.metricsPrefix` when a non-default metric
-prefix is needed. When using NICo API mTLS, create a Secret containing
-`ca.crt`, `tls.crt`, and `tls.key`, then set
-`nicoHardwareHealth.tlsSecretName`. The files are mounted at
-`/var/run/secrets/spiffe.io`, matching NICo defaults.
+the chart version. By default, NICo sends OTLP/gRPC to a separate gateway
+Deployment and ClusterIP Service running
+`ghcr.io/nvidia/fleetint-otelcol:0.0.2-poc.otelgateway`. The gateway reuses
+`bmcCollector.backendUrl` and the `agent-token` Secret to authenticate to the
+Fleet Intelligence telemetry API. Its NetworkPolicy accepts OTLP only from the
+NICo workload when supported by the cluster CNI.
+
+Disable `nicoHardwareHealth.otelGateway.enabled` and set
+`nicoHardwareHealth.otlpEndpoint` to use an external collector instead.
+
+Set `nicoHardwareHealth.metricsPrefix` when a non-default metric prefix is
+needed. When using NICo API mTLS, create a Secret containing `ca.crt`,
+`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The
+files are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
 
 The release workflow builds this image from the pinned `infra-controller`
 commit configured by `NICO_SOURCE_REF` in `.github/workflows/release.yml`,

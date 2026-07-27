@@ -39,3 +39,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "fleet-intelligence-oob-collector.nicoHardwareHealthImage" -}}
 {{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayImage" -}}
+{{- printf "%s:%s" .Values.nicoHardwareHealth.otelGateway.image.repository .Values.nicoHardwareHealth.otelGateway.image.tag -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewayName" -}}
+{{- printf "%s-otel-gateway" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "fleet-intelligence-oob-collector.otelGatewaySelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fleet-intelligence-oob-collector.otelGatewayName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

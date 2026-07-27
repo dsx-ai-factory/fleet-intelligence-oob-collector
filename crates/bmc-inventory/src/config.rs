@@ -247,13 +247,16 @@ pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
 ) -> Result<String, Box<dyn Error>> {
-    if options.otlp_endpoint.trim().is_empty() {
+    let otlp_endpoint = options.otlp_endpoint.trim();
+    let metrics_endpoint = options.metrics_endpoint.trim();
+    let metrics_prefix = options.metrics_prefix.trim();
+    if otlp_endpoint.is_empty() {
         return Err("NICo OTLP endpoint cannot be empty".into());
     }
-    if options.metrics_endpoint.trim().is_empty() {
+    if metrics_endpoint.is_empty() {
         return Err("NICo metrics endpoint cannot be empty".into());
     }
-    if options.metrics_prefix.trim().is_empty() {
+    if metrics_prefix.is_empty() {
         return Err("NICo metrics prefix cannot be empty".into());
     }
 
@@ -286,7 +289,7 @@ pub fn render_nico_config(
         })
         .collect();
 
-    let config = NicoConfig {
+    let nico_config = NicoConfig {
         endpoint_sources: NicoEndpointSources {
             carbide_api: NicoEnabled { enabled: false },
             static_bmc_endpoints,
@@ -299,19 +302,19 @@ pub fn render_nico_config(
             prometheus: NicoEnabled { enabled: true },
             otlp: NicoOtlpSink {
                 enabled: true,
-                endpoint: &options.otlp_endpoint,
+                endpoint: otlp_endpoint,
                 include_diagnostics: false,
                 batch_size: 512,
                 flush_interval: "2s",
             },
         },
         metrics: NicoMetrics {
-            endpoint: &options.metrics_endpoint,
-            prefix: &options.metrics_prefix,
+            endpoint: metrics_endpoint,
+            prefix: metrics_prefix,
         },
     };
 
-    toml::to_string_pretty(&config)
+    toml::to_string_pretty(&nico_config)
         .map_err(|error| format!("failed to render NICo TOML config: {error}").into())
 }
 
@@ -660,6 +663,40 @@ mod tests {
             rendered["sinks"]["otlp"]["endpoint"].as_str(),
             Some("http://localhost:4317")
         );
+    }
+
+    #[test]
+    fn rendered_nico_config_trims_sink_options() {
+        let collector = parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                otlp_endpoint: "  http://localhost:4317  ".to_string(),
+                metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
+                metrics_prefix: "  fleetint  ".to_string(),
+            },
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["sinks"]["otlp"]["endpoint"].as_str(),
+            Some("http://localhost:4317")
+        );
+        assert_eq!(
+            rendered["metrics"]["endpoint"].as_str(),
+            Some("0.0.0.0:9009")
+        );
+        assert_eq!(rendered["metrics"]["prefix"].as_str(), Some("fleetint"));
     }
 
     #[test]
