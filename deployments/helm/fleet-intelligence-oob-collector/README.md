@@ -11,12 +11,15 @@ Create separate Secrets for the backend bootstrap token and generic collector
 configuration:
 
 ```bash
+kubectl create namespace fleet-intelligence
+
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
+  --namespace fleet-intelligence \
   --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
 
 kubectl create secret generic fleet-intelligence-config \
+  --namespace fleet-intelligence \
   --from-file=config.toml=/path/to/config.toml
-
 ```
 
 If the collector image is private, create a Docker registry Secret with a GHCR
@@ -24,6 +27,7 @@ token that has `read:packages` access:
 
 ```bash
 kubectl create secret docker-registry ghcr-pull-secret \
+  --namespace fleet-intelligence \
   --docker-server=ghcr.io \
   --docker-username="$GITHUB_USER" \
   --docker-password="$GITHUB_TOKEN"
@@ -31,18 +35,31 @@ kubectl create secret docker-registry ghcr-pull-secret \
 
 ## Install
 
+No values file is required when using the default Secret names, backend URL,
+and published images. The collector and NICo image tags default to the chart
+version; the OTel gateway uses its independently pinned image tag.
+
 ```bash
-helm install fleet-intelligence-oob-collector \
+export OOB_CHART_VERSION=0.1.0
+
+helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
-  --version 0.1.0 \
-  --set 'imagePullSecrets[0].name=ghcr-pull-secret'
+  --version "$OOB_CHART_VERSION" \
+  --namespace fleet-intelligence \
+  --create-namespace \
+  --wait \
+  --timeout 10m
 ```
+
+If the images require registry authentication, append
+`--set 'imagePullSecrets[0].name=ghcr-pull-secret'` to the Helm command.
 
 Set `bmcCollector.agentTokenSecretName` when the token Secret uses a different
 name. Set `config.secretName` or `config.secretKey` when the generic
 configuration is stored under a different Secret or key. The chart does not
 accept credentials as values, preventing them from being stored in Helm release
-state. Omit `imagePullSecrets` when the images are public.
+state. Override the collector or NICo image tag only for testing an image that
+does not match the chart version.
 
 The OOB TOML declares placement once and defines one or more machines:
 
