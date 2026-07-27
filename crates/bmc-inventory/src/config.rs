@@ -302,10 +302,12 @@ pub fn render_nico_config(
             prometheus: NicoEnabled { enabled: true },
             otlp: NicoOtlpSink {
                 enabled: true,
-                endpoint: otlp_endpoint,
-                include_diagnostics: false,
-                batch_size: 512,
-                flush_interval: "2s",
+                targets: vec![NicoOtlpTarget {
+                    endpoint: otlp_endpoint,
+                    include_diagnostics: false,
+                    batch_size: 512,
+                    flush_interval: "2s",
+                }],
             },
         },
         metrics: NicoMetrics {
@@ -364,6 +366,11 @@ struct NicoEnabled {
 #[derive(Serialize)]
 struct NicoOtlpSink<'a> {
     enabled: bool,
+    targets: Vec<NicoOtlpTarget<'a>>,
+}
+
+#[derive(Serialize)]
+struct NicoOtlpTarget<'a> {
     endpoint: &'a str,
     include_diagnostics: bool,
     batch_size: usize,
@@ -660,7 +667,13 @@ mod tests {
         assert_eq!(endpoint["labels"]["site"].as_str(), Some("dev"));
         assert!(endpoint.get("machine").is_some());
         assert_eq!(
-            rendered["sinks"]["otlp"]["endpoint"].as_str(),
+            rendered["sinks"]["otlp"]["targets"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            rendered["sinks"]["otlp"]["targets"][0]["endpoint"].as_str(),
             Some("http://localhost:4317")
         );
     }
@@ -689,7 +702,7 @@ mod tests {
         let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
 
         assert_eq!(
-            rendered["sinks"]["otlp"]["endpoint"].as_str(),
+            rendered["sinks"]["otlp"]["targets"][0]["endpoint"].as_str(),
             Some("http://localhost:4317")
         );
         assert_eq!(
