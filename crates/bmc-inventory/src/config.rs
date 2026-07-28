@@ -5,7 +5,6 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
-const MAX_PLACEMENT_NAME_BYTES: usize = 255;
 const MAX_NICO_LABELS: usize = 32;
 const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
 const RESERVED_NICO_LABELS: &[&str] = &[
@@ -25,15 +24,8 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     "system_uuid",
 ];
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Placement {
-    pub compute_zone: String,
-    pub node_group: String,
-}
-
 #[derive(Clone, Debug)]
 pub struct CollectorConfig {
-    pub placement: Placement,
     pub targets: Vec<Target>,
 }
 
@@ -65,9 +57,7 @@ impl fmt::Debug for Target {
 #[serde(deny_unknown_fields)]
 struct Config {
     #[serde(default)]
-    compute_zone: String,
-    #[serde(default)]
-    node_group: String,
+    labels: BTreeMap<String, String>,
     #[serde(default)]
     machines: Vec<MachineConfig>,
 }
@@ -103,43 +93,31 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         return Err(format!("no BMC targets found in {path}; configure [[machines]]").into());
     }
 
-    let placement = Placement {
-        compute_zone: normalize_placement_name("compute_zone", config.compute_zone)?,
-        node_group: normalize_placement_name("node_group", config.node_group)?,
-    };
+    validate_nico_labels("labels", &config.labels)?;
 
     let mut macs = HashSet::new();
     let mut targets = Vec::with_capacity(config.machines.len());
     for (index, machine) in config.machines.into_iter().enumerate() {
-        let target = machine.into_target(index)?;
-        validate_nico_labels(index, &target.labels, &placement)?;
+        let mut target = machine.into_target(index)?;
+        let mut labels = config.labels.clone();
+        labels.extend(target.labels);
+        target.labels = labels;
+        validate_nico_labels(&format!("machines[{index}].labels"), &target.labels)?;
         if !macs.insert(target.mac.to_ascii_lowercase()) {
             return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
         }
         targets.push(target);
     }
 
-    Ok(CollectorConfig { placement, targets })
+    Ok(CollectorConfig { targets })
 }
 
 fn validate_nico_labels(
-    index: usize,
+    context: &str,
     labels: &BTreeMap<String, String>,
-    placement: &Placement,
 ) -> Result<(), Box<dyn Error>> {
-    if labels.contains_key("compute_zone") || labels.contains_key("node_group") {
-        return Err(format!(
-            "machines[{index}].labels must not define compute_zone or node_group; use the top-level placement fields"
-        )
-        .into());
-    }
-    let placement_label_count = usize::from(!placement.compute_zone.is_empty())
-        + usize::from(!placement.node_group.is_empty());
-    if labels.len() + placement_label_count > MAX_NICO_LABELS {
-        return Err(format!(
-            "machines[{index}].labels and placement support at most {MAX_NICO_LABELS} NICo labels"
-        )
-        .into());
+    if labels.len() > MAX_NICO_LABELS {
+        return Err(format!("{context} supports at most {MAX_NICO_LABELS} NICo labels").into());
     }
     for (name, value) in labels {
         let mut chars = name.chars();
@@ -149,32 +127,19 @@ fn validate_nico_labels(
         let valid_rest =
             chars.all(|character| character.is_ascii_alphanumeric() || character == '_');
         if !valid_start || !valid_rest {
-            return Err(format!(
-                "machines[{index}].labels key {name:?} must match [a-zA-Z_][a-zA-Z0-9_]*"
-            )
-            .into());
+            return Err(format!("{context} key {name:?} must match [a-zA-Z_][a-zA-Z0-9_]*").into());
         }
         if RESERVED_NICO_LABELS.contains(&name.as_str()) {
-            return Err(
-                format!("machines[{index}].labels key {name:?} is reserved by NICo").into(),
-            );
+            return Err(format!("{context} key {name:?} is reserved by NICo").into());
         }
         if value.len() > MAX_NICO_LABEL_VALUE_BYTES {
             return Err(format!(
-                "machines[{index}].labels value for {name:?} exceeds {MAX_NICO_LABEL_VALUE_BYTES} bytes"
+                "{context} value for {name:?} exceeds {MAX_NICO_LABEL_VALUE_BYTES} bytes"
             )
             .into());
         }
     }
     Ok(())
-}
-
-fn normalize_placement_name(name: &str, value: String) -> Result<String, Box<dyn Error>> {
-    let value = value.trim().to_string();
-    if value.len() > MAX_PLACEMENT_NAME_BYTES {
-        return Err(format!("{name} must not exceed {MAX_PLACEMENT_NAME_BYTES} bytes").into());
-    }
-    Ok(value)
 }
 
 impl MachineConfig {
@@ -263,29 +228,14 @@ pub fn render_nico_config(
     let static_bmc_endpoints = config
         .targets
         .iter()
-        .map(|target| {
-            let mut labels = target.labels.clone();
-            if !config.placement.compute_zone.is_empty() {
-                labels.insert(
-                    "compute_zone".to_string(),
-                    config.placement.compute_zone.clone(),
-                );
-            }
-            if !config.placement.node_group.is_empty() {
-                labels.insert(
-                    "node_group".to_string(),
-                    config.placement.node_group.clone(),
-                );
-            }
-            NicoStaticBmcEndpoint {
-                ip: target.ip,
-                port: target.port,
-                mac: &target.mac,
-                username: &target.username,
-                password: &target.password,
-                labels,
-                machine: NicoMachine {},
-            }
+        .map(|target| NicoStaticBmcEndpoint {
+            ip: target.ip,
+            port: target.port,
+            mac: &target.mac,
+            username: &target.username,
+            password: &target.password,
+            labels: target.labels.clone(),
+            machine: NicoMachine {},
         })
         .collect();
 
@@ -388,12 +338,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_top_level_placement_and_machines() {
+    fn applies_top_level_labels_and_machine_overrides() {
         let path = write_config(
             "valid",
             r#"
-            compute_zone = "  az51 "
-            node_group = " dev3-dh1  "
+            labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true", site = "shared" }
 
             [[machines]]
             ip = "10.0.0.1"
@@ -401,7 +350,7 @@ mod tests {
             mac = "00:11:22:33:44:55"
             username = "admin"
             password = "secret"
-            labels = { site = "dev" }
+            labels = { site = "dev", environment = "development" }
 
             [[machines]]
             ip = "2001:db8::1"
@@ -413,37 +362,39 @@ mod tests {
 
         let config = load_config(path.to_str().expect("path")).expect("config");
 
-        assert_eq!(
-            config.placement,
-            Placement {
-                compute_zone: "az51".to_string(),
-                node_group: "dev3-dh1".to_string(),
-            }
-        );
         assert_eq!(config.targets.len(), 2);
         assert_eq!(config.targets[0].mac, "00:11:22:33:44:55");
         assert_eq!(config.targets[0].address, "10.0.0.1:8443");
+        assert_eq!(
+            config.targets[0].labels.get("oob"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            config.targets[0].labels.get("site"),
+            Some(&"dev".to_string())
+        );
+        assert_eq!(
+            config.targets[0].labels.get("environment"),
+            Some(&"development".to_string())
+        );
+        assert_eq!(
+            config.targets[0].labels.get("compute_zone"),
+            Some(&"az51".to_string())
+        );
         assert_eq!(config.targets[1].mac, "00:11:22:33:44:66");
         assert_eq!(config.targets[1].address, "[2001:db8::1]");
-    }
-
-    #[test]
-    fn placement_defaults_to_unassigned() {
-        let path = write_config(
-            "unassigned",
-            r#"
-            [[machines]]
-            ip = "10.0.0.1"
-            mac = "00:11:22:33:44:55"
-            username = "admin"
-            password = "secret"
-            labels = { site = "dev" }
-            "#,
+        assert_eq!(
+            config.targets[1].labels.get("oob"),
+            Some(&"true".to_string())
         );
-
-        let config = load_config(path.to_str().expect("path")).expect("config");
-
-        assert_eq!(config.placement, Placement::default());
+        assert_eq!(
+            config.targets[1].labels.get("site"),
+            Some(&"shared".to_string())
+        );
+        assert_eq!(
+            config.targets[1].labels.get("node_group"),
+            Some(&"dev3-dh1".to_string())
+        );
     }
 
     #[test]
@@ -509,8 +460,14 @@ mod tests {
 
         assert_eq!(config.targets.len(), 1);
         assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
-        assert_eq!(config.placement.compute_zone, "az51");
-        assert_eq!(config.placement.node_group, "dev3-dh1");
+        assert_eq!(
+            config.targets[0].labels.get("compute_zone"),
+            Some(&"az51".to_string())
+        );
+        assert_eq!(
+            config.targets[0].labels.get("node_group"),
+            Some(&"dev3-dh1".to_string())
+        );
     }
 
     #[test]
@@ -612,37 +569,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_placement_names_over_backend_limit() {
-        let path = write_config(
-            "long-placement",
-            &format!(
-                r#"
-                compute_zone = "{}"
-
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "00:11:22:33:44:55"
-                username = "admin"
-                password = "secret"
-                "#,
-                "z".repeat(MAX_PLACEMENT_NAME_BYTES + 1)
-            ),
-        );
-
-        let error = load_config(path.to_str().expect("path"))
-            .expect_err("long placement should fail")
-            .to_string();
-
-        assert!(error.contains("compute_zone"));
-        assert!(error.contains("255"));
-    }
-
-    #[test]
     fn renders_nico_static_config_from_collector_config() {
         let collector = parse_config(
             r#"
-            compute_zone = "az51"
-            node_group = "dev3-dh1"
+            labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true" }
 
             [[machines]]
             ip = "10.0.0.1"
@@ -664,6 +594,7 @@ mod tests {
         assert_eq!(endpoint["mac"].as_str(), Some("02:00:0a:00:00:01"));
         assert_eq!(endpoint["labels"]["compute_zone"].as_str(), Some("az51"));
         assert_eq!(endpoint["labels"]["node_group"].as_str(), Some("dev3-dh1"));
+        assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
         assert_eq!(endpoint["labels"]["site"].as_str(), Some("dev"));
         assert!(endpoint.get("machine").is_some());
         assert_eq!(
@@ -737,28 +668,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_machine_labels_that_override_placement_or_nico_identity() {
-        for label in ["compute_zone", "system_uuid"] {
-            let error = parse_config(
-                &format!(
-                    r#"
-                    compute_zone = "az51"
+    fn rejects_labels_that_override_nico_identity() {
+        let error = parse_config(
+            r#"
+            labels = { system_uuid = "override" }
 
-                    [[machines]]
-                    ip = "10.0.0.1"
-                    mac = "00:11:22:33:44:55"
-                    username = "admin"
-                    password = "secret"
-                    labels = {{ {label} = "override" }}
-                    "#
-                ),
-                "test.toml",
-            )
-            .expect_err("reserved label should fail")
-            .to_string();
+            [[machines]]
+            ip = "10.0.0.1"
+            mac = "00:11:22:33:44:55"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect_err("reserved label should fail")
+        .to_string();
 
-            assert!(error.contains(label));
-        }
+        assert!(error.contains("system_uuid"));
     }
 
     fn write_config(name: &str, content: &str) -> std::path::PathBuf {

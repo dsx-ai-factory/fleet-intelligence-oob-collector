@@ -61,11 +61,10 @@ accept credentials as values, preventing them from being stored in Helm release
 state. Override the collector or NICo image tag only for testing an image that
 does not match the chart version.
 
-The OOB TOML declares placement once and defines one or more machines:
+The OOB TOML declares shared NICo labels once and defines one or more machines:
 
 ```toml
-compute_zone = "az51"
-node_group = "dev3-dh1"
+labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true" }
 
 [[machines]]
 ip = "10.0.0.10"
@@ -79,12 +78,10 @@ labels = { site = "dev", environment = "development" }
 The MAC is optional. If omitted, the collector and generated NICo config use a
 locally administered MAC formed as `02:00:<last four IP bytes>`.
 
-The backend uses the OOB placement to find or create the compute zone and node
-group and assign each node. An init container translates the same generic config
-into NICo static endpoints, copies placement into NICo labels, and marks every
-endpoint as a machine. NICo then emits those labels and the discovered primary
-Redfish ComputerSystem UUID (`system.uuid`) on OTLP resources. Optional
-per-machine labels are copied as well.
+An init container translates the generic config into NICo static endpoints and
+marks every endpoint as a machine. NICo then emits the shared labels and the
+discovered primary Redfish ComputerSystem UUID (`system.uuid`) on OTLP
+resources. Per-machine labels can add to or override the shared labels.
 
 ## Proxy configuration
 
