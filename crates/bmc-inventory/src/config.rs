@@ -342,7 +342,11 @@ mod tests {
         let path = write_config(
             "valid",
             r#"
-            labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true", site = "shared" }
+            [labels]
+            compute_zone = "az51"
+            node_group = "dev3-dh1"
+            oob = "true"
+            site = "shared"
 
             [[machines]]
             ip = "10.0.0.1"
@@ -572,7 +576,10 @@ mod tests {
     fn renders_nico_static_config_from_collector_config() {
         let collector = parse_config(
             r#"
-            labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true" }
+            [labels]
+            compute_zone = "az51"
+            node_group = "dev3-dh1"
+            oob = "true"
 
             [[machines]]
             ip = "10.0.0.1"

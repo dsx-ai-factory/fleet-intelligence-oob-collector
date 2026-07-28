@@ -64,7 +64,10 @@ does not match the chart version.
 The OOB TOML declares shared NICo labels once and defines one or more machines:
 
 ```toml
-labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true" }
+[labels]
+compute_zone = "az51"
+node_group = "dev3-dh1"
+oob = "true"
 
 [[machines]]
 ip = "10.0.0.10"

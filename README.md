@@ -83,7 +83,10 @@ The collector has its own TOML configuration. Generic NICo labels can be
 declared once at the top level and apply to every configured machine:
 
 ```toml
-labels = { compute_zone = "az51", node_group = "dev3-dh1", oob = "true" }
+[labels]
+compute_zone = "az51"
+node_group = "dev3-dh1"
+oob = "true"
 
 [[machines]]
 ip = "10.0.0.10"
