@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_NICO_LABELS: usize = 32;
 const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
+const OOB_LABEL_NAME: &str = "oob";
+const OOB_LABEL_VALUE: &str = "true";
 const RESERVED_NICO_LABELS: &[&str] = &[
     "collector_type",
     "endpoint_ip",
@@ -16,6 +18,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     "machine_slot_number",
     "machine_tray_index",
     "nvlink_domain_uuid",
+    OOB_LABEL_NAME,
     "rack_id",
     "serial_number",
     "switch_id",
@@ -101,8 +104,9 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         let mut target = machine.into_target(index)?;
         let mut labels = config.labels.clone();
         labels.extend(target.labels);
+        validate_nico_labels(&format!("machines[{index}].labels"), &labels)?;
+        labels.insert(OOB_LABEL_NAME.to_string(), OOB_LABEL_VALUE.to_string());
         target.labels = labels;
-        validate_nico_labels(&format!("machines[{index}].labels"), &target.labels)?;
         if !macs.insert(target.mac.to_ascii_lowercase()) {
             return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
         }
@@ -116,8 +120,12 @@ fn validate_nico_labels(
     context: &str,
     labels: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
-    if labels.len() > MAX_NICO_LABELS {
-        return Err(format!("{context} supports at most {MAX_NICO_LABELS} NICo labels").into());
+    if labels.len() >= MAX_NICO_LABELS {
+        return Err(format!(
+            "{context} supports at most {} user-defined NICo labels because {OOB_LABEL_NAME:?} is added internally",
+            MAX_NICO_LABELS - 1
+        )
+        .into());
     }
     for (name, value) in labels {
         let mut chars = name.chars();
@@ -345,7 +353,6 @@ mod tests {
             [labels]
             compute_zone = "az51"
             node_group = "dev3-dh1"
-            oob = "true"
             site = "shared"
 
             [[machines]]
@@ -579,7 +586,6 @@ mod tests {
             [labels]
             compute_zone = "az51"
             node_group = "dev3-dh1"
-            oob = "true"
 
             [[machines]]
             ip = "10.0.0.1"
@@ -670,28 +676,32 @@ mod tests {
 
         assert_eq!(endpoint["username"].as_str(), Some("admin\"name"));
         assert_eq!(endpoint["password"].as_str(), Some("secret\"value"));
-        assert!(endpoint["labels"].as_table().expect("labels").is_empty());
+        assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
         assert!(endpoint.get("port").is_none());
     }
 
     #[test]
-    fn rejects_labels_that_override_nico_identity() {
-        let error = parse_config(
-            r#"
-            labels = { system_uuid = "override" }
+    fn rejects_labels_that_override_internal_labels() {
+        for label in ["oob", "system_uuid"] {
+            let error = parse_config(
+                &format!(
+                    r#"
+                    labels = {{ {label} = "override" }}
 
-            [[machines]]
-            ip = "10.0.0.1"
-            mac = "00:11:22:33:44:55"
-            username = "admin"
-            password = "secret"
-            "#,
-            "test.toml",
-        )
-        .expect_err("reserved label should fail")
-        .to_string();
+                    [[machines]]
+                    ip = "10.0.0.1"
+                    mac = "00:11:22:33:44:55"
+                    username = "admin"
+                    password = "secret"
+                    "#
+                ),
+                "test.toml",
+            )
+            .expect_err("reserved label should fail")
+            .to_string();
 
-        assert!(error.contains("system_uuid"));
+            assert!(error.contains(label));
+        }
     }
 
     fn write_config(name: &str, content: &str) -> std::path::PathBuf {

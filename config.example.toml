@@ -2,7 +2,6 @@
 [labels]
 compute_zone = "az51"
 node_group = "dev3-dh1"
-oob = "true"
 
 [[machines]]
 ip = "10.0.0.10"

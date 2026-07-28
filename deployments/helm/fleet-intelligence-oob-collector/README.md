@@ -67,7 +67,6 @@ The OOB TOML declares shared NICo labels once and defines one or more machines:
 [labels]
 compute_zone = "az51"
 node_group = "dev3-dh1"
-oob = "true"
 
 [[machines]]
 ip = "10.0.0.10"
@@ -88,7 +87,9 @@ placement fields during inventory upload.
 An init container translates the generic config into NICo static endpoints and
 marks every endpoint as a machine. NICo then emits the shared labels and the
 discovered primary Redfish ComputerSystem UUID (`system.uuid`) on OTLP
-resources. Per-machine labels can add to or override the shared labels.
+resources. Per-machine labels can add to or override the shared labels. The
+collector adds the reserved `oob="true"` label to every endpoint so it is
+present on NICo metrics and logs.
 
 ## Proxy configuration
 

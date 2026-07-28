@@ -86,7 +86,6 @@ declared once at the top level and apply to every configured machine:
 [labels]
 compute_zone = "az51"
 node_group = "dev3-dh1"
-oob = "true"
 
 [[machines]]
 ip = "10.0.0.10"
@@ -113,7 +112,9 @@ endpoint as a compute machine so NICo discovers the primary Redfish
 ComputerSystem UUID and emits `system.uuid`. Users do not maintain a separate
 NICo configuration or duplicate BMC credentials. Optional top-level `labels`
 are copied to every machine, and per-machine `labels` can add to or override
-them. NICo identity labels remain reserved.
+them. The collector adds the reserved `oob="true"` label to every NICo endpoint
+so it is present on emitted metrics and logs. NICo identity labels remain
+reserved.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
