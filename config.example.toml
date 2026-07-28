@@ -1,4 +1,5 @@
-# Fleet Intelligence placement applied to every machine in this collector.
+# Optional NICo telemetry labels applied to every machine in this collector.
+[labels]
 compute_zone = "az51"
 node_group = "dev3-dh1"
 
@@ -9,5 +10,6 @@ port = 443
 mac = "aa:bb:cc:dd:ee:ff"
 username = "bmc-username"
 password = "bmc-password"
-# Optional NICo telemetry labels specific to this machine.
+# Optional NICo telemetry labels specific to this machine. They override
+# top-level labels with the same name.
 labels = { site = "dev", environment = "development" }

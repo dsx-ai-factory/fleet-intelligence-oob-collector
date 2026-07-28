@@ -278,7 +278,11 @@ async fn collect_and_upload_inventory(
     session: &mut BackendSession,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
-    let placement = collector_config.placement;
+    let machine_labels: bmc_inventory::sink::MachineLabels = collector_config
+        .targets
+        .iter()
+        .map(|target| (target.mac.to_ascii_lowercase(), target.labels.clone()))
+        .collect();
     let mut inventory_vec = collect_inventory_targets(&options, collector_config.targets).await?;
     let summary = summarize_inventory_collection(&inventory_vec);
     if summary.partial > 0 || summary.failed > 0 {
@@ -304,7 +308,7 @@ async fn collect_and_upload_inventory(
         endpoint.clone(),
         session.jwt().to_string(),
         Arc::clone(&inventories),
-        placement.clone(),
+        machine_labels.clone(),
     )
     .await
     {
@@ -325,7 +329,7 @@ async fn collect_and_upload_inventory(
                 endpoint,
                 session.jwt().to_string(),
                 Arc::clone(&inventories),
-                placement,
+                machine_labels,
             )
             .await
             .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
@@ -402,10 +406,10 @@ async fn upload_inventory(
     endpoint: String,
     jwt: String,
     inventories: Arc<Vec<NodeInventory>>,
-    placement: config::Placement,
+    machine_labels: bmc_inventory::sink::MachineLabels,
 ) -> Result<(), UploadError> {
     tokio::task::spawn_blocking(move || {
-        InventoryBackendSink::new(endpoint, jwt, placement)
+        InventoryBackendSink::new(endpoint, jwt, machine_labels)
             .map_err(|err| UploadError::Other(err.to_string()))?
             .write(inventories.as_slice())
             .map_err(|err| {

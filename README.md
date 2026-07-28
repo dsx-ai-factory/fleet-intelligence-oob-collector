@@ -79,10 +79,11 @@ certificates.
 
 ## Configuration
 
-The collector has its own TOML configuration. Placement is declared once at
-the top level and applies to every configured machine:
+The collector has its own TOML configuration. Generic NICo labels can be
+declared once at the top level and apply to every configured machine:
 
 ```toml
+[labels]
 compute_zone = "az51"
 node_group = "dev3-dh1"
 
@@ -96,10 +97,9 @@ labels = { site = "dev", environment = "development" }
 ```
 
 The endpoint MAC identifies the BMC and is included in inventory. Passwords are
-required for inventory and attestation. On each OOB inventory upsert, the
-backend applies the same placement semantics as the in-band agent: it
-finds or creates the compute zone and node group, then assigns the node.
-Omit both placement fields to leave nodes unassigned.
+required for inventory and attestation. When the effective labels for a machine
+include `compute_zone` or `node_group`, the inventory upload also exports them
+as the backend `computeZone` and `nodeGroup` placement fields.
 
 `mac` is optional. When omitted, the collector derives a locally administered
 unicast MAC using `02:00` followed by the final four bytes of the IP address.
@@ -107,12 +107,14 @@ For example, `10.0.0.10` becomes `02:00:0a:00:00:0a`. An explicit MAC always
 takes precedence.
 
 The Helm deployment generates NICo's static endpoint configuration from this
-same file in an init container. It copies placement into NICo labels and marks
-every endpoint as a compute machine so NICo discovers the primary Redfish
+same file in an init container. It copies the shared labels and marks every
+endpoint as a compute machine so NICo discovers the primary Redfish
 ComputerSystem UUID and emits `system.uuid`. Users do not maintain a separate
-NICo configuration or duplicate BMC credentials. Optional per-machine `labels`
-are also copied into NICo telemetry; `compute_zone`, `node_group`, and NICo
-identity labels remain reserved.
+NICo configuration or duplicate BMC credentials. Optional top-level `labels`
+are copied to every machine, and per-machine `labels` can add to or override
+them. The collector adds the reserved `oob="true"` label to every NICo endpoint
+so it is present on emitted metrics and logs. NICo identity labels remain
+reserved.
 
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
@@ -185,7 +187,7 @@ reaches the agent API.
 then repeats every 24 hours by default. Override the cadence with
 `--interval-seconds`.
 
-See `config.example.toml` for the shared machine and placement input.
+See `config.example.toml` for the shared labels and machine input.
 
 ## Helm Chart
 
