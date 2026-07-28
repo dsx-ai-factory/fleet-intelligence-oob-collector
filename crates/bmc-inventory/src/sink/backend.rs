@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -10,22 +11,32 @@ pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
+pub type MachineLabels = BTreeMap<String, BTreeMap<String, String>>;
+
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
+    machine_labels: MachineLabels,
 }
 
 impl BackendSink<HttpBackendClient> {
     pub fn new(
         endpoint: impl Into<String>,
         jwt: impl Into<String>,
+        machine_labels: MachineLabels,
     ) -> Result<Self, Box<dyn Error>> {
-        Ok(Self::with_client(HttpBackendClient::new(endpoint, jwt)?))
+        Ok(Self::with_client(
+            HttpBackendClient::new(endpoint, jwt)?,
+            machine_labels,
+        ))
     }
 }
 
 impl<C> BackendSink<C> {
-    pub fn with_client(client: C) -> Self {
-        Self { client }
+    pub fn with_client(client: C, machine_labels: MachineLabels) -> Self {
+        Self {
+            client,
+            machine_labels,
+        }
     }
 }
 
@@ -34,12 +45,16 @@ where
     C: BackendClient,
 {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.client.put_inventory(inventories)
+        self.client.put_inventory(inventories, &self.machine_labels)
     }
 }
 
 pub trait BackendClient {
-    fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>>;
+    fn put_inventory(
+        &self,
+        inventories: &[NodeInventory],
+        machine_labels: &MachineLabels,
+    ) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct HttpBackendClient {
@@ -151,14 +166,14 @@ fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option
 }
 
 impl BackendClient for HttpBackendClient {
-    fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        let data = inventories
-            .iter()
-            .map(|inventory| NodeUpsertRequest { inventory })
-            .collect();
+    fn put_inventory(
+        &self,
+        inventories: &[NodeInventory],
+        machine_labels: &MachineLabels,
+    ) -> Result<(), Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
-            .json(&BatchUpsertRequest { data })
+            .json(&build_batch_upsert_request(inventories, machine_labels))
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -186,6 +201,31 @@ impl BackendClient for HttpBackendClient {
 
         Ok(())
     }
+}
+
+fn build_batch_upsert_request<'a>(
+    inventories: &'a [NodeInventory],
+    machine_labels: &'a MachineLabels,
+) -> BatchUpsertRequest<'a> {
+    let data = inventories
+        .iter()
+        .map(|inventory| {
+            let labels = machine_labels.get(&inventory.source.mac.to_ascii_lowercase());
+            NodeUpsertRequest {
+                inventory,
+                compute_zone: labels.and_then(|labels| nonempty_label(labels, "compute_zone")),
+                node_group: labels.and_then(|labels| nonempty_label(labels, "node_group")),
+            }
+        })
+        .collect();
+    BatchUpsertRequest { data }
+}
+
+fn nonempty_label<'a>(labels: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    labels
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Debug)]
@@ -266,6 +306,10 @@ struct BatchUpsertRequest<'a> {
 struct NodeUpsertRequest<'a> {
     #[serde(flatten)]
     inventory: &'a NodeInventory,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compute_zone: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_group: Option<&'a str>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -339,9 +383,12 @@ mod tests {
     #[test]
     fn backend_sink_puts_node_inventory_batch() {
         let put_batches = Rc::new(RefCell::new(Vec::new()));
-        let sink = BackendSink::with_client(RecordingClient {
-            put_batches: Rc::clone(&put_batches),
-        });
+        let sink = BackendSink::with_client(
+            RecordingClient {
+                put_batches: Rc::clone(&put_batches),
+            },
+            MachineLabels::new(),
+        );
 
         sink.write(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
             .expect("write");
@@ -354,16 +401,35 @@ mod tests {
     }
 
     #[test]
-    fn batch_request_contains_inventory() {
+    fn batch_request_exports_placement_labels() {
         let inventory = inventory("10.0.0.1");
-        let request = BatchUpsertRequest {
-            data: vec![NodeUpsertRequest {
-                inventory: &inventory,
-            }],
-        };
+        let machine_labels = BTreeMap::from([(
+            inventory.source.mac.to_ascii_lowercase(),
+            BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+                ("oob".to_string(), "true".to_string()),
+            ]),
+        )]);
+        let inventories = [inventory];
+        let request = build_batch_upsert_request(&inventories, &machine_labels);
 
         let value = serde_json::to_value(request).expect("serialize request");
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
+        assert_eq!(value["data"][0]["computeZone"], "az51");
+        assert_eq!(value["data"][0]["nodeGroup"], "dev3-dh1");
+    }
+
+    #[test]
+    fn batch_request_omits_missing_placement_labels() {
+        let inventory = inventory("10.0.0.1");
+        let inventories = [inventory];
+        let machine_labels = MachineLabels::new();
+        let request = build_batch_upsert_request(&inventories, &machine_labels);
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert!(value["data"][0].get("computeZone").is_none());
+        assert!(value["data"][0].get("nodeGroup").is_none());
     }
 
     #[test]
@@ -417,7 +483,11 @@ mod tests {
     }
 
     impl BackendClient for RecordingClient {
-        fn put_inventory(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
+        fn put_inventory(
+            &self,
+            inventories: &[NodeInventory],
+            _machine_labels: &MachineLabels,
+        ) -> Result<(), Box<dyn Error>> {
             self.put_batches.borrow_mut().push(
                 inventories
                     .iter()

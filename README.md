@@ -95,7 +95,9 @@ labels = { site = "dev", environment = "development" }
 ```
 
 The endpoint MAC identifies the BMC and is included in inventory. Passwords are
-required for inventory and attestation.
+required for inventory and attestation. When the effective labels for a machine
+include `compute_zone` or `node_group`, the inventory upload also exports them
+as the backend `computeZone` and `nodeGroup` placement fields.
 
 `mac` is optional. When omitted, the collector derives a locally administered
 unicast MAC using `02:00` followed by the final four bytes of the IP address.

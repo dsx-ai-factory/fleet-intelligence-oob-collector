@@ -78,6 +78,10 @@ labels = { site = "dev", environment = "development" }
 The MAC is optional. If omitted, the collector and generated NICo config use a
 locally administered MAC formed as `02:00:<last four IP bytes>`.
 
+When a machine's effective labels include `compute_zone` or `node_group`, the
+collector also exports them as the backend `computeZone` and `nodeGroup`
+placement fields during inventory upload.
+
 An init container translates the generic config into NICo static endpoints and
 marks every endpoint as a machine. NICo then emits the shared labels and the
 discovered primary Redfish ComputerSystem UUID (`system.uuid`) on OTLP
