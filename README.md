@@ -116,6 +116,11 @@ them. The collector adds the reserved `oob="true"` label to every NICo endpoint
 so it is present on emitted metrics and logs. NICo identity labels remain
 reserved.
 
+The generated configuration also enables NICo's logs collector in `auto` mode,
+which NICo leaves disabled by default. Auto mode streams BMC log entries over
+Redfish SSE and downgrades to `LogService` polling per endpoint when
+`/EventService` is unavailable.
+
 Backend API paths are derived from `--backend-url`. Connection settings
 (`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
 inventory and attestation collection.

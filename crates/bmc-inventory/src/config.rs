@@ -252,6 +252,14 @@ pub fn render_nico_config(
             carbide_api: NicoEnabled { enabled: false },
             static_bmc_endpoints,
         },
+        collectors: NicoCollectors {
+            logs: NicoLogsCollector {
+                enabled: true,
+                // "auto" streams BMC log entries over Redfish SSE and downgrades
+                // to LogService polling per endpoint when /EventService is absent.
+                mode: "auto",
+            },
+        },
         sinks: NicoSinks {
             health_report: NicoEnabled { enabled: false },
             rack_health_report: NicoEnabled { enabled: false },
@@ -281,6 +289,7 @@ pub fn render_nico_config(
 #[derive(Serialize)]
 struct NicoConfig<'a> {
     endpoint_sources: NicoEndpointSources<'a>,
+    collectors: NicoCollectors,
     sinks: NicoSinks<'a>,
     metrics: NicoMetrics<'a>,
 }
@@ -305,6 +314,19 @@ struct NicoStaticBmcEndpoint<'a> {
 
 #[derive(Serialize)]
 struct NicoMachine {}
+
+#[derive(Serialize)]
+struct NicoCollectors {
+    logs: NicoLogsCollector,
+}
+
+/// NICo leaves the logs collector disabled unless the section is present, so it
+/// must be rendered explicitly for BMC log entries to reach the OTLP sink.
+#[derive(Serialize)]
+struct NicoLogsCollector {
+    enabled: bool,
+    mode: &'static str,
+}
 
 #[derive(Serialize)]
 struct NicoSinks<'a> {
@@ -619,6 +641,32 @@ mod tests {
         assert_eq!(
             rendered["sinks"]["otlp"]["targets"][0]["endpoint"].as_str(),
             Some("http://localhost:4317")
+        );
+    }
+
+    #[test]
+    fn rendered_nico_config_enables_logs_collector() {
+        let collector = parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered =
+            render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["collectors"]["logs"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            rendered["collectors"]["logs"]["mode"].as_str(),
+            Some("auto")
         );
     }
 
