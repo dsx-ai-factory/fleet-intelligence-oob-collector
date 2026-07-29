@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/bmc-attestation",
+    "crates/bmc-dispatch",
     "crates/bmc-inventory",
 ]
 resolver = "3"
@@ -16,11 +17,14 @@ async-trait = "0.1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 bmc-attestation = { path = "crates/bmc-attestation" }
+bmc-dispatch = { path = "crates/bmc-dispatch" }
 bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 hickory-resolver = "0.26"
-nv-redfish = { version = "0.10.1", features = ["bmc-http", "std-redfish"] }
-nv-redfish-bmc-mock = "0.10.1"
+http = "1"
+nv-redfish = { version = "0.12.1", features = ["bmc-http", "std-redfish"] }
+nv-redfish-bmc-mock = "0.12.1"
+nv-redfish-dispatcher = "0.12.1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "socks", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,6 +49,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 bmc-attestation.workspace = true
+bmc-dispatch.workspace = true
 bmc-inventory.workspace = true
 futures.workspace = true
 tokio.workspace = true

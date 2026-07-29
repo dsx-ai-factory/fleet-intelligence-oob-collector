@@ -7,6 +7,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use bmc_inventory::config::{self, NicoConfigOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
+    DEFAULT_BMC_BURST, DEFAULT_BMC_MAX_IN_FLIGHT, DEFAULT_BMC_REQUESTS_PER_SECOND,
     DEFAULT_INVENTORY_INTERVAL_SECONDS, DEFAULT_REDFISH_TIMEOUT_SECONDS,
     DEFAULT_TARGET_CONCURRENCY, InventoryFormat, InventoryOptions, RuntimeOptions, run_inventory,
     run_runtime,
@@ -51,7 +52,16 @@ struct CollectorArgs {
     insecure_tls: bool,
 
     #[arg(long, default_value_t = DEFAULT_TARGET_CONCURRENCY)]
-    concurrency: usize,
+    target_concurrency: usize,
+
+    #[arg(long, default_value_t = DEFAULT_BMC_MAX_IN_FLIGHT)]
+    bmc_max_in_flight: u32,
+
+    #[arg(long, default_value_t = DEFAULT_BMC_REQUESTS_PER_SECOND)]
+    bmc_requests_per_second: u64,
+
+    #[arg(long, default_value_t = DEFAULT_BMC_BURST)]
+    bmc_burst: u64,
 
     #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
     timeout_seconds: u64,
@@ -112,7 +122,10 @@ impl CollectorArgs {
             insecure_tls: self.insecure_tls,
             detail,
             format,
-            concurrency: self.concurrency,
+            target_concurrency: self.target_concurrency,
+            bmc_max_in_flight: self.bmc_max_in_flight,
+            bmc_requests_per_second: self.bmc_requests_per_second,
+            bmc_burst: self.bmc_burst,
             timeout_seconds: self.timeout_seconds,
         }
     }

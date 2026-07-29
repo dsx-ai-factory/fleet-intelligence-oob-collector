@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
 use nv_redfish::core::ToSnakeCase;
 use nv_redfish::{Bmc, Resource, ServiceRoot};
@@ -17,7 +18,7 @@ use super::{
 };
 use crate::config::Target;
 
-type RedfishBmc = HttpBmc<nv_redfish::bmc_http::reqwest::Client>;
+type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
 const MAX_REDIRECTS: usize = 3;
 
@@ -31,10 +32,15 @@ enum PcieTraversalPolicy {
 
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
+    dispatcher: Arc<Dispatcher>,
 }
 
 impl RedfishSource {
-    pub fn new(insecure_tls: bool, request_timeout: Duration) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        insecure_tls: bool,
+        request_timeout: Duration,
+        dispatcher: Arc<Dispatcher>,
+    ) -> Result<Self, Box<dyn Error>> {
         if request_timeout.is_zero() {
             return Err("request timeout must be greater than zero".into());
         }
@@ -49,7 +55,7 @@ impl RedfishSource {
                 // allowing those standards-compatible endpoints to work.
                 .max_redirects(MAX_REDIRECTS),
         )?;
-        Ok(Self { client })
+        Ok(Self { client, dispatcher })
     }
 
     async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
@@ -65,8 +71,12 @@ impl RedfishSource {
         target: &Target,
     ) -> Result<ServiceRoot<RedfishBmc>, Box<dyn Error>> {
         let url = bmc_url(&target.address)?;
+        let gate = self
+            .dispatcher
+            .inventory_gate(&target.mac)
+            .ok_or_else(|| format!("no dispatcher endpoint for target {:?}", target.mac))?;
         let bmc = Arc::new(HttpBmc::new(
-            self.client.clone(),
+            DispatchingHttpClient::new(self.client.clone(), gate),
             url,
             BmcCredentials::new(target.username.clone(), target.password.clone()),
             CacheSettings::with_capacity(32),
@@ -601,16 +611,33 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
+    use bmc_dispatch::DispatcherConfig;
     use nv_redfish_bmc_mock::Expect;
 
-    #[test]
-    fn redfish_source_builds_client() {
-        RedfishSource::new(true, Duration::from_secs(30)).expect("source");
+    fn test_dispatcher() -> Dispatcher {
+        Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            ["test".to_string()],
+        )
+        .expect("dispatcher")
     }
 
-    #[test]
-    fn redfish_source_rejects_zero_timeout() {
-        let Err(error) = RedfishSource::new(true, Duration::ZERO) else {
+    #[tokio::test]
+    async fn redfish_source_builds_client() {
+        RedfishSource::new(true, Duration::from_secs(30), Arc::new(test_dispatcher()))
+            .expect("source");
+    }
+
+    #[tokio::test]
+    async fn redfish_source_rejects_zero_timeout() {
+        let Err(error) = RedfishSource::new(true, Duration::ZERO, Arc::new(test_dispatcher()))
+        else {
             panic!("zero timeout should fail");
         };
 
