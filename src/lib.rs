@@ -310,6 +310,12 @@ async fn collect_and_upload_inventory(
     dispatcher: Arc<Dispatcher>,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
+    dispatcher.sync_endpoints(
+        collector_config
+            .targets
+            .iter()
+            .map(|target| target.mac.clone()),
+    )?;
     let machine_labels: bmc_inventory::sink::MachineLabels = collector_config
         .targets
         .iter()

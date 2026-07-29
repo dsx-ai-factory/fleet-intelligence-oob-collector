@@ -1,6 +1,6 @@
 //! Collector-owned admission control for BMC HTTP requests.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
@@ -29,6 +29,9 @@ use url::Url;
 type Work = FutureWork<(), Infallible>;
 type Queue = Arc<Mutex<VecDeque<ScheduledWork<Work, ()>>>>;
 type WorkflowQueues = RoundRobin<Work, ()>;
+type CostedWorkflows = FixedCost<Work, WorkflowQueues>;
+type RateLimitedEndpoint = TokenBucket<Work, CostedWorkflows>;
+type Endpoint = BoundedConcurrency<Work, RateLimitedEndpoint>;
 type Root = RoundRobin<Work, WithCost<()>>;
 type Handle = RuntimeHandle<(), Infallible, WithCost<()>>;
 
@@ -61,8 +64,34 @@ impl StdError for ConfigError {}
 
 /// A running dispatcher and its per-endpoint admission gates.
 pub struct Dispatcher {
+    registry: Mutex<EndpointRegistry>,
+    endpoint_config: EndpointConfig,
+    lifecycle: Arc<DispatcherLifecycle>,
+}
+
+struct EndpointRegistry {
     gates: HashMap<String, EndpointGates>,
+    child_ids: HashMap<String, u32>,
+}
+
+#[derive(Clone, Copy)]
+struct EndpointConfig {
+    max_in_flight: NonZeroU32,
+    requests_per_second: u64,
+    burst: u64,
+    queue_capacity: usize,
+}
+
+struct DispatcherLifecycle {
     handle: Handle,
+    notify: Arc<Notify>,
+}
+
+impl Drop for DispatcherLifecycle {
+    fn drop(&mut self) {
+        self.handle.graceful_shutdown();
+        self.notify.notify_one();
+    }
 }
 
 impl Dispatcher {
@@ -88,10 +117,17 @@ impl Dispatcher {
                 "workflow_queue_capacity must be greater than zero".into(),
             ));
         }
+        let endpoint_config = EndpointConfig {
+            max_in_flight: bmc_max_in_flight,
+            requests_per_second: config.bmc_requests_per_second,
+            burst: config.bmc_burst,
+            queue_capacity: config.workflow_queue_capacity,
+        };
 
         let notify = Arc::new(Notify::new());
         let mut root = Root::new();
         let mut pending_gates = HashMap::new();
+        let mut child_ids = HashMap::new();
         for endpoint_id in endpoint_ids {
             if pending_gates.contains_key(&endpoint_id) {
                 return Err(ConfigError(format!(
@@ -99,23 +135,9 @@ impl Dispatcher {
                 )));
             }
 
-            let inventory_queue = Arc::new(Mutex::new(VecDeque::new()));
-            let attestation_queue = Arc::new(Mutex::new(VecDeque::new()));
-            let mut workflows = WorkflowQueues::new();
-            workflows.add_child(QueueLeaf::new(Arc::clone(&inventory_queue)));
-            workflows.add_child(QueueLeaf::new(Arc::clone(&attestation_queue)));
-
-            let costed = FixedCost::new(CostUnits::new(1), workflows);
-            let rate_limited = TokenBucket::new(
-                Instant::now(),
-                TokenBucketConfig {
-                    capacity: CostUnits::new(config.bmc_burst),
-                    refill_amount: CostUnits::new(config.bmc_requests_per_second),
-                    refill_interval: Duration::from_secs(1),
-                },
-                costed,
-            );
-            root.add_child(BoundedConcurrency::new(bmc_max_in_flight, rate_limited));
+            let (endpoint, inventory_queue, attestation_queue) = build_endpoint(endpoint_config);
+            let child_id = root.add_child(endpoint);
+            child_ids.insert(endpoint_id.clone(), child_id);
             pending_gates.insert(endpoint_id, (inventory_queue, attestation_queue));
         }
 
@@ -143,15 +165,18 @@ impl Dispatcher {
                 }
             }
         });
+        let lifecycle = Arc::new(DispatcherLifecycle {
+            handle,
+            notify: Arc::clone(&notify),
+        });
 
         let gates = pending_gates
             .into_iter()
             .map(|(id, (inventory, attestation))| {
                 let make_gate = |queue| RequestGate {
                     queue,
-                    capacity: config.workflow_queue_capacity,
-                    handle: handle.clone(),
-                    notify: Arc::clone(&notify),
+                    capacity: endpoint_config.queue_capacity,
+                    lifecycle: Arc::clone(&lifecycle),
                 };
                 (
                     id,
@@ -163,13 +188,20 @@ impl Dispatcher {
             })
             .collect();
 
-        Ok(Self { gates, handle })
+        Ok(Self {
+            registry: Mutex::new(EndpointRegistry { gates, child_ids }),
+            endpoint_config,
+            lifecycle,
+        })
     }
 
     /// Return the inventory admission gate for an endpoint.
     #[must_use]
     pub fn inventory_gate(&self, endpoint_id: &str) -> Option<RequestGate> {
-        self.gates
+        self.registry
+            .lock()
+            .ok()?
+            .gates
             .get(endpoint_id)
             .map(|gates| gates.inventory.clone())
     }
@@ -177,15 +209,91 @@ impl Dispatcher {
     /// Return the attestation admission gate for an endpoint.
     #[must_use]
     pub fn attestation_gate(&self, endpoint_id: &str) -> Option<RequestGate> {
-        self.gates
+        self.registry
+            .lock()
+            .ok()?
+            .gates
             .get(endpoint_id)
             .map(|gates| gates.attestation.clone())
     }
-}
 
-impl Drop for Dispatcher {
-    fn drop(&mut self) {
-        self.handle.graceful_shutdown();
+    /// Make the dispatcher endpoint set match the supplied identifiers.
+    ///
+    /// Call this between collection cycles, when no request gates from the
+    /// previous endpoint set are still in use.
+    pub fn sync_endpoints(
+        &self,
+        endpoint_ids: impl IntoIterator<Item = String>,
+    ) -> Result<(), ConfigError> {
+        let mut desired = HashSet::new();
+        for endpoint_id in endpoint_ids {
+            if !desired.insert(endpoint_id.clone()) {
+                return Err(ConfigError(format!(
+                    "duplicate dispatcher endpoint identifier {endpoint_id:?}"
+                )));
+            }
+        }
+
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| ConfigError("dispatcher endpoint registry is unavailable".into()))?;
+        let removals = registry
+            .child_ids
+            .iter()
+            .filter(|(id, _)| !desired.contains(*id))
+            .map(|(id, child_id)| (id.clone(), *child_id))
+            .collect::<Vec<_>>();
+        let additions = desired
+            .into_iter()
+            .filter(|id| !registry.child_ids.contains_key(id))
+            .map(|id| {
+                let (endpoint, inventory, attestation) = build_endpoint(self.endpoint_config);
+                (id, endpoint, inventory, attestation)
+            })
+            .collect::<Vec<_>>();
+
+        let changes = self
+            .lifecycle
+            .handle
+            .with_root_mut::<Root, _>(|root| {
+                for (_, child_id) in &removals {
+                    if root.remove_child(*child_id).is_none() {
+                        return Err(ConfigError(
+                            "dispatcher endpoint scheduler is inconsistent".into(),
+                        ));
+                    }
+                }
+                Ok(additions
+                    .into_iter()
+                    .map(|(id, endpoint, inventory, attestation)| {
+                        let child_id = root.add_child(endpoint);
+                        (id, child_id, inventory, attestation)
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .ok_or_else(|| ConfigError("dispatcher runtime root is unavailable".into()))??;
+
+        for (id, _) in removals {
+            registry.child_ids.remove(&id);
+            registry.gates.remove(&id);
+        }
+        for (id, child_id, inventory, attestation) in changes {
+            let make_gate = |queue| RequestGate {
+                queue,
+                capacity: self.endpoint_config.queue_capacity,
+                lifecycle: Arc::clone(&self.lifecycle),
+            };
+            registry.child_ids.insert(id.clone(), child_id);
+            registry.gates.insert(
+                id,
+                EndpointGates {
+                    inventory: make_gate(inventory),
+                    attestation: make_gate(attestation),
+                },
+            );
+        }
+        Ok(())
     }
 }
 
@@ -199,8 +307,7 @@ struct EndpointGates {
 pub struct RequestGate {
     queue: Queue,
     capacity: usize,
-    handle: Handle,
-    notify: Arc<Notify>,
+    lifecycle: Arc<DispatcherLifecycle>,
 }
 
 impl RequestGate {
@@ -226,14 +333,38 @@ impl RequestGate {
             }
             queue.push_back(ScheduledWork::new((), work));
         }
-        self.notify.notify_one();
-        let _ = self.handle.with_root_mut::<Root, _>(|_| ());
+        self.lifecycle.notify.notify_one();
+        let _ = self.lifecycle.handle.with_root_mut::<Root, _>(|_| ());
 
         started_rx.await.map_err(|_| DispatchError::Unavailable)?;
         let result = operation.await.map_err(DispatchError::Transport);
         let _ = completed_tx.send(());
         result
     }
+}
+
+fn build_endpoint(config: EndpointConfig) -> (Endpoint, Queue, Queue) {
+    let inventory_queue = Arc::new(Mutex::new(VecDeque::new()));
+    let attestation_queue = Arc::new(Mutex::new(VecDeque::new()));
+    let mut workflows = WorkflowQueues::new();
+    workflows.add_child(QueueLeaf::new(Arc::clone(&inventory_queue)));
+    workflows.add_child(QueueLeaf::new(Arc::clone(&attestation_queue)));
+
+    let costed = FixedCost::new(CostUnits::new(1), workflows);
+    let rate_limited = TokenBucket::new(
+        Instant::now(),
+        TokenBucketConfig {
+            capacity: CostUnits::new(config.burst),
+            refill_amount: CostUnits::new(config.requests_per_second),
+            refill_interval: Duration::from_secs(1),
+        },
+        costed,
+    );
+    (
+        BoundedConcurrency::new(config.max_in_flight, rate_limited),
+        inventory_queue,
+        attestation_queue,
+    )
 }
 
 /// Error returned by the admission layer or wrapped HTTP transport.
@@ -454,7 +585,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use super::{Dispatcher, DispatcherConfig};
+    use super::{DispatchError, Dispatcher, DispatcherConfig};
 
     fn config() -> DispatcherConfig {
         DispatcherConfig {
@@ -533,5 +664,78 @@ mod tests {
         inventory_task.await.expect("task").expect("inventory");
         attestation_task.await.expect("task").expect("attestation");
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cloned_gate_keeps_dispatcher_running() {
+        let dispatcher = Dispatcher::start(config(), ["bmc-1".to_string()]).expect("dispatcher");
+        let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+        drop(dispatcher);
+
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            gate.execute(async { Ok::<_, Infallible>(()) }),
+        )
+        .await
+        .expect("gate must not hang after its dispatcher owner is dropped")
+        .expect("operation");
+    }
+
+    #[tokio::test]
+    async fn rejects_work_when_workflow_queue_is_full() {
+        let mut limited = config();
+        limited.global_max_in_flight = 1;
+        limited.workflow_queue_capacity = 1;
+        let dispatcher = Dispatcher::start(limited, ["bmc-1".to_string()]).expect("dispatcher");
+        let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let first_gate = gate.clone();
+        let first = tokio::spawn(async move {
+            first_gate
+                .execute(async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Ok::<_, Infallible>(())
+                })
+                .await
+        });
+        started_rx.await.expect("first request started");
+
+        let second_gate = gate.clone();
+        let second =
+            tokio::spawn(
+                async move { second_gate.execute(async { Ok::<_, Infallible>(()) }).await },
+            );
+        for _ in 0..100 {
+            if gate.queue.lock().expect("queue").len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(gate.queue.lock().expect("queue").len(), 1);
+
+        let rejected = gate.execute(async { Ok::<_, Infallible>(()) }).await;
+        assert!(matches!(rejected, Err(DispatchError::QueueFull)));
+
+        let _ = release_tx.send(());
+        first.await.expect("first task").expect("first request");
+        second.await.expect("second task").expect("second request");
+    }
+
+    #[tokio::test]
+    async fn synchronizes_endpoint_membership() {
+        let dispatcher = Dispatcher::start(config(), ["bmc-1".to_string()]).expect("dispatcher");
+
+        dispatcher
+            .sync_endpoints(["bmc-2".to_string()])
+            .expect("sync endpoints");
+
+        assert!(dispatcher.inventory_gate("bmc-1").is_none());
+        let gate = dispatcher.inventory_gate("bmc-2").expect("new endpoint");
+        gate.execute(async { Ok::<_, Infallible>(()) })
+            .await
+            .expect("new endpoint request");
     }
 }

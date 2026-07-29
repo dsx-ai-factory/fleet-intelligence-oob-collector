@@ -275,9 +275,15 @@ impl RedfishAttestationSource {
     ) -> Result<(), Box<dyn Error>> {
         let deadline = std::time::Instant::now() + self.task_timeout;
         loop {
-            let task = self
-                .get_json::<TaskResponse>(base_url, target, task_path, gate)
-                .await?;
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(|| format!("SPDM task {task_path} timed out"))?;
+            let task = tokio::time::timeout(
+                remaining,
+                self.get_json::<TaskResponse>(base_url, target, task_path, gate),
+            )
+            .await
+            .map_err(|_| format!("SPDM task {task_path} timed out"))??;
             if let Some(state) = task.task_state.as_deref() {
                 if is_success_task_state(state) {
                     return Ok(());
@@ -290,10 +296,10 @@ impl RedfishAttestationSource {
                     .into());
                 }
             }
-            if std::time::Instant::now() >= deadline {
-                return Err(format!("SPDM task {task_path} timed out").into());
-            }
-            sleep(self.task_poll_interval).await;
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(|| format!("SPDM task {task_path} timed out"))?;
+            sleep(self.task_poll_interval.min(remaining)).await;
         }
     }
 
@@ -560,6 +566,10 @@ pub fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
+    use bmc_dispatch::{Dispatcher, DispatcherConfig};
+
     use super::*;
 
     #[test]
@@ -626,5 +636,68 @@ mod tests {
             error.contains("must use https://"),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn task_poll_deadline_includes_dispatcher_wait() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            ["bmc-1".to_string()],
+        )
+        .expect("dispatcher");
+        let blocker = dispatcher.inventory_gate("bmc-1").expect("inventory gate");
+        let poll_gate = dispatcher
+            .attestation_gate("bmc-1")
+            .expect("attestation gate");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let blocked = tokio::spawn(async move {
+            blocker
+                .execute(async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Ok::<_, Infallible>(())
+                })
+                .await
+        });
+        started_rx.await.expect("blocking request started");
+
+        let source = RedfishAttestationSource::new(
+            443,
+            true,
+            Duration::from_secs(1),
+            Duration::from_millis(30),
+            Duration::from_millis(5),
+        )
+        .expect("source");
+        let target = crate::config::Target {
+            name: "bmc-1".to_string(),
+            node_uuid: "node-1".to_string(),
+            address: "192.0.2.1".to_string(),
+            username: "user".to_string(),
+            password: "secret".to_string(),
+        };
+        let base_url = Url::parse("https://192.0.2.1").expect("base URL");
+        let started_at = std::time::Instant::now();
+        let error = source
+            .wait_for_task(
+                &base_url,
+                &target,
+                "/redfish/v1/TaskService/Tasks/1",
+                &poll_gate,
+            )
+            .await
+            .expect_err("dispatcher wait should consume the task deadline");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started_at.elapsed() < Duration::from_millis(250));
+        let _ = release_tx.send(());
+        blocked.await.expect("blocking task").expect("request");
     }
 }
