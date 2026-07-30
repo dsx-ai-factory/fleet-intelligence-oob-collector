@@ -7,6 +7,7 @@
 
 use std::error::Error;
 
+use bmc_dispatch::Dispatcher;
 use futures::stream::{self, StreamExt};
 
 use crate::config::{AttestationConfig, Target};
@@ -47,6 +48,7 @@ pub async fn collect(
     nonce_path: &str,
     attestation_path: &str,
     jwt: &str,
+    dispatcher: &Dispatcher,
 ) -> Result<CollectionOutcome, Box<dyn Error>> {
     let source = RedfishAttestationSource::new(
         settings.port,
@@ -77,7 +79,19 @@ pub async fn collect(
             let jwt = base_jwt.clone();
             let target = target.clone();
             let node_uuid = target.node_uuid.clone();
+            let gate = dispatcher.attestation_gate(&target.name);
             async move {
+                let Some(gate) = gate else {
+                    return Ok((
+                        NodeAttestation::failed(
+                            node_uuid,
+                            target.name,
+                            target.address,
+                            "no dispatcher endpoint configured for attestation",
+                        ),
+                        None,
+                    ));
+                };
                 let mut client = match HttpBackendClient::new(
                     &backend_url,
                     &nonce_path,
@@ -128,6 +142,7 @@ pub async fn collect(
                             nonce_refresh_timestamp: nonce.nonce_refresh_timestamp,
                         },
                         measurement,
+                        gate,
                     )
                     .await;
                 Ok((mapper.map(record), refreshed_jwt))
@@ -155,6 +170,8 @@ pub async fn collect(
 
 #[cfg(test)]
 mod tests {
+    use bmc_dispatch::DispatcherConfig;
+
     use super::*;
 
     #[test]
@@ -173,5 +190,50 @@ mod tests {
 
         let plain: Box<dyn Error> = "nonce request: timeout".into();
         assert!(!is_auth_failure(plain.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn missing_dispatcher_endpoint_fails_before_backend_request() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            ["different-bmc".to_string()],
+        )
+        .expect("dispatcher");
+        let target = Target {
+            name: "bmc-1".to_string(),
+            node_uuid: "node-1".to_string(),
+            address: "192.0.2.1".to_string(),
+            username: "user".to_string(),
+            password: "secret".to_string(),
+        };
+
+        let outcome = collect(
+            &[target],
+            &AttestationConfig::default(),
+            "https://backend.invalid",
+            "/nonce/{node_uuid}",
+            "/attestation",
+            "token",
+            &dispatcher,
+        )
+        .await
+        .expect("missing gate becomes a target failure");
+        let record = outcome
+            .batch
+            .results_by_node_uuid
+            .get("node-1")
+            .expect("target result");
+
+        assert!(!record.success);
+        assert_eq!(
+            record.error_message.as_deref(),
+            Some("no dispatcher endpoint configured for attestation")
+        );
     }
 }

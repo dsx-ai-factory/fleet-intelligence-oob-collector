@@ -8,6 +8,7 @@ use bmc_attestation::collector;
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::models::BatchAttestation;
 use bmc_attestation::sink::BackendSink as AttestationBackendSink;
+use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
@@ -21,7 +22,11 @@ use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backen
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_TARGET_CONCURRENCY: usize = 64;
+pub const DEFAULT_BMC_MAX_IN_FLIGHT: u32 = 4;
+pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
+pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
+const WORKFLOW_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InventoryFormat {
@@ -35,7 +40,10 @@ pub struct InventoryOptions {
     pub insecure_tls: bool,
     pub detail: bool,
     pub format: InventoryFormat,
-    pub concurrency: usize,
+    pub target_concurrency: usize,
+    pub bmc_max_in_flight: u32,
+    pub bmc_requests_per_second: u64,
+    pub bmc_burst: u64,
     pub timeout_seconds: u64,
 }
 
@@ -48,6 +56,8 @@ pub struct RuntimeOptions {
 }
 
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
+    let configured_targets = config::load_targets(&options.inventory.config)?;
+    let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
@@ -60,7 +70,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     let attestation_settings = {
         let mut s = attestation_config::defaults::attestation_config();
         s.insecure_tls = options.inventory.insecure_tls;
-        s.concurrency = options.inventory.concurrency;
+        s.concurrency = options.inventory.target_concurrency;
         s.redfish_timeout = std::time::Duration::from_secs(options.inventory.timeout_seconds);
         s
     };
@@ -73,6 +83,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             options.inventory.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
+            Arc::clone(&dispatcher),
         )
         .await
         {
@@ -97,6 +108,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
                             &attestation_settings,
                             &endpoints,
                             &mut session,
+                            dispatcher.as_ref(),
                         )
                         .await
                         {
@@ -171,22 +183,37 @@ async fn collect_and_upload_attestation(
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
+    dispatcher: &Dispatcher,
 ) -> Result<(), Box<dyn Error>> {
-    let outcome =
-        match collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await {
-            Ok(outcome) => outcome,
-            // A rejected JWT during nonce collection cannot be retried per target; re-enroll
-            // and re-run the whole batch with a fresh token before giving up.
-            Err(err) if is_auth_failure(err.as_ref()) => {
-                tracing::warn!(
-                    error = %err,
-                    "backend JWT rejected during nonce collection; enrolling again before retry"
-                );
-                session.reenroll().await?;
-                collect_attestation(targets, attestation_settings, endpoints, session.jwt()).await?
-            }
-            Err(err) => return Err(err),
-        };
+    let outcome = match collect_attestation(
+        targets,
+        attestation_settings,
+        endpoints,
+        session.jwt(),
+        dispatcher,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
+        // and re-run the whole batch with a fresh token before giving up.
+        Err(err) if is_auth_failure(err.as_ref()) => {
+            tracing::warn!(
+                error = %err,
+                "backend JWT rejected during nonce collection; enrolling again before retry"
+            );
+            session.reenroll().await?;
+            collect_attestation(
+                targets,
+                attestation_settings,
+                endpoints,
+                session.jwt(),
+                dispatcher,
+            )
+            .await?
+        }
+        Err(err) => return Err(err),
+    };
     let summary = summarize_attestation_collection(&outcome.batch);
     if summary.failed > 0 || summary.component_errors > 0 {
         tracing::warn!(
@@ -233,6 +260,7 @@ async fn collect_attestation(
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     jwt: &str,
+    dispatcher: &Dispatcher,
 ) -> Result<collector::CollectionOutcome, Box<dyn Error>> {
     collector::collect(
         targets,
@@ -241,6 +269,7 @@ async fn collect_attestation(
         &endpoints.nonce_path,
         &endpoints.attestation_path,
         jwt,
+        dispatcher,
     )
     .await
 }
@@ -263,7 +292,9 @@ async fn upload_attestation(
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
-    let inventories = collect_inventory_targets(&options, collector_config.targets).await?;
+    let dispatcher = Arc::new(start_dispatcher(&options, &collector_config.targets)?);
+    let inventories =
+        collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
 
     match options.format {
         InventoryFormat::Table => TableSink::new(options.detail).write(&inventories)?,
@@ -276,14 +307,22 @@ async fn collect_and_upload_inventory(
     options: InventoryOptions,
     endpoint: String,
     session: &mut BackendSession,
+    dispatcher: Arc<Dispatcher>,
 ) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
+    dispatcher.sync_endpoints(
+        collector_config
+            .targets
+            .iter()
+            .map(|target| target.mac.clone()),
+    )?;
     let machine_labels: bmc_inventory::sink::MachineLabels = collector_config
         .targets
         .iter()
         .map(|target| (target.mac.to_ascii_lowercase(), target.labels.clone()))
         .collect();
-    let mut inventory_vec = collect_inventory_targets(&options, collector_config.targets).await?;
+    let mut inventory_vec =
+        collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
     let summary = summarize_inventory_collection(&inventory_vec);
     if summary.partial > 0 || summary.failed > 0 {
         tracing::warn!(
@@ -443,20 +482,40 @@ impl Error for UploadError {}
 async fn collect_inventory_targets(
     options: &InventoryOptions,
     targets: Vec<config::Target>,
+    dispatcher: Arc<Dispatcher>,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
-    let source = RedfishSource::new(options.insecure_tls, timeout)?;
+    let target_concurrency = options.target_concurrency.max(1);
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
     let mapper = RedfishMapper::new();
-    let concurrency = options.concurrency.max(1);
 
     Ok(stream::iter(targets)
         .map(|target| async {
             let record = source.collect(target).await;
             mapper.map(record).await
         })
-        .buffered(concurrency)
+        .buffered(target_concurrency)
         .collect()
         .await)
+}
+
+fn start_dispatcher(
+    options: &InventoryOptions,
+    targets: &[config::Target],
+) -> Result<Dispatcher, Box<dyn Error>> {
+    let target_concurrency = options.target_concurrency.max(1);
+    let global_max_in_flight =
+        target_concurrency.saturating_mul(options.bmc_max_in_flight as usize);
+    Ok(Dispatcher::start(
+        DispatcherConfig {
+            global_max_in_flight,
+            bmc_max_in_flight: options.bmc_max_in_flight,
+            bmc_requests_per_second: options.bmc_requests_per_second,
+            bmc_burst: options.bmc_burst,
+            workflow_queue_capacity: WORKFLOW_QUEUE_CAPACITY,
+        },
+        targets.iter().map(|target| target.mac.clone()),
+    )?)
 }
 
 #[cfg(test)]
@@ -541,7 +600,10 @@ mod tests {
             insecure_tls: false,
             detail: false,
             format: InventoryFormat::Json,
-            concurrency: 1,
+            target_concurrency: 1,
+            bmc_max_in_flight: 1,
+            bmc_requests_per_second: 1,
+            bmc_burst: 1,
             timeout_seconds: 1,
         };
 

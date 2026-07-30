@@ -2,6 +2,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use base64::Engine;
+use bmc_dispatch::RequestGate;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -122,11 +123,12 @@ impl RedfishAttestationSource {
         target: crate::config::Target,
         nonce: NonceData,
         request: MeasurementRequest,
+        gate: RequestGate,
     ) -> SourceRecord {
         let collected_at = now_rfc3339();
         let nonce_refresh_timestamp = nonce.nonce_refresh_timestamp.clone();
         let result = self
-            .collect_report(&target, &nonce, &request)
+            .collect_report(&target, &nonce, &request, &gate)
             .await
             .map_err(|err| err.to_string());
         SourceRecord {
@@ -142,9 +144,12 @@ impl RedfishAttestationSource {
         target: &crate::config::Target,
         nonce: &NonceData,
         request: &MeasurementRequest,
+        gate: &RequestGate,
     ) -> Result<RedfishAttestationReport, Box<dyn Error>> {
         let base_url = bmc_url(&target.address, self.port)?;
-        let components = self.discover_gpu_irot_components(&base_url, target).await?;
+        let components = self
+            .discover_gpu_irot_components(&base_url, target, gate)
+            .await?;
         if components.is_empty() {
             return Err("no GPU IRoT ComponentIntegrity resources found".into());
         }
@@ -153,7 +158,7 @@ impl RedfishAttestationSource {
         let mut component_errors = Vec::new();
         for component in components {
             match self
-                .collect_component(&base_url, target, &component, nonce, request)
+                .collect_component(&base_url, target, &component, nonce, request, gate)
                 .await
             {
                 Ok(evidence) => evidences.push(evidence),
@@ -174,18 +179,20 @@ impl RedfishAttestationSource {
         &self,
         base_url: &Url,
         target: &crate::config::Target,
+        gate: &RequestGate,
     ) -> Result<Vec<ComponentCandidate>, Box<dyn Error>> {
         let collection = self
             .get_json::<ComponentIntegrityCollection>(
                 base_url,
                 target,
                 "/redfish/v1/ComponentIntegrity",
+                gate,
             )
             .await?;
         let mut out = Vec::new();
         for member in collection.members {
             let resource = self
-                .get_json::<ComponentIntegrityResource>(base_url, target, &member.odata_id)
+                .get_json::<ComponentIntegrityResource>(base_url, target, &member.odata_id, gate)
                 .await?;
             if let Some(candidate) = component_candidate(member.odata_id, resource) {
                 out.push(candidate);
@@ -201,6 +208,7 @@ impl RedfishAttestationSource {
         component: &ComponentCandidate,
         nonce: &NonceData,
         request: &MeasurementRequest,
+        gate: &RequestGate,
     ) -> Result<AttestationEvidenceData, Box<dyn Error>> {
         let task = self
             .post_json::<SpdmMeasurementBody, TaskResponse>(
@@ -212,15 +220,17 @@ impl RedfishAttestationSource {
                     measurement_indices: request.measurement_indices.clone(),
                     nonce: nonce.nonce.clone(),
                 },
+                gate,
             )
             .await?;
         if let Some(task_path) = task.odata_id.as_deref() {
-            self.wait_for_task(base_url, target, task_path).await?;
+            self.wait_for_task(base_url, target, task_path, gate)
+                .await?;
         }
 
         let data_path = format!("{}/data", component.action_target.trim_end_matches('/'));
         let data = self
-            .get_json::<SpdmMeasurementData>(base_url, target, &data_path)
+            .get_json::<SpdmMeasurementData>(base_url, target, &data_path, gate)
             .await?;
         if data.signed_measurements.is_empty() {
             return Err("SPDM measurement data missing SignedMeasurements".into());
@@ -234,13 +244,16 @@ impl RedfishAttestationSource {
                     "/redfish/v1/Chassis/{}/Certificates/CertChain",
                     component.id
                 ),
+                gate,
             )
             .await?;
         if cert.certificate_string.is_empty() {
             return Err("certificate chain missing CertificateString".into());
         }
         let certificate = base64::engine::general_purpose::STANDARD.encode(cert.certificate_string);
-        let gpu_context = self.gpu_context(base_url, target, &component.id).await;
+        let gpu_context = self
+            .gpu_context(base_url, target, &component.id, gate)
+            .await;
 
         Ok(AttestationEvidenceData {
             component_id: component.id.clone(),
@@ -258,12 +271,19 @@ impl RedfishAttestationSource {
         base_url: &Url,
         target: &crate::config::Target,
         task_path: &str,
+        gate: &RequestGate,
     ) -> Result<(), Box<dyn Error>> {
         let deadline = std::time::Instant::now() + self.task_timeout;
         loop {
-            let task = self
-                .get_json::<TaskResponse>(base_url, target, task_path)
-                .await?;
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(|| format!("SPDM task {task_path} timed out"))?;
+            let task = tokio::time::timeout(
+                remaining,
+                self.get_json::<TaskResponse>(base_url, target, task_path, gate),
+            )
+            .await
+            .map_err(|_| format!("SPDM task {task_path} timed out"))??;
             if let Some(state) = task.task_state.as_deref() {
                 if is_success_task_state(state) {
                     return Ok(());
@@ -276,10 +296,10 @@ impl RedfishAttestationSource {
                     .into());
                 }
             }
-            if std::time::Instant::now() >= deadline {
-                return Err(format!("SPDM task {task_path} timed out").into());
-            }
-            sleep(self.task_poll_interval).await;
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(|| format!("SPDM task {task_path} timed out"))?;
+            sleep(self.task_poll_interval.min(remaining)).await;
         }
     }
 
@@ -288,6 +308,7 @@ impl RedfishAttestationSource {
         base_url: &Url,
         target: &crate::config::Target,
         component_id: &str,
+        gate: &RequestGate,
     ) -> GpuContext {
         let mut context = GpuContext::default();
         let chassis = self
@@ -295,6 +316,7 @@ impl RedfishAttestationSource {
                 base_url,
                 target,
                 &format!("/redfish/v1/Chassis/{component_id}"),
+                gate,
             )
             .await
             .ok();
@@ -316,15 +338,20 @@ impl RedfishAttestationSource {
         base_url: &Url,
         target: &crate::config::Target,
         path: &str,
+        gate: &RequestGate,
     ) -> Result<T, Box<dyn Error>> {
-        Ok(self
-            .client
-            .get(join_redfish_path(base_url, path)?)
-            .basic_auth(&target.username, Some(&target.password))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<T>()
+        let url = join_redfish_path(base_url, path)?;
+        Ok(gate
+            .execute(async {
+                self.client
+                    .get(url)
+                    .basic_auth(&target.username, Some(&target.password))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<T>()
+                    .await
+            })
             .await?)
     }
 
@@ -334,16 +361,21 @@ impl RedfishAttestationSource {
         target: &crate::config::Target,
         path: &str,
         body: &B,
+        gate: &RequestGate,
     ) -> Result<T, Box<dyn Error>> {
-        Ok(self
-            .client
-            .post(join_redfish_path(base_url, path)?)
-            .basic_auth(&target.username, Some(&target.password))
-            .json(body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<T>()
+        let url = join_redfish_path(base_url, path)?;
+        Ok(gate
+            .execute(async {
+                self.client
+                    .post(url)
+                    .basic_auth(&target.username, Some(&target.password))
+                    .json(body)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<T>()
+                    .await
+            })
             .await?)
     }
 }
@@ -534,6 +566,10 @@ pub fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
+    use bmc_dispatch::{Dispatcher, DispatcherConfig};
+
     use super::*;
 
     #[test]
@@ -600,5 +636,68 @@ mod tests {
             error.contains("must use https://"),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn task_poll_deadline_includes_dispatcher_wait() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            ["bmc-1".to_string()],
+        )
+        .expect("dispatcher");
+        let blocker = dispatcher.inventory_gate("bmc-1").expect("inventory gate");
+        let poll_gate = dispatcher
+            .attestation_gate("bmc-1")
+            .expect("attestation gate");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let blocked = tokio::spawn(async move {
+            blocker
+                .execute(async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Ok::<_, Infallible>(())
+                })
+                .await
+        });
+        started_rx.await.expect("blocking request started");
+
+        let source = RedfishAttestationSource::new(
+            443,
+            true,
+            Duration::from_secs(1),
+            Duration::from_millis(30),
+            Duration::from_millis(5),
+        )
+        .expect("source");
+        let target = crate::config::Target {
+            name: "bmc-1".to_string(),
+            node_uuid: "node-1".to_string(),
+            address: "192.0.2.1".to_string(),
+            username: "user".to_string(),
+            password: "secret".to_string(),
+        };
+        let base_url = Url::parse("https://192.0.2.1").expect("base URL");
+        let started_at = std::time::Instant::now();
+        let error = source
+            .wait_for_task(
+                &base_url,
+                &target,
+                "/redfish/v1/TaskService/Tasks/1",
+                &poll_gate,
+            )
+            .await
+            .expect_err("dispatcher wait should consume the task deadline");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started_at.elapsed() < Duration::from_millis(250));
+        let _ = release_tx.send(());
+        blocked.await.expect("blocking task").expect("request");
     }
 }
