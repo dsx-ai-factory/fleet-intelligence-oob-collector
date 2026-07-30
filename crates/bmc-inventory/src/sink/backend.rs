@@ -10,6 +10,7 @@ use super::InventorySink;
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
+const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub type MachineLabels = BTreeMap<String, BTreeMap<String, String>>;
 
@@ -218,7 +219,12 @@ fn build_batch_upsert_request<'a>(
             }
         })
         .collect();
-    BatchUpsertRequest { data }
+    BatchUpsertRequest {
+        agent: AgentInfo {
+            version: AGENT_VERSION,
+        },
+        data,
+    }
 }
 
 fn nonempty_label<'a>(labels: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
@@ -298,7 +304,14 @@ struct EnrollResponse {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchUpsertRequest<'a> {
+    agent: AgentInfo<'static>,
     data: Vec<NodeUpsertRequest<'a>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentInfo<'a> {
+    version: &'a str,
 }
 
 #[derive(serde::Serialize)]
@@ -415,6 +428,7 @@ mod tests {
         let request = build_batch_upsert_request(&inventories, &machine_labels);
 
         let value = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(value["agent"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
         assert_eq!(value["data"][0]["computeZone"], "az51");
         assert_eq!(value["data"][0]["nodeGroup"], "dev3-dh1");
