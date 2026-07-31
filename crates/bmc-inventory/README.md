@@ -5,6 +5,9 @@ and output sinks. The goal is to keep Redfish and vendor-specific behavior out o
 the product schema where possible, while still documenting the assumptions used
 to make one node inventory record from a BMC endpoint.
 
+For the repository-level component and runtime view, see the
+[architecture guide](../../docs/architecture.md).
+
 ## Pipeline
 
 ```text

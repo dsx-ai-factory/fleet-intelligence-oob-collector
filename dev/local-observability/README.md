@@ -1,9 +1,9 @@
 # Local OTLP observability stack
 
 This Docker Compose stack provides a local destination for telemetry emitted by
-the `forge-hw-health` binary from the sibling `infra-controller` repository. It
-is intended for development only; it does not connect to the Fleet Intelligence
-backend.
+the NICo `forge-hw-health` binary from the `infra-controller` repository. It is
+intended for development only: it does not run the OOB collector, perform
+backend enrollment, or connect to Fleet Intelligence services.
 
 ## Data flow
 
@@ -118,6 +118,8 @@ docker compose down
 Use `docker compose down --volumes` if you also want to discard all locally
 stored Grafana, Loki, and Prometheus data.
 
-The production Fleet Intelligence path uses OTLP/HTTP and enrollment-issued
-authentication. This local OTLP/gRPC stack intentionally does not model that
-authentication flow.
+The production Fleet Intelligence path sends NICo OTLP/gRPC to the chart's
+gateway, which then uses OTLP/HTTP and enrollment-issued authentication for the
+backend. This local stack intentionally does not model that authentication
+flow. See the repository [architecture guide](../../docs/architecture.md) for
+the production data flow.

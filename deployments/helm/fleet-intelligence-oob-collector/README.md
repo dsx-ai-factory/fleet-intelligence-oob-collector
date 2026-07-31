@@ -5,6 +5,11 @@ It can also deploy the NICo hardware-health service. Both workloads use a
 `Recreate` deployment strategy so duplicate collectors do not run during an
 update.
 
+For an end-to-end operator workflow, including component layouts and restart
+behavior, see the repository
+[Kubernetes deployment guide](../../../docs/kubernetes.md). This file remains a
+self-contained chart reference for packaged-chart users.
+
 ## Prerequisites
 
 Create separate Secrets for the backend bootstrap token and generic collector
@@ -137,8 +142,9 @@ helm upgrade --install fleet-intelligence-oob-collector \
   --set otelGateway.enabled=false
 ```
 
-After changing the external collector config Secret, restart the NICo
-Deployment so its init container regenerates the pod-local configuration.
+After changing the external collector config Secret, restart both the collector
+and NICo Deployments. The collector reads the Secret at startup, and the NICo
+init container regenerates its pod-local configuration only when a pod starts.
 
 The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
 the chart version. By default, NICo sends OTLP/gRPC to a separate gateway

@@ -52,16 +52,21 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Running the Collector
 
-Print BMC inventory locally:
+Copy the example configuration, replace its example values, and print BMC
+inventory locally:
 
 ```bash
-cargo run -- inventory --config /path/to/.config --insecure-tls
+cp config.example.toml config.toml
+chmod 600 config.toml
+cargo run -- inventory --config config.toml
 ```
+
+Use `--insecure-tls` only when the test BMC certificate cannot be validated.
 
 Run the long-running collector mode and submit to a backend:
 
 ```bash
-cargo run -- run --config /path/to/.config --insecure-tls \
+cargo run -- run --config config.toml \
   --backend-url https://api.example.com \
   --agent-token "$FLEETINT_AGENT_TOKEN"
 ```
@@ -70,6 +75,9 @@ Do not commit real BMC credentials, customer data, private backend URLs, or raw
 hardware dumps. The repository ignores local `.config`, `.env`, and
 `redfish-raw*` files by default.
 
+See the [documentation index](docs/README.md) for architecture, configuration,
+usage, and deployment guides.
+
 ## Pull Requests
 
 When opening a pull request:
@@ -77,8 +85,17 @@ When opening a pull request:
 - Describe the user-visible behavior change.
 - Link related issues.
 - Include tests for new behavior or explain why tests are not practical.
-- Update README or crate documentation when commands, configuration, data models, or output formats change.
+- Update the relevant guide under `docs/` or component documentation when
+  commands, configuration, data models, deployment behavior, or output formats
+  change.
 - Keep unrelated refactors out of feature and bug fix PRs.
+
+## Release Process
+
+Pushing a semantic version tag such as `v0.1.0` runs the release validation,
+publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm
+chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are
+supported and do not update the collector image's `latest` tag.
 
 ## Developer Certificate of Origin (DCO)
 

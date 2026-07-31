@@ -1,251 +1,65 @@
-# Fleet Intelligence Out Of Band Collector
+# Fleet Intelligence Out-of-Band Collector
 
-Fleet Intelligence Out Of Band Collector is a Rust collector for gathering
-Fleet Intelligence data from server BMC interfaces. It is intended to collect
-inventory, attestation, and telemetry from out-of-band management paths without
-depending on an in-band host agent.
+The Fleet Intelligence out-of-band (OOB) collector gathers inventory,
+attestation, metrics, and logs from server BMCs over Redfish. It operates
+without an in-band host agent and keeps Fleet Intelligence data models isolated
+from vendor-specific Redfish representations.
 
-The current implementation collects BMC inventory and attestation through
-Redfish using `nv-redfish` and can either print inventory locally or send it to
-the Fleet Intelligence backend. NICo hardware health provides the telemetry
-collection service deployed by the Helm chart.
+The project provides:
 
-The collector keeps Fleet Intelligence owned models between the BMC source and
-the output/backend sinks so vendor protocol data does not become the product
-schema.
+- A Rust CLI for local inventory inspection and continuous backend sync.
+- BMC inventory and GPU attestation collection.
+- A Helm chart that can also deploy NICo hardware health and an authenticated
+  OpenTelemetry gateway.
+- Multi-architecture `amd64` and `arm64` container images.
 
-## Workspace Structure
+## Quick start
 
-```text
-src/main.rs                         CLI entry point
-src/lib.rs                          CLI orchestration
-crates/bmc-inventory/README.md      inventory assumptions and platform quirks
-crates/bmc-inventory/src/config.rs  target config loading
-crates/bmc-inventory/src/models/    FI inventory models
-crates/bmc-inventory/src/source/    source trait and nv-redfish source
-crates/bmc-inventory/src/mapper/    Redfish report to FI inventory mapper
-crates/bmc-inventory/src/sink/      table, JSON, and backend sinks
-crates/bmc-attestation/             attestation crate
-```
-
-Pipeline:
-
-```text
-config targets
-  -> RedfishSource
-  -> RedfishMapper
-  -> NodeInventory
-  -> TableSink / JsonSink / BackendSink
-```
-
-## Build
+Build the collector and create a local configuration:
 
 ```bash
-cargo build
+cargo build --workspace
+cp config.example.toml config.toml
+chmod 600 config.toml
 ```
 
-This creates:
-
-```text
-target/debug/bmc-collector
-```
-
-For an optimized binary:
+Replace the example BMC address and credentials, then inspect inventory:
 
 ```bash
-cargo build --release
+target/debug/bmc-collector inventory \
+  --config config.toml \
+  --format json
 ```
 
-## Container Image
+Use `--insecure-tls` only for BMCs whose certificates cannot be validated.
+See [Installation](docs/installation.md) and [Usage](docs/usage.md) for the
+container, agent, and Kubernetes workflows.
 
-Build the image locally:
+## Documentation
 
-```bash
-make container-build
-docker run --rm fleet-intelligence-oob-collector:dev --help
-```
+| Guide | Contents |
+| --- | --- |
+| [Documentation index](docs/README.md) | Guide map and suggested reading paths |
+| [Installation](docs/installation.md) | Source builds, binaries, containers, and prerequisites |
+| [Configuration](docs/configuration.md) | BMC targets, labels, credentials, TLS, and proxies |
+| [Usage](docs/usage.md) | CLI commands, output, runtime behavior, and logging |
+| [Architecture](docs/architecture.md) | Components, data flows, identity, and failure handling |
+| [Kubernetes deployment](docs/kubernetes.md) | Helm installation, chart components, and operations |
+| [Contributing](CONTRIBUTING.md) | Development workflow, tests, and pull requests |
 
-Release tags publish Linux `amd64` and `arm64` images to
-`ghcr.io/nvidia/fleet-intelligence-oob-collector`. For example:
+Component-specific notes live beside their implementation:
 
-```bash
-docker pull ghcr.io/nvidia/fleet-intelligence-oob-collector:0.1.0
-```
-
-The runtime image uses Distroless `static-debian12:nonroot` with a statically
-linked `bmc-collector` binary. It runs as a numeric non-root user and contains no
-shell or package manager while retaining minimal runtime files such as CA
-certificates.
-
-## Configuration
-
-The collector has its own TOML configuration. Generic NICo labels can be
-declared once at the top level and apply to every configured machine:
-
-```toml
-[labels]
-compute_zone = "az51"
-node_group = "dev3-dh1"
-
-[[machines]]
-ip = "10.0.0.10"
-port = 443
-mac = "00:11:22:33:44:55"
-username = "root"
-password = "secret"
-labels = { site = "dev", environment = "development" }
-```
-
-The endpoint MAC identifies the BMC and is included in inventory. Passwords are
-required for inventory and attestation. When the effective labels for a machine
-include `compute_zone` or `node_group`, the inventory upload also exports them
-as the backend `computeZone` and `nodeGroup` placement fields.
-
-`mac` is optional. When omitted, the collector derives a locally administered
-unicast MAC using `02:00` followed by the final four bytes of the IP address.
-For example, `10.0.0.10` becomes `02:00:0a:00:00:0a`. An explicit MAC always
-takes precedence.
-
-The Helm deployment generates NICo's static endpoint configuration from this
-same file in an init container. It copies the shared labels and marks every
-endpoint as a compute machine so NICo discovers the primary Redfish
-ComputerSystem UUID and emits `system.uuid`. Users do not maintain a separate
-NICo configuration or duplicate BMC credentials. Optional top-level `labels`
-are copied to every machine, and per-machine `labels` can add to or override
-them. The collector adds the reserved `oob="true"` label to every NICo endpoint
-so it is present on emitted metrics and logs. NICo identity labels remain
-reserved.
-
-The generated configuration also enables NICo's logs collector in `auto` mode,
-which NICo leaves disabled by default. Auto mode streams BMC log entries over
-Redfish SSE and downgrades to `LogService` polling per endpoint when
-`/EventService` is unavailable.
-
-Backend API paths are derived from `--backend-url`. Connection settings
-(`--insecure-tls`, `--concurrency`, `--timeout-seconds`) are shared between
-inventory and attestation collection.
-
-### Proxy support
-
-The collector honors the standard proxy environment variables for Redfish and
-Fleet Intelligence backend requests:
-
-- `HTTP_PROXY` / `http_proxy` for HTTP destinations.
-- `HTTPS_PROXY` / `https_proxy` for HTTPS destinations.
-- `ALL_PROXY` / `all_proxy` as the fallback for either scheme.
-- `NO_PROXY` / `no_proxy` for destinations that must connect directly.
-
-HTTP, HTTPS, SOCKS4, and SOCKS5 proxy URLs are supported. Use `socks5h://` when
-DNS resolution must happen through the proxy. For example, a local inventory
-run through a Teleport SOCKS tunnel can use:
-
-```bash
-HTTPS_PROXY=socks5h://127.0.0.1:8888 \
-  target/debug/bmc-collector inventory \
-  --config /path/to/config.toml \
-  --insecure-tls
-```
-
-Proxy credentials should be supplied through environment variables or a
-Kubernetes Secret and must not be stored in the collector TOML.
-
-## Run Inventory Collection
-
-Print inventory locally (for debugging/testing):
-
-```bash
-cargo run -- inventory --config /path/to/config.toml --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls
-target/debug/bmc-collector inventory --config /path/to/config.toml --insecure-tls --detail
-```
-
-## Run Agent (Inventory + Attestation)
-
-Run continuously and send both inventory and attestation to the backend:
-
-```bash
-target/debug/bmc-collector run --config /path/to/config.toml --insecure-tls \
-  --backend-url http://127.0.0.1:18002 \
-  --agent-token "$FLEETINT_AGENT_TOKEN"
-```
-
-`--backend-url` and `--agent-token` can also be provided via `FLEETINT_BACKEND_URL`
-and `FLEETINT_AGENT_TOKEN` environment variables.
-
-Each `run` cycle:
-
-1. Collects inventory from all BMC targets concurrently
-2. Uploads the inventory batch to `PUT /v1/agent/oob_nodes`
-3. For targets where inventory discovered a system UUID, collects attestation
-4. Uploads the attestation batch to the backend attestation endpoint
-5. Sleeps for the configured interval (default 24 hours, override with
-   `--interval-seconds`)
-
-The agent enrolls with `POST /v1/agent/enroll` using the bootstrap agent token
-and uses the returned JWT for all subsequent backend requests.
-
-The collector does not send customer identity headers. In deployed environments,
-the trusted edge/auth proxy injects the customer context before the request
-reaches the agent API.
-
-`run` is the long-running agent mode. It performs one backend sync immediately,
-then repeats every 24 hours by default. Override the cadence with
-`--interval-seconds`.
-
-See `config.example.toml` for the shared labels and machine input.
-
-## Helm Chart
-
-The chart is published as an OCI artifact at
-`oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector`. Create separate
-Secrets for the backend bootstrap token and generic collector config:
-
-```bash
-kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
-  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
-
-kubectl create secret generic fleet-intelligence-config \
-  --from-file=config.toml=/path/to/config.toml
-
-kubectl create secret docker-registry ghcr-pull-secret \
-  --docker-server=ghcr.io \
-  --docker-username="$GITHUB_USER" \
-  --docker-password="$GITHUB_TOKEN"
-
-helm install fleet-intelligence-oob-collector \
-  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
-  --version 0.1.0 \
-  --set 'imagePullSecrets[0].name=ghcr-pull-secret'
-```
-
-The chart intentionally references existing Secrets instead of accepting
-credentials as values, which keeps credentials out of Helm release state. See
-`deployments/helm/fleet-intelligence-oob-collector/values.yaml` for the supported image
-and collector settings. The image pull Secret is only required for a private
-collector image. Validate local chart changes with `make chart-lint`.
-By default, the collector sends data to
-`https://data.fleet-intelligence.nvidia.com`. Set `bmcCollector.backendUrl` to
-use a different Fleet Intelligence endpoint.
-Set `bmcCollector.logLevel` to change the Rust tracing filter from its `info`
-default, for example `--set-string bmcCollector.logLevel=debug`.
-By default, the chart version is also used as the collector image tag.
-
-## Releases
-
-Pushing a semantic version tag such as `v0.1.0` runs tests, publishes the
-multi-architecture container image, and publishes a chart with the matching
-version. Pre-release tags such as `v0.2.0-rc.1` are supported and do not update
-the image's `latest` tag.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, validation
-commands, pull request expectations, and contribution sign-off guidance.
+- [Inventory collection behavior](crates/bmc-inventory/README.md)
+- [Helm chart reference](deployments/helm/fleet-intelligence-oob-collector/README.md)
+- [Local observability stack](dev/local-observability/README.md)
+- [Integration test layout](tests/README.md)
 
 ## Security
 
-Do not report security vulnerabilities through public GitHub issues. See
-[SECURITY.md](SECURITY.md) for NVIDIA private vulnerability reporting channels.
+The configuration contains BMC credentials. Keep it out of source control,
+restrict its file permissions, and use existing Kubernetes Secrets for
+deployments. Do not report vulnerabilities in public issues; follow
+[SECURITY.md](SECURITY.md).
 
 ## License
 
