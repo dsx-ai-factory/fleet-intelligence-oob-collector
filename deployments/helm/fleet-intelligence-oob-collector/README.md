@@ -12,29 +12,52 @@ Create separate Secrets for the backend bootstrap token and generic collector
 configuration:
 
 ```bash
-kubectl create namespace fleet-intelligence
+: "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
+
+kubectl create namespace fleet-intelligence \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
   --namespace fleet-intelligence \
-  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
+  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create secret generic fleet-intelligence-config \
   --namespace fleet-intelligence \
-  --from-file=config.toml=/path/to/config.toml
+  --from-file=config.toml=/path/to/config.toml \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 If the collector image is private, create a Docker registry Secret with a GHCR
 token that has `read:packages` access:
 
 ```bash
+: "${GITHUB_USER:?Set GITHUB_USER before continuing}"
+: "${GITHUB_TOKEN:?Set GITHUB_TOKEN before continuing}"
+
 kubectl create secret docker-registry ghcr-pull-secret \
   --namespace fleet-intelligence \
   --docker-server=ghcr.io \
   --docker-username="$GITHUB_USER" \
-  --docker-password="$GITHUB_TOKEN"
+  --docker-password="$GITHUB_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ## Install
+
+If the OCI chart package is private, authenticate Helm separately from the
+Kubernetes image pull Secret:
+
+```bash
+: "${GITHUB_USER:?Set GITHUB_USER before continuing}"
+: "${GITHUB_TOKEN:?Set GITHUB_TOKEN before continuing}"
+printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
+  --username "$GITHUB_USER" \
+  --password-stdin
+```
+
+This login lets Helm pull the chart. The `ghcr-pull-secret` instead lets
+Kubernetes nodes pull the deployed images.
 
 No values file is required when using the default Secret names, backend URL,
 and published images. The collector and NICo image tags default to the chart
@@ -139,8 +162,9 @@ helm upgrade --install fleet-intelligence-oob-collector \
 ```
 
 The collector reloads the projected Secret at the start of each collection
-cycle. After changing it, restart the NICo Deployment so its init container
-regenerates the pod-local configuration.
+cycle. When `nicoHardwareHealth.enabled=true`, restart the NICo Deployment
+after changing the Secret so its init container regenerates the pod-local
+configuration. Skip the restart when NICo is disabled.
 
 The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
 the chart version. By default, NICo sends OTLP/gRPC to a separate gateway

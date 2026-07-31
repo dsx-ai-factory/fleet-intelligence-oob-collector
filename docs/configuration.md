@@ -33,7 +33,9 @@ are rejected.
 | `machines[].labels` | No | Labels added to this machine or overriding shared labels. |
 
 When `mac` is omitted, the collector derives a locally administered MAC from
-`02:00` and the final four IP bytes. An explicit stable MAC is preferred.
+`02:00` and the final four IP bytes. Because different IPv6 addresses can share
+the same final four bytes, configure an explicit, unique MAC for IPv6 targets.
+An explicit stable MAC is preferred for IPv4 targets as well.
 
 Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. Each machine supports 31
 user-defined labels with values up to 1,024 bytes. NICo identity fields and the

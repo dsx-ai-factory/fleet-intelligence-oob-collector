@@ -46,8 +46,11 @@ At startup, the collector exchanges its bootstrap token for a runtime JWT. It
 then runs one collection cycle immediately and repeats every 24 hours by
 default. Each cycle collects and uploads inventory, collects attestation for
 resolved nodes when the inventory upload succeeds, uploads attestation, and
-waits for the configured interval. A rejected JWT causes one re-enrollment and
-retry.
+waits for the configured interval. A backend `401 Unauthorized` during an
+inventory upload, attestation nonce request, or attestation upload causes one
+re-enrollment and retry. Re-enrollment cannot fix a `401` caused by missing
+customer context; a trusted edge must inject that context before requests reach
+the agent API.
 
 The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
 set at the start of each cycle. This allows target changes from a projected
@@ -62,7 +65,9 @@ the [inventory collection notes](../crates/bmc-inventory/README.md).
 
 The default limits are 64 concurrent target workflows, four in-flight requests
 per BMC, 10 requests per second per BMC, and a burst capacity of 10. The global
-request ceiling is the target concurrency multiplied by the per-BMC limit.
+in-flight ceiling is the target concurrency multiplied by the per-BMC in-flight
+limit: `64 × 4 = 256` requests by default. The per-BMC rate and burst limits are
+applied separately.
 
 The dispatcher schedules BMCs round-robin, independently rate-limits each BMC,
 and fairly alternates inventory and attestation requests. This prevents a busy

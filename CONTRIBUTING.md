@@ -66,10 +66,13 @@ Use `--insecure-tls` only when the test BMC certificate cannot be validated.
 Run the long-running collector mode and submit to a backend:
 
 ```bash
+: "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
 cargo run -- run --config .config \
-  --backend-url https://api.example.com \
-  --agent-token "$FLEETINT_AGENT_TOKEN"
+  --backend-url https://api.example.com
 ```
+
+The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of
+the process arguments.
 
 Do not commit real BMC credentials, customer data, private backend URLs, or raw
 hardware dumps. The repository ignores local `.config`, `.env`, and
