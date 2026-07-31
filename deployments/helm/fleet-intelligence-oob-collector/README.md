@@ -5,9 +5,8 @@ It can also deploy the NICo hardware-health service. Both workloads use a
 `Recreate` deployment strategy so duplicate collectors do not run during an
 update.
 
-For an end-to-end operator workflow, including component layouts and restart
-behavior, see the repository
-[Kubernetes deployment guide](../../../docs/kubernetes.md). This file remains a
+For the concise end-to-end workflow, see the repository
+[installation guide](../../../docs/installation.md). This file remains a
 self-contained chart reference for packaged-chart users.
 
 ## Prerequisites

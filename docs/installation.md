@@ -1,77 +1,85 @@
 # Installation
 
-Choose a source build for development and local inspection, the published
-container for standalone packaging, or the Helm chart for a production
-Kubernetes deployment.
+The supported deployment uses the OCI Helm chart. It installs the OOB
+collector and, by default, NICo hardware health and an authenticated
+OpenTelemetry gateway.
 
-## Build from source
+## Prerequisites
 
-Prerequisites:
+- Kubernetes cluster access through `kubectl`
+- Helm 3 with OCI registry support
+- Network access from the cluster to the BMCs and Fleet Intelligence backend
+- A [collector configuration](configuration.md)
+- A Fleet Intelligence bootstrap agent token
 
-- Git
-- The Rust toolchain specified by `rust-toolchain.toml`
-- A network path from the collector host to each BMC Redfish endpoint
+## Create Secrets
 
-Install the configured toolchain and build the workspace from the repository
-root:
-
-```bash
-rustup show
-cargo build --workspace
-```
-
-The debug binary is written to `target/debug/bmc-collector`. Build an optimized
-binary with:
+Store the BMC configuration and agent token in separate Secrets:
 
 ```bash
-cargo build --release --bin bmc-collector
+kubectl create namespace fleet-intelligence
+
+kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
+  --namespace fleet-intelligence \
+  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN"
+
+kubectl create secret generic fleet-intelligence-config \
+  --namespace fleet-intelligence \
+  --from-file=config.toml=/path/to/config.toml
 ```
 
-The optimized binary is written to `target/release/bmc-collector`.
+The chart references existing Secrets so credentials do not enter Helm release
+state.
 
-## Build a container
-
-Docker with BuildKit is required:
+If the images are private, create an image pull Secret using a token with
+`read:packages` access:
 
 ```bash
-make container-build
-docker run --rm fleet-intelligence-oob-collector:dev --help
+kubectl create secret docker-registry ghcr-pull-secret \
+  --namespace fleet-intelligence \
+  --docker-server=ghcr.io \
+  --docker-username="$GITHUB_USER" \
+  --docker-password="$GITHUB_TOKEN"
 ```
 
-The runtime image uses Distroless `static-debian12:nonroot`, runs as numeric
-user and group `65532`, and has no shell or package manager. Mount a
-configuration file when running it locally:
+## Install
 
 ```bash
-docker run --rm \
-  --mount type=bind,src="$PWD/config.toml",dst=/config.toml,readonly \
-  fleet-intelligence-oob-collector:dev \
-  inventory --config /config.toml --format json
+export OOB_CHART_VERSION=0.1.0
+
+helm upgrade --install fleet-intelligence-oob-collector \
+  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  --version "$OOB_CHART_VERSION" \
+  --namespace fleet-intelligence \
+  --create-namespace \
+  --wait \
+  --timeout 10m
 ```
 
-Add `--insecure-tls` after the inventory options only when required by the BMC
-certificate setup.
-
-## Published artifacts
-
-Semantic-version releases publish Linux `amd64` and `arm64` images to:
+For private images, append:
 
 ```text
-ghcr.io/nvidia/fleet-intelligence-oob-collector:<version>
+--set 'imagePullSecrets[0].name=ghcr-pull-secret'
 ```
 
-For example:
+Collector and NICo image tags default to the chart version. See
+[Configuration](configuration.md#helm-values) for supported overrides.
+
+## Verify
 
 ```bash
-docker pull ghcr.io/nvidia/fleet-intelligence-oob-collector:0.1.0
+helm status fleet-intelligence-oob-collector \
+  --namespace fleet-intelligence
+
+kubectl get pods \
+  --namespace fleet-intelligence \
+  -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
+
+kubectl logs \
+  --namespace fleet-intelligence \
+  deployment/fleet-intelligence-oob-collector
 ```
 
-The Kubernetes chart is published as an OCI artifact at:
-
-```text
-oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector
-```
-
-Continue with [Configuration](configuration.md) for the shared TOML format,
-[Usage](usage.md) for CLI workflows, or
-[Kubernetes deployment](kubernetes.md) for Helm installation.
+After updating the collector Secret, restart the collector and NICo
+Deployments. Both read or generate their configuration only when their pods
+start.

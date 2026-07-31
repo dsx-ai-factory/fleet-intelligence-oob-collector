@@ -75,8 +75,8 @@ Do not commit real BMC credentials, customer data, private backend URLs, or raw
 hardware dumps. The repository ignores local `.config`, `.env`, and
 `redfish-raw*` files by default.
 
-See the [documentation index](docs/README.md) for architecture, configuration,
-usage, and deployment guides.
+See the [README](README.md) for architecture, configuration, usage, and
+installation guides.
 
 ## Pull Requests
 
