@@ -1,6 +1,6 @@
-# Contributing to Fleet Intelligence Out Of Band Collector
+# Contributing to Fleet Intelligence Out-of-Band Collector
 
-Thank you for your interest in contributing to Fleet Intelligence Out Of Band
+Thank you for your interest in contributing to Fleet Intelligence Out-of-Band
 Collector. This project is a Rust workspace for collecting Fleet Intelligence
 data from server BMC interfaces through out-of-band management paths.
 
@@ -34,13 +34,13 @@ rustup toolchain install
 Build the workspace:
 
 ```bash
-cargo build
+cargo build --workspace
 ```
 
 Run tests:
 
 ```bash
-cargo test
+cargo test --workspace
 ```
 
 Run formatting and lint checks before opening a pull request:
@@ -56,9 +56,9 @@ Copy the example configuration, replace its example values, and print BMC
 inventory locally:
 
 ```bash
-cp config.example.toml config.toml
-chmod 600 config.toml
-cargo run -- inventory --config config.toml
+cp config.example.toml .config
+chmod 600 .config
+cargo run -- inventory --config .config
 ```
 
 Use `--insecure-tls` only when the test BMC certificate cannot be validated.
@@ -66,7 +66,7 @@ Use `--insecure-tls` only when the test BMC certificate cannot be validated.
 Run the long-running collector mode and submit to a backend:
 
 ```bash
-cargo run -- run --config config.toml \
+cargo run -- run --config .config \
   --backend-url https://api.example.com \
   --agent-token "$FLEETINT_AGENT_TOKEN"
 ```
@@ -75,8 +75,8 @@ Do not commit real BMC credentials, customer data, private backend URLs, or raw
 hardware dumps. The repository ignores local `.config`, `.env`, and
 `redfish-raw*` files by default.
 
-See the [README](README.md) for architecture, configuration, usage, and
-installation guides.
+See the [README](README.md) for installation, configuration, and architecture
+guides.
 
 ## Pull Requests
 

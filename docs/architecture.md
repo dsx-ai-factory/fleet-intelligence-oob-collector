@@ -11,7 +11,7 @@ models and backend transport.
 | `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
 | `bmc-inventory` | Redfish inventory collection, mapping, and output |
 | `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
-| NICo hardware health | BMC metrics and logs |
+| [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) | BMC metrics and logs |
 | OpenTelemetry gateway | Authenticated telemetry export |
 
 ## Data flow
@@ -48,6 +48,10 @@ default. Each cycle collects and uploads inventory, collects attestation for
 resolved nodes when the inventory upload succeeds, uploads attestation, and
 waits for the configured interval. A rejected JWT causes one re-enrollment and
 retry.
+
+The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
+set at the start of each cycle. This allows target changes from a projected
+Kubernetes Secret to take effect without restarting the collector.
 
 Inventory preserves partial results. Recoverable domain failures are returned
 in `domainErrors`; failures that prevent meaningful target collection are

@@ -80,6 +80,12 @@ kubectl logs \
   deployment/fleet-intelligence-oob-collector
 ```
 
-After updating the collector Secret, restart the collector and NICo
-Deployments. Both read or generate their configuration only when their pods
-start.
+The collector reloads the mounted TOML at the start of each collection cycle.
+After updating the Secret, restart the NICo Deployment so its init container
+regenerates NICo's configuration:
+
+```bash
+kubectl rollout restart \
+  --namespace fleet-intelligence \
+  deployment/nico-hardware-health
+```

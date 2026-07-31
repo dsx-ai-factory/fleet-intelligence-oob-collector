@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Fleet Intelligence Out Of Band Collector should be
+All notable changes to Fleet Intelligence Out-of-Band Collector should be
 documented in this file.
 
 This project follows a human-maintained changelog format. Group entries by

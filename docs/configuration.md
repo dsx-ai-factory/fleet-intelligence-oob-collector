@@ -52,7 +52,7 @@ The commonly configured chart values are:
 | --- | --- | --- |
 | `config.secretName` | `fleet-intelligence-config` | Existing Secret containing the TOML file. |
 | `config.secretKey` | `config.toml` | Key containing the TOML file. |
-| `bmcCollector.backendUrl` | Fleet Intelligence production URL | API base URL without `/v1/agent`. |
+| `bmcCollector.backendUrl` | `https://data.fleet-intelligence.nvidia.com` | API base URL without `/v1/agent`. |
 | `bmcCollector.agentTokenSecretName` | `fleet-intelligence-oob-collector-agent-token` | Existing Secret containing `agent-token`. |
 | `bmcCollector.intervalSeconds` | `86400` | Collection interval. |
 | `bmcCollector.insecureTls` | `false` | Disable BMC certificate verification. |
@@ -61,8 +61,9 @@ The commonly configured chart values are:
 | `nicoHardwareHealth.metricsPrefix` | `fleetint` | NICo metric prefix. |
 | `otelGateway.enabled` | `true` | Deploy the authenticated telemetry gateway. |
 
-See `deployments/helm/fleet-intelligence-oob-collector/values.yaml` for the full
-value reference. To use an external OTLP/gRPC collector, disable
+See the chart's
+[values.yaml](../deployments/helm/fleet-intelligence-oob-collector/values.yaml)
+for the full value reference. To use an external OTLP/gRPC collector, disable
 `otelGateway.enabled` and set `nicoHardwareHealth.otlpEndpoint`. To run only
 inventory and attestation, disable both NICo and the gateway.
 

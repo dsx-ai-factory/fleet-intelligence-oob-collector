@@ -1,13 +1,10 @@
 # Fleet Intelligence OOB Collector
 
 This chart deploys one long-running Fleet Intelligence out-of-band collector.
-It can also deploy the NICo hardware-health service. Both workloads use a
-`Recreate` deployment strategy so duplicate collectors do not run during an
-update.
-
-For the concise end-to-end workflow, see the repository
-[installation guide](../../../docs/installation.md). This file remains a
-self-contained chart reference for packaged-chart users.
+It can also deploy
+[NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health).
+Both workloads use a `Recreate` deployment strategy so duplicate collectors do
+not run during an update.
 
 ## Prerequisites
 
@@ -41,7 +38,7 @@ kubectl create secret docker-registry ghcr-pull-secret \
 
 No values file is required when using the default Secret names, backend URL,
 and published images. The collector and NICo image tags default to the chart
-version; the OTel gateway uses its independently pinned image tag.
+version; the OpenTelemetry gateway uses its independently pinned image tag.
 
 ```bash
 export OOB_CHART_VERSION=0.1.0
@@ -141,9 +138,9 @@ helm upgrade --install fleet-intelligence-oob-collector \
   --set otelGateway.enabled=false
 ```
 
-After changing the external collector config Secret, restart both the collector
-and NICo Deployments. The collector reads the Secret at startup, and the NICo
-init container regenerates its pod-local configuration only when a pod starts.
+The collector reloads the projected Secret at the start of each collection
+cycle. After changing it, restart the NICo Deployment so its init container
+regenerates the pod-local configuration.
 
 The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
 the chart version. By default, NICo sends OTLP/gRPC to a separate gateway

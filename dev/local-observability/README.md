@@ -1,14 +1,14 @@
 # Local OTLP observability stack
 
-This Docker Compose stack provides a local destination for telemetry emitted by
-the NICo `forge-hw-health` binary from the `infra-controller` repository. It is
-intended for development only: it does not run the OOB collector, perform
+This Docker Compose stack provides a local destination for telemetry from
+[NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health).
+This stack is for development only: it does not run the OOB collector, perform
 backend enrollment, or connect to Fleet Intelligence services.
 
 ## Data flow
 
 ```text
-forge-hw-health (host)
+NICo hardware health (host)
   └─ OTLP/gRPC :4317 → OpenTelemetry Collector
                            ├─ logs → Loki :3100 ───────┐
                            └─ metrics → :8889          │
@@ -20,7 +20,7 @@ forge-hw-health (host)
 ## Prerequisites
 
 - Docker with the Compose plugin
-- Rust and Cargo if you want to run the health service locally
+- Rust and Cargo if you want to run NICo hardware health locally
 
 ## Start the stack
 
@@ -40,26 +40,21 @@ The other local endpoints are:
 | Service | URL or endpoint |
 | --- | --- |
 | OTLP/gRPC receiver | `http://localhost:4317` |
-| Collector Prometheus exporter | <http://localhost:8889/metrics> |
+| OpenTelemetry Collector Prometheus exporter | <http://localhost:8889/metrics> |
 | Loki API | <http://localhost:3100> |
 | Prometheus | <http://localhost:9090> |
 
-## Send health telemetry
+## Send NICo telemetry
 
-Clone `infra-controller` next to this repository if it is not already available
-locally:
+Clone `infra-controller` into a separate working directory and run the
+remaining commands from its repository root:
 
 ```bash
-cd ..
-git clone git@github.com:NVIDIA/infra-controller.git
+git clone https://github.com/NVIDIA/infra-controller.git
 cd infra-controller
 ```
 
-These commands assume that you have access to the NVIDIA repository. A different
-clone location also works; run the remaining commands from the root of that
-clone.
-
-Start with one of the health service example configurations:
+Start with one of NICo's example configurations:
 
 - `crates/health/example/config.bmc-mock.toml` for the local BMC mock
 - `crates/health/example/config.example.toml` as the starting point for real
@@ -86,8 +81,8 @@ endpoint = "http://localhost:4317"
 Keep real BMC addresses and credentials outside both repositories and do not
 commit them.
 
-Run the mock and health service from the `infra-controller` repository in
-separate terminals:
+Run the mock and NICo's `forge-hw-health` binary from the `infra-controller`
+repository in separate terminals:
 
 ```bash
 # Terminal 1: serve a mock BMC on localhost:1266.
@@ -98,9 +93,9 @@ cargo run -p carbide-health --bin forge-hw-health -- \
   "${HOME}/.config/forge-hw-health/config.toml"
 ```
 
-The Collector assigns the `nico-hardware-health` service name because the health
-service's custom OTLP exporter does not currently set `service.name`. In Grafana
-Explore, select Loki and start with:
+The OpenTelemetry Collector assigns the `nico-hardware-health` service name
+because NICo's custom OTLP exporter does not currently set `service.name`. In
+Grafana Explore, select Loki and start with:
 
 ```logql
 {service_name="nico-hardware-health"}
