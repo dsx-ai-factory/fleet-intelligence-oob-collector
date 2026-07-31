@@ -40,6 +40,30 @@ uses `ComputerSystem.UUID` for node identity and provides deterministic
 fallbacks when it is missing. Attestation runs only after a successful
 inventory upload and only for records with a resolved node UUID.
 
+## Collection lifecycle
+
+At startup, the collector exchanges its bootstrap token for a runtime JWT. It
+then runs one collection cycle immediately and repeats every 24 hours by
+default. Each cycle collects and uploads inventory, collects attestation for
+resolved nodes when the inventory upload succeeds, uploads attestation, and
+waits for the configured interval. A rejected JWT causes one re-enrollment and
+retry.
+
+Inventory preserves partial results. Recoverable domain failures are returned
+in `domainErrors`; failures that prevent meaningful target collection are
+returned in `targetError`. Detailed identity, mapping, and failure rules are in
+the [inventory collection notes](../crates/bmc-inventory/README.md).
+
+## Request admission
+
+The default limits are 64 concurrent target workflows, four in-flight requests
+per BMC, 10 requests per second per BMC, and a burst capacity of 10. The global
+request ceiling is the target concurrency multiplied by the per-BMC limit.
+
+The dispatcher schedules BMCs round-robin, independently rate-limits each BMC,
+and fairly alternates inventory and attestation requests. This prevents a busy
+endpoint or workflow from monopolizing collection.
+
 ## Deployment boundaries
 
 The same Secret supplies BMC targets to the collector and NICo config renderer,

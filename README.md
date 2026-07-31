@@ -41,7 +41,6 @@ valid data.
 
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
-- [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
 
