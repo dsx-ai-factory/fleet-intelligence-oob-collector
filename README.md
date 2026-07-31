@@ -11,7 +11,8 @@ information must be collected independently of the host operating system.
   devices, firmware, and secure boot state.
 - GPU attestation using backend-issued nonces and Redfish evidence collection.
 - Per-BMC concurrency and rate limiting shared by inventory and attestation.
-- NICo hardware-health metrics and BMC log collection.
+- [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health)
+  from `infra-controller` for metrics and BMC log collection.
 - An authenticated OpenTelemetry gateway for telemetry export.
 - An OCI Helm chart for Kubernetes deployment.
 
