@@ -1,4 +1,4 @@
-# Usage and behavior
+# Usage
 
 ## Quick start
 

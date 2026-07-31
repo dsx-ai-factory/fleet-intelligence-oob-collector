@@ -2,13 +2,45 @@
 
 The Fleet Intelligence out-of-band (OOB) collector gathers inventory,
 attestation, metrics, and logs from server BMCs over Redfish without requiring
-an in-band host agent.
+an in-band host agent. It is designed for environments where hardware
+information must be collected independently of the host operating system.
+
+## What it provides
+
+- Inventory collection for systems, managers, chassis, processors, PCIe
+  devices, firmware, and secure boot state.
+- GPU attestation using backend-issued nonces and Redfish evidence collection.
+- Per-BMC concurrency and rate limiting shared by inventory and attestation.
+- NICo hardware-health metrics and BMC log collection.
+- An authenticated OpenTelemetry gateway for telemetry export.
+- An OCI Helm chart for Kubernetes deployment.
+
+## How it works
+
+The Helm chart deploys three components by default:
+
+```text
+OOB collector ──────────────► inventory and attestation APIs
+      │
+      └─ shared BMC config ─► NICo hardware health
+                                      │
+                               metrics and logs
+                                      ▼
+                               OTLP gateway ─► telemetry API
+```
+
+The OOB collector enrolls with Fleet Intelligence, collects inventory from all
+configured BMCs, uploads the inventory batch, and then collects attestation for
+nodes with resolved identities. NICo uses the same BMC configuration to emit
+hardware metrics and logs through the gateway. Partial inventory failures are
+preserved in the output so unavailable Redfish domains do not erase otherwise
+valid data.
 
 ## Documentation
 
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
-- [Usage and behavior](docs/usage.md)
+- [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
 
