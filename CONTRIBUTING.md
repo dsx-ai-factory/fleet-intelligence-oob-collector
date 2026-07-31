@@ -75,8 +75,8 @@ The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of
 the process arguments.
 
 Do not commit real BMC credentials, customer data, private backend URLs, or raw
-hardware dumps. The repository ignores local `.config`, `.env`, and
-`redfish-raw*` files by default.
+hardware dumps. The repository ignores the documented local configuration and
+environment files by default.
 
 See the [README](README.md) for installation, configuration, and architecture
 guides.
