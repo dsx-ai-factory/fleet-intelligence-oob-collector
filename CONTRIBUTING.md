@@ -1,6 +1,6 @@
-# Contributing to Fleet Intelligence Out Of Band Collector
+# Contributing to Fleet Intelligence Out-of-Band Collector
 
-Thank you for your interest in contributing to Fleet Intelligence Out Of Band
+Thank you for your interest in contributing to Fleet Intelligence Out-of-Band
 Collector. This project is a Rust workspace for collecting Fleet Intelligence
 data from server BMC interfaces through out-of-band management paths.
 
@@ -34,13 +34,13 @@ rustup toolchain install
 Build the workspace:
 
 ```bash
-cargo build
+cargo build --workspace
 ```
 
 Run tests:
 
 ```bash
-cargo test
+cargo test --workspace
 ```
 
 Run formatting and lint checks before opening a pull request:
@@ -52,23 +52,34 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Running the Collector
 
-Print BMC inventory locally:
+Copy the example configuration, replace its example values, and print BMC
+inventory locally:
 
 ```bash
-cargo run -- inventory --config /path/to/.config --insecure-tls
+cp config.example.toml .config
+chmod 600 .config
+cargo run -- inventory --config .config
 ```
+
+Use `--insecure-tls` only when the test BMC certificate cannot be validated.
 
 Run the long-running collector mode and submit to a backend:
 
 ```bash
-cargo run -- run --config /path/to/.config --insecure-tls \
-  --backend-url https://api.example.com \
-  --agent-token "$FLEETINT_AGENT_TOKEN"
+: "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
+cargo run -- run --config .config \
+  --backend-url https://api.example.com
 ```
 
+The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of
+the process arguments.
+
 Do not commit real BMC credentials, customer data, private backend URLs, or raw
-hardware dumps. The repository ignores local `.config`, `.env`, and
-`redfish-raw*` files by default.
+hardware dumps. The repository ignores the documented local configuration and
+environment files by default.
+
+See the [README](README.md) for installation, configuration, and architecture
+guides.
 
 ## Pull Requests
 
@@ -77,8 +88,17 @@ When opening a pull request:
 - Describe the user-visible behavior change.
 - Link related issues.
 - Include tests for new behavior or explain why tests are not practical.
-- Update README or crate documentation when commands, configuration, data models, or output formats change.
+- Update the relevant guide under `docs/` or component documentation when
+  commands, configuration, data models, deployment behavior, or output formats
+  change.
 - Keep unrelated refactors out of feature and bug fix PRs.
+
+## Release Process
+
+Pushing a semantic version tag such as `v0.1.0` runs the release validation,
+publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm
+chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are
+supported and do not update the collector image's `latest` tag.
 
 ## Developer Certificate of Origin (DCO)
 

@@ -1,8 +1,10 @@
 /target/
+/dist/
 /.config
+/config.toml
 /.env
+/.env.*
+!/.env.example
 *.log
 *.tmp
 .DS_Store
-redfish-raw*/
-redfish-raw*.zip

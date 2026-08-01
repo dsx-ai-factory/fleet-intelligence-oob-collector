@@ -2,7 +2,7 @@
 
 ## Overview
 
-This code of conduct applies to participation in Fleet Intelligence Out Of Band
+This code of conduct applies to participation in Fleet Intelligence Out-of-Band
 Collector.
 
 ## Our Pledge

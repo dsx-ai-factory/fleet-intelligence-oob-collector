@@ -1,10 +1,10 @@
-## Security
+# Security
 
 NVIDIA is dedicated to the security and trust of our software products and
 services, including all source code repositories managed through our
 organization.
 
-If you need to report a security issue in Fleet Intelligence Out Of Band
+If you need to report a security issue in Fleet Intelligence Out-of-Band
 Collector, please use the appropriate private disclosure channels below. Do not
 report security vulnerabilities through GitHub issues or pull requests.
 
