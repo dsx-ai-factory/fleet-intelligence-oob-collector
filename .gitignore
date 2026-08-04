@@ -2,8 +2,6 @@
 /dist/
 /.config
 /config.toml
-redfish-raw*/
-redfish-raw*.zip
 /.env
 /.env.*
 !/.env.example
