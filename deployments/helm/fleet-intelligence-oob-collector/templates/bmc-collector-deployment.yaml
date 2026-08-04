@@ -77,6 +77,11 @@ spec:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
+            {{- if .Values.credentials.secrets }}
+            - name: bmc-credentials
+              mountPath: /run/secrets/bmc
+              readOnly: true
+            {{- end }}
       volumes:
         - name: hardware-config
           secret:
@@ -85,3 +90,18 @@ spec:
               - key: {{ .Values.config.secretKey | quote }}
                 path: {{ .Values.config.secretKey | quote }}
                 mode: 0440
+        {{- if .Values.credentials.secrets }}
+        - name: bmc-credentials
+          projected:
+            defaultMode: 0440
+            sources:
+              {{- range .Values.credentials.secrets }}
+              - secret:
+                  name: {{ required "credentials.secrets[].name is required" .name | quote }}
+                  items:
+                    - key: username
+                      path: {{ printf "%s/username" .target | quote }}
+                    - key: password
+                      path: {{ printf "%s/password" .target | quote }}
+              {{- end }}
+        {{- end }}

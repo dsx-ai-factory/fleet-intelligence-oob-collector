@@ -165,7 +165,10 @@ fn strip_absolute_urls(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
     let mut i = 0;
     while i < message.len() {
-        if let Some(scheme) = SCHEMES.iter().find(|scheme| lower[i..].starts_with(*scheme)) {
+        if let Some(scheme) = SCHEMES
+            .iter()
+            .find(|scheme| lower[i..].starts_with(*scheme))
+        {
             i += scheme.len();
             while i < message.len() {
                 let ch = message[i..].chars().next().expect("char at i");

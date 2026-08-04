@@ -16,7 +16,8 @@ OpenTelemetry gateway.
 
 ## Create Secrets
 
-Store the BMC configuration and agent token in separate Secrets:
+Store the password-free BMC configuration, BMC credentials, and agent token in
+separate Secrets:
 
 ```bash
 : "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
@@ -33,10 +34,28 @@ kubectl create secret generic fleet-intelligence-config \
   --namespace fleet-intelligence \
   --from-file=config.toml=/path/to/config.toml \
   --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create secret generic default-bmc-credentials \
+  --namespace fleet-intelligence \
+  --from-file=username=/secure/path/to/username \
+  --from-file=password=/secure/path/to/password \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-The chart references existing Secrets so credentials do not enter Helm release
-state.
+The chart references existing Secrets so credential values do not enter Helm
+release state. Configure the mount using only the Secret name and target
+directory:
+
+```yaml
+credentials:
+  secrets:
+    - name: default-bmc-credentials
+      target: default
+```
+
+Add another entry with a distinct `target` for each per-machine override. Each
+Secret must contain `username` and `password` keys. The chart projects them to
+`/run/secrets/bmc/<target>/username` and `password`.
 
 If the images are private, create an image pull Secret using a token with
 `read:packages` access:

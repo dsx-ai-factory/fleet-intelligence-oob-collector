@@ -8,6 +8,12 @@ bmcCollector:
     noProxy: localhost,127.0.0.1,.svc,.cluster.local
 config:
   secretName: fleet-intelligence-config-test
+credentials:
+  secrets:
+    - name: default-bmc-credentials-test
+      target: default
+    - name: node-02-bmc-credentials-test
+      target: node-02
 imagePullSecrets:
   - name: ghcr-pull-secret-test
 nicoHardwareHealth:

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,18 @@ struct Config {
     #[serde(default)]
     labels: BTreeMap<String, String>,
     #[serde(default)]
+    credentials: Option<FileCredentialConfig>,
+    #[serde(default)]
     machines: Vec<MachineConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileCredentialConfig {
+    #[serde(default)]
+    username_file: Option<PathBuf>,
+    #[serde(default)]
+    password_file: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -73,8 +85,14 @@ struct MachineConfig {
     port: Option<u16>,
     #[serde(default)]
     mac: Option<String>,
-    username: String,
-    password: String,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    username_file: Option<PathBuf>,
+    #[serde(default)]
+    password_file: Option<PathBuf>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
 }
@@ -97,11 +115,17 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
     }
 
     validate_nico_labels("labels", &config.labels)?;
+    let config_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    let default_credentials = config
+        .credentials
+        .as_ref()
+        .map(|credentials| credentials.resolve("credentials", config_dir))
+        .transpose()?;
 
     let mut macs = HashSet::new();
     let mut targets = Vec::with_capacity(config.machines.len());
     for (index, machine) in config.machines.into_iter().enumerate() {
-        let mut target = machine.into_target(index)?;
+        let mut target = machine.into_target(index, default_credentials.as_ref(), config_dir)?;
         let mut labels = config.labels.clone();
         labels.extend(target.labels);
         validate_nico_labels(&format!("machines[{index}].labels"), &labels)?;
@@ -151,8 +175,14 @@ fn validate_nico_labels(
 }
 
 impl MachineConfig {
-    fn into_target(self, index: usize) -> Result<Target, Box<dyn Error>> {
+    fn into_target(
+        self,
+        index: usize,
+        default_credentials: Option<&ResolvedCredentials>,
+        config_dir: &Path,
+    ) -> Result<Target, Box<dyn Error>> {
         let context = format!("machines[{index}]");
+        let credentials = self.resolve_credentials(&context, default_credentials, config_dir)?;
         let mac = match self.mac {
             Some(mac) if mac.trim().is_empty() => {
                 return Err(format!("{context}.mac cannot be blank").into());
@@ -160,12 +190,6 @@ impl MachineConfig {
             Some(mac) => mac,
             None => derive_mac_from_ip(self.ip),
         };
-        if self.username.trim().is_empty() {
-            return Err(format!("{context}.username is required").into());
-        }
-        if self.password.trim().is_empty() {
-            return Err(format!("{context}.password is required by the OOB collector").into());
-        }
         let address = match (self.ip, self.port) {
             (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
             (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
@@ -178,11 +202,130 @@ impl MachineConfig {
             port: self.port,
             mac,
             address,
-            username: self.username,
-            password: self.password,
+            username: credentials.username,
+            password: credentials.password,
             labels: self.labels,
         })
     }
+
+    fn resolve_credentials(
+        &self,
+        context: &str,
+        default_credentials: Option<&ResolvedCredentials>,
+        config_dir: &Path,
+    ) -> Result<ResolvedCredentials, Box<dyn Error>> {
+        let has_inline = self.username.is_some() || self.password.is_some();
+        let has_files = self.username_file.is_some() || self.password_file.is_some();
+
+        if has_inline && has_files {
+            return Err(format!(
+                "{context} must use either username/password or username_file/password_file, not both"
+            )
+            .into());
+        }
+        if has_inline {
+            return ResolvedCredentials::from_inline(
+                self.username.as_deref(),
+                self.password.as_deref(),
+                context,
+            );
+        }
+        if has_files {
+            return FileCredentialConfig {
+                username_file: self.username_file.clone(),
+                password_file: self.password_file.clone(),
+            }
+            .resolve(context, config_dir);
+        }
+
+        default_credentials.cloned().ok_or_else(|| {
+            format!("{context} requires credentials or a top-level [credentials] file pair").into()
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedCredentials {
+    username: String,
+    password: String,
+}
+
+impl ResolvedCredentials {
+    fn from_inline(
+        username: Option<&str>,
+        password: Option<&str>,
+        context: &str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let username = username.ok_or_else(|| format!("{context}.username is required"))?;
+        let password = password.ok_or_else(|| format!("{context}.password is required"))?;
+        validate_credentials(username, password, context)
+    }
+}
+
+impl FileCredentialConfig {
+    fn resolve(
+        &self,
+        context: &str,
+        config_dir: &Path,
+    ) -> Result<ResolvedCredentials, Box<dyn Error>> {
+        let username_path = self
+            .username_file
+            .as_deref()
+            .ok_or_else(|| format!("{context}.username_file is required"))?;
+        let password_path = self
+            .password_file
+            .as_deref()
+            .ok_or_else(|| format!("{context}.password_file is required"))?;
+        let username = read_credential_file(username_path, config_dir, context, "username_file")?;
+        let password = read_credential_file(password_path, config_dir, context, "password_file")?;
+        validate_credentials(&username, &password, context)
+    }
+}
+
+fn read_credential_file(
+    path: &Path,
+    config_dir: &Path,
+    context: &str,
+    field: &str,
+) -> Result<String, Box<dyn Error>> {
+    let resolved_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
+    };
+    let value = std::fs::read_to_string(&resolved_path).map_err(|error| {
+        format!(
+            "failed to read {context}.{field} {}: {error}",
+            resolved_path.display()
+        )
+    })?;
+    Ok(strip_one_line_ending(value))
+}
+
+fn strip_one_line_ending(mut value: String) -> String {
+    if value.ends_with("\r\n") {
+        value.truncate(value.len() - 2);
+    } else if value.ends_with('\n') {
+        value.pop();
+    }
+    value
+}
+
+fn validate_credentials(
+    username: &str,
+    password: &str,
+    context: &str,
+) -> Result<ResolvedCredentials, Box<dyn Error>> {
+    if username.trim().is_empty() {
+        return Err(format!("{context}.username is required").into());
+    }
+    if password.is_empty() || password.chars().all(char::is_whitespace) {
+        return Err(format!("{context}.password is required by the OOB collector").into());
+    }
+    Ok(ResolvedCredentials {
+        username: username.to_string(),
+        password: password.to_string(),
+    })
 }
 
 fn derive_mac_from_ip(ip: IpAddr) -> String {
@@ -454,6 +597,75 @@ mod tests {
     }
 
     #[test]
+    fn applies_top_level_file_credentials_and_machine_override() {
+        let default_username = write_credential("default-username", "default-admin\n");
+        let default_password = write_credential("default-password", "default-secret\n");
+        let override_username = write_credential("override-username", "node-admin\r\n");
+        let override_password = write_credential("override-password", "node-secret\r\n");
+        let path = write_config(
+            "file-credentials",
+            &format!(
+                r#"
+                [credentials]
+                username_file = "{}"
+                password_file = "{}"
+
+                [[machines]]
+                ip = "10.0.0.1"
+
+                [[machines]]
+                ip = "10.0.0.2"
+                username_file = "{}"
+                password_file = "{}"
+                "#,
+                default_username.display(),
+                default_password.display(),
+                override_username.display(),
+                override_password.display(),
+            ),
+        );
+
+        let config = load_config(path.to_str().expect("path")).expect("config");
+
+        assert_eq!(config.targets[0].username, "default-admin");
+        assert_eq!(config.targets[0].password, "default-secret");
+        assert_eq!(config.targets[1].username, "node-admin");
+        assert_eq!(config.targets[1].password, "node-secret");
+    }
+
+    #[test]
+    fn resolves_relative_credential_paths_from_config_directory() {
+        let mut directory = std::env::temp_dir();
+        directory.push(format!(
+            "fleet-intelligence-oob-relative-credentials-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(directory.join("secrets")).expect("credential directory");
+        std::fs::write(directory.join("secrets/username"), "admin\n").expect("username");
+        std::fs::write(directory.join("secrets/password"), "secret\n").expect("password");
+        let config_path = directory.join("config.toml");
+        std::fs::write(
+            &config_path,
+            unindent(
+                r#"
+                [credentials]
+                username_file = "secrets/username"
+                password_file = "secrets/password"
+
+                [[machines]]
+                ip = "10.0.0.1"
+                "#,
+            ),
+        )
+        .expect("config");
+
+        let config = load_config(config_path.to_str().expect("path")).expect("config");
+
+        assert_eq!(config.targets[0].username, "admin");
+        assert_eq!(config.targets[0].password, "secret");
+    }
+
+    #[test]
     fn explicit_mac_takes_precedence_and_blank_mac_is_rejected() {
         let explicit = parse_config(
             r#"
@@ -485,11 +697,18 @@ mod tests {
 
     #[test]
     fn repository_oob_config_example_is_valid() {
-        let config = parse_config(
-            include_str!("../../../config.example.toml"),
-            "config.example.toml",
-        )
-        .expect("OOB config example");
+        let username = write_credential("example-username", "admin\n");
+        let password = write_credential("example-password", "secret\n");
+        let contents = include_str!("../../../config.example.toml")
+            .replace(
+                "/run/secrets/bmc/default/username",
+                username.to_str().expect("username path"),
+            )
+            .replace(
+                "/run/secrets/bmc/default/password",
+                password.to_str().expect("password path"),
+            );
+        let config = parse_config(&contents, "config.example.toml").expect("OOB config example");
 
         assert_eq!(config.targets.len(), 1);
         assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
@@ -519,7 +738,49 @@ mod tests {
             .expect_err("missing password should fail")
             .to_string();
 
-        assert!(error.contains("missing field `password`"));
+        assert!(error.contains("machines[0].password is required"));
+    }
+
+    #[test]
+    fn rejects_partial_and_mixed_credential_sources() {
+        for (name, content, expected) in [
+            (
+                "partial-default",
+                r#"
+                [credentials]
+                username_file = "/run/secrets/bmc/username"
+
+                [[machines]]
+                ip = "10.0.0.1"
+                "#,
+                "credentials.password_file is required",
+            ),
+            (
+                "partial-machine-files",
+                r#"
+                [[machines]]
+                ip = "10.0.0.1"
+                username_file = "/run/secrets/bmc/username"
+                "#,
+                "machines[0].password_file is required",
+            ),
+            (
+                "mixed-machine",
+                r#"
+                [[machines]]
+                ip = "10.0.0.1"
+                username = "admin"
+                password_file = "/run/secrets/bmc/password"
+                "#,
+                "must use either username/password or username_file/password_file",
+            ),
+        ] {
+            let path = write_config(name, content);
+            let error = load_config(path.to_str().expect("path"))
+                .expect_err("invalid credentials should fail")
+                .to_string();
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
     }
 
     #[test]
@@ -759,6 +1020,16 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&path, unindent(content)).expect("write config");
+        path
+    }
+
+    fn write_credential(name: &str, content: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "fleet-intelligence-oob-{name}-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, content).expect("write credential");
         path
     }
 

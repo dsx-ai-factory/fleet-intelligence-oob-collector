@@ -8,28 +8,40 @@ The collector and NICo hardware health share one TOML file. Start from
 compute_zone = "az51"
 node_group = "dev3-dh1"
 
+[credentials]
+username_file = "/run/secrets/bmc/default/username"
+password_file = "/run/secrets/bmc/default/password"
+
 [[machines]]
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
-username = "bmc-user"
-password = "bmc-password"
 labels = { site = "dev", environment = "development" }
+
+[[machines]]
+ip = "10.0.0.11"
+username_file = "/run/secrets/bmc/node-02/username"
+password_file = "/run/secrets/bmc/node-02/password"
 ```
 
-Unknown fields, an empty machine list, blank credentials, and duplicate MACs
-are rejected.
+The first machine inherits the top-level credential files. The second machine
+overrides both files. Unknown fields, an empty machine list, incomplete or mixed
+credential pairs, blank credentials, and duplicate MACs are rejected.
 
 ## Collector TOML
 
 | Field | Required | Description |
 | --- | --- | --- |
 | Top-level `labels` | No | Labels applied to every machine. |
+| `credentials.username_file` | Conditional | Default username file inherited by machines; must be paired with `password_file`. |
+| `credentials.password_file` | Conditional | Default password file inherited by machines; must be paired with `username_file`. |
 | `machines[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `machines[].port` | No | Redfish port; the HTTPS default is used when omitted. |
 | `machines[].mac` | No | Stable BMC identity. It must be unique in the file. |
-| `machines[].username` | Yes | Redfish username. |
-| `machines[].password` | Yes | Redfish password. |
+| `machines[].username_file` | Conditional | Per-machine username file override; must be paired with `password_file`. |
+| `machines[].password_file` | Conditional | Per-machine password file override; must be paired with `username_file`. |
+| `machines[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
+| `machines[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
 | `machines[].labels` | No | Labels added to this machine or overriding shared labels. |
 
 When `mac` is omitted, the collector derives a locally administered MAC from
@@ -42,8 +54,14 @@ user-defined labels with values up to 1,024 bytes. NICo identity fields and the
 collector-added `oob="true"` label are reserved. Effective `compute_zone` and
 `node_group` labels are also exported as backend placement fields.
 
-The file contains clear-text BMC credentials. Keep it out of source control and
-store it in the Kubernetes Secret created during
+Relative credential paths are resolved from the directory containing the
+collector configuration. A machine must provide a complete file pair, a
+complete inline pair, or inherit a complete top-level file pair.
+Per-machine credentials override the top-level pair as a unit; sources cannot
+be mixed.
+
+The recommended configuration contains only credential paths and can be kept
+separate from the Kubernetes Secrets that hold the values. See
 [installation](installation.md#create-secrets).
 
 ## Helm values
@@ -54,6 +72,7 @@ The commonly configured chart values are:
 | --- | --- | --- |
 | `config.secretName` | `fleet-intelligence-config` | Existing Secret containing the TOML file. |
 | `config.secretKey` | `config.toml` | Key containing the TOML file. |
+| `credentials.secrets` | `[]` | Existing BMC credential Secrets projected under `/run/secrets/bmc/<target>`. |
 | `bmcCollector.backendUrl` | `https://data.fleet-intelligence.nvidia.com` | API base URL without `/v1/agent`. |
 | `bmcCollector.agentTokenSecretName` | `fleet-intelligence-oob-collector-agent-token` | Existing Secret containing `agent-token`. |
 | `bmcCollector.intervalSeconds` | `86400` | Collection interval. |

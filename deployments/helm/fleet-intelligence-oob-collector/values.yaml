@@ -6,6 +6,15 @@ config:
   secretName: fleet-intelligence-config
   secretKey: config.toml
 
+# Existing Kubernetes Secrets containing BMC credential files. Secret values
+# are mounted directly and are never rendered into Helm release state.
+credentials:
+  secrets: []
+  # - name: default-bmc-credentials
+  #   target: default
+  # - name: exceptional-node-bmc-credentials
+  #   target: node-02
+
 # Fleet Intelligence BMC inventory and attestation collector.
 bmcCollector:
   image:

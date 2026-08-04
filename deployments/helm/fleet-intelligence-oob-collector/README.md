@@ -8,8 +8,8 @@ not run during an update.
 
 ## Prerequisites
 
-Create separate Secrets for the backend bootstrap token and generic collector
-configuration:
+Create separate Secrets for the backend bootstrap token, password-free collector
+configuration, and BMC credentials:
 
 ```bash
 : "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
@@ -25,6 +25,12 @@ kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
 kubectl create secret generic fleet-intelligence-config \
   --namespace fleet-intelligence \
   --from-file=config.toml=/path/to/config.toml \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create secret generic default-bmc-credentials \
+  --namespace fleet-intelligence \
+  --from-file=username=/secure/path/to/username \
+  --from-file=password=/secure/path/to/password \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -59,9 +65,18 @@ printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
 This login lets Helm pull the chart. The `ghcr-pull-secret` instead lets
 Kubernetes nodes pull the deployed images.
 
-No values file is required when using the default Secret names, backend URL,
-and published images. The collector and NICo image tags default to the chart
-version; the OpenTelemetry gateway uses its independently pinned image tag.
+Reference the credential Secret without putting its values in Helm release
+state:
+
+```yaml
+credentials:
+  secrets:
+    - name: default-bmc-credentials
+      target: default
+```
+
+The collector and NICo image tags default to the chart version; the
+OpenTelemetry gateway uses its independently pinned image tag.
 
 ```bash
 export OOB_CHART_VERSION=0.1.0
@@ -92,14 +107,26 @@ The OOB TOML declares shared NICo labels once and defines one or more machines:
 compute_zone = "az51"
 node_group = "dev3-dh1"
 
+[credentials]
+username_file = "/run/secrets/bmc/default/username"
+password_file = "/run/secrets/bmc/default/password"
+
 [[machines]]
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
-username = "root"
-password = "secret"
 labels = { site = "dev", environment = "development" }
+
+[[machines]]
+ip = "10.0.0.11"
+username_file = "/run/secrets/bmc/node-02/username"
+password_file = "/run/secrets/bmc/node-02/password"
 ```
+
+Machines inherit the top-level credential files unless both file paths are
+overridden. Add another `credentials.secrets` entry with a distinct `target`
+for each override; the chart projects each Secret's `username` and `password`
+keys under `/run/secrets/bmc/<target>`.
 
 The MAC is optional. If omitted, the collector and generated NICo config use a
 locally administered MAC formed as `02:00:<last four IP bytes>`.

@@ -17,7 +17,7 @@ models and backend transport.
 ## Data flow
 
 ```text
-collector Secret
+target config + projected credential files
     ├─► OOB collector ──► inventory and attestation APIs
     │       └─ shared dispatcher ──► BMC Redfish endpoints
     │
@@ -75,11 +75,11 @@ endpoint or workflow from monopolizing collection.
 
 ## Deployment boundaries
 
-The same Secret supplies BMC targets to the collector and NICo config renderer,
-avoiding duplicated credentials. Generated NICo configuration is held in a
-memory-backed pod volume. The collector and NICo use `Recreate` deployments to
-avoid duplicate collection; the independently scalable gateway uses
-`RollingUpdate`.
+The collector and NICo config renderer share the password-free target
+configuration and projected credential files, avoiding duplicated credentials.
+Generated NICo configuration is held in a memory-backed pod volume. The
+collector and NICo use `Recreate` deployments to avoid duplicate collection;
+the independently scalable gateway uses `RollingUpdate`.
 
 Workloads run as non-root, without service account tokens or Linux
 capabilities, and with read-only root filesystems. The default NetworkPolicy

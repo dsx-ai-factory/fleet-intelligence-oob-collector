@@ -3,13 +3,16 @@
 compute_zone = "az51"
 node_group = "dev3-dh1"
 
+# Default BMC credentials inherited by machines without an override.
+[credentials]
+username_file = "/run/secrets/bmc/default/username"
+password_file = "/run/secrets/bmc/default/password"
+
 [[machines]]
 ip = "10.0.0.10"
 port = 443
 # Optional. When omitted, derives 02:00:<last four IP bytes>.
 mac = "aa:bb:cc:dd:ee:ff"
-username = "bmc-username"
-password = "bmc-password"
 # Optional NICo telemetry labels specific to this machine. They override
 # top-level labels with the same name.
 labels = { site = "dev", environment = "development" }
