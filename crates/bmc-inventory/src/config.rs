@@ -68,6 +68,7 @@ struct Config {
     machines: Vec<MachineConfig>,
 }
 
+/// Paths containing a complete BMC username and password pair.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileCredentialConfig {
@@ -208,6 +209,7 @@ impl MachineConfig {
         })
     }
 
+    /// Resolve a complete machine override or inherit the default credential pair.
     fn resolve_credentials(
         &self,
         context: &str,
@@ -244,6 +246,7 @@ impl MachineConfig {
     }
 }
 
+/// BMC credentials resolved from inline values or mounted files.
 #[derive(Clone)]
 struct ResolvedCredentials {
     username: String,
@@ -251,6 +254,7 @@ struct ResolvedCredentials {
 }
 
 impl ResolvedCredentials {
+    /// Validate and materialize a complete inline credential pair.
     fn from_inline(
         username: Option<&str>,
         password: Option<&str>,
@@ -263,6 +267,7 @@ impl ResolvedCredentials {
 }
 
 impl FileCredentialConfig {
+    /// Read and validate a complete credential pair from its configured files.
     fn resolve(
         &self,
         context: &str,
@@ -282,6 +287,7 @@ impl FileCredentialConfig {
     }
 }
 
+/// Read one credential file, resolving relative paths from the config directory.
 fn read_credential_file(
     path: &Path,
     config_dir: &Path,
@@ -302,6 +308,7 @@ fn read_credential_file(
     Ok(strip_one_line_ending(value))
 }
 
+/// Remove one conventional trailing line ending while preserving credential data.
 fn strip_one_line_ending(mut value: String) -> String {
     if value.ends_with("\r\n") {
         value.truncate(value.len() - 2);
@@ -311,6 +318,7 @@ fn strip_one_line_ending(mut value: String) -> String {
     value
 }
 
+/// Validate resolved values without exposing either credential in errors.
 fn validate_credentials(
     username: &str,
     password: &str,
