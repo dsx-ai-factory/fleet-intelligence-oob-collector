@@ -37,7 +37,11 @@
             "required": ["name", "target"],
             "properties": {
               "name": { "type": "string", "minLength": 1 },
-              "target": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+              "target": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$",
+                "not": { "enum": [".", ".."] }
+              }
             }
           }
         }

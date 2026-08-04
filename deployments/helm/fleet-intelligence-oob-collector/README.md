@@ -65,8 +65,8 @@ printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
 This login lets Helm pull the chart. The `ghcr-pull-secret` instead lets
 Kubernetes nodes pull the deployed images.
 
-Reference the credential Secret without putting its values in Helm release
-state:
+Save the credential Secret mapping as `/path/to/credentials-values.yaml`. The
+file contains only the Secret name and target directory, not credential values:
 
 ```yaml
 credentials:
@@ -84,6 +84,7 @@ export OOB_CHART_VERSION=0.1.0
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
   --version "$OOB_CHART_VERSION" \
+  --values /path/to/credentials-values.yaml \
   --namespace fleet-intelligence \
   --create-namespace \
   --wait \

@@ -43,8 +43,8 @@ kubectl create secret generic default-bmc-credentials \
 ```
 
 The chart references existing Secrets so credential values do not enter Helm
-release state. Configure the mount using only the Secret name and target
-directory:
+release state. Save the mount mapping as `/path/to/credentials-values.yaml`; it
+contains only the Secret name and target directory:
 
 ```yaml
 credentials:
@@ -94,6 +94,7 @@ export OOB_CHART_VERSION=0.1.0
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
   --version "$OOB_CHART_VERSION" \
+  --values /path/to/credentials-values.yaml \
   --namespace fleet-intelligence \
   --create-namespace \
   --wait \
