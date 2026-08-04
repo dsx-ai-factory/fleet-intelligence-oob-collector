@@ -14,23 +14,20 @@ OpenTelemetry gateway.
 - A trusted edge that injects customer identity before requests reach the Fleet
   Intelligence agent API
 
-## Create Secrets
+## Create ConfigMap and Secrets
 
-Store the password-free BMC configuration, BMC credentials, and agent token in
-separate Secrets:
+Store the password-free BMC configuration in a ConfigMap. Store BMC credentials
+and the agent token in separate Secrets:
 
 ```bash
-: "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
-
 kubectl create namespace fleet-intelligence \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
   --namespace fleet-intelligence \
-  --from-literal=agent-token="$FLEETINT_AGENT_TOKEN" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=agent-token=/secure/path/to/agent-token
 
-kubectl create secret generic fleet-intelligence-config \
+kubectl create configmap fleet-intelligence-config \
   --namespace fleet-intelligence \
   --from-file=config.toml=/path/to/config.toml \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -38,8 +35,7 @@ kubectl create secret generic fleet-intelligence-config \
 kubectl create secret generic default-bmc-credentials \
   --namespace fleet-intelligence \
   --from-file=username=/secure/path/to/username \
-  --from-file=password=/secure/path/to/password \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=password=/secure/path/to/password
 ```
 
 The chart references existing Secrets so credential values do not enter Helm
@@ -68,8 +64,7 @@ kubectl create secret docker-registry ghcr-pull-secret \
   --namespace fleet-intelligence \
   --docker-server=ghcr.io \
   --docker-username="$GITHUB_USER" \
-  --docker-password="$GITHUB_TOKEN" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --docker-password="$GITHUB_TOKEN"
 ```
 
 ## Install
@@ -127,7 +122,7 @@ kubectl logs \
 
 The collector reloads the mounted TOML at the start of each collection cycle.
 When `nicoHardwareHealth.enabled=true`, restart the NICo Deployment after
-updating the Secret so its init container regenerates NICo's configuration.
+updating the ConfigMap so its init container regenerates NICo's configuration.
 Skip this command when NICo is disabled:
 
 ```bash

@@ -41,7 +41,7 @@ spec:
           args:
             - run
             - --config
-            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
+            - /etc/fleet-intelligence/{{ .Values.config.configKey }}
             - --interval-seconds
             - {{ .Values.bmcCollector.intervalSeconds | quote }}
             {{- if .Values.bmcCollector.insecureTls }}
@@ -84,11 +84,11 @@ spec:
             {{- end }}
       volumes:
         - name: hardware-config
-          secret:
-            secretName: {{ required "config.secretName is required" .Values.config.secretName | quote }}
+          configMap:
+            name: {{ required "config.configMapName is required" .Values.config.configMapName | quote }}
             items:
-              - key: {{ .Values.config.secretKey | quote }}
-                path: {{ .Values.config.secretKey | quote }}
+              - key: {{ .Values.config.configKey | quote }}
+                path: {{ .Values.config.configKey | quote }}
                 mode: 0440
         {{- if .Values.credentials.secrets }}
         - name: bmc-credentials

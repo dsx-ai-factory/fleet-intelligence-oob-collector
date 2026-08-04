@@ -7,7 +7,7 @@ bmcCollector:
     allProxy: ""
     noProxy: localhost,127.0.0.1,.svc,.cluster.local
 config:
-  secretName: fleet-intelligence-config-test
+  configMapName: fleet-intelligence-config-test
 credentials:
   secrets:
     - name: default-bmc-credentials-test

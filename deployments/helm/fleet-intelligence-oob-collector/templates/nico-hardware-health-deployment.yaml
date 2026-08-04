@@ -45,7 +45,7 @@ spec:
           args:
             - render-nico-config
             - --config
-            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
+            - /etc/fleet-intelligence/{{ .Values.config.configKey }}
             - --output
             - /etc/nico-health/config.toml
             - --otlp-endpoint
@@ -67,7 +67,7 @@ spec:
               mountPath: /run/secrets/bmc
               readOnly: true
             {{- end }}
-            - name: generated-config
+            - name: nico-hardware-health-config
               mountPath: /etc/nico-health
       containers:
         - name: nico-hardware-health
@@ -92,11 +92,9 @@ spec:
             periodSeconds: 300
             failureThreshold: 3
           volumeMounts:
-            - name: generated-config
+            - name: nico-hardware-health-config
               mountPath: /etc/nico-health
               readOnly: true
-            - name: tmp
-              mountPath: /tmp
             {{- if .Values.nicoHardwareHealth.tlsSecretName }}
             - name: tls
               mountPath: /var/run/secrets/spiffe.io
@@ -104,13 +102,13 @@ spec:
             {{- end }}
       volumes:
         - name: collector-config
-          secret:
-            secretName: {{ required "config.secretName is required" .Values.config.secretName | quote }}
+          configMap:
+            name: {{ required "config.configMapName is required" .Values.config.configMapName | quote }}
             items:
-              - key: {{ .Values.config.secretKey | quote }}
-                path: {{ .Values.config.secretKey | quote }}
+              - key: {{ .Values.config.configKey | quote }}
+                path: {{ .Values.config.configKey | quote }}
                 mode: 0440
-        - name: generated-config
+        - name: nico-hardware-health-config
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
@@ -129,8 +127,6 @@ spec:
                       path: {{ printf "%s/password" .target | quote }}
               {{- end }}
         {{- end }}
-        - name: tmp
-          emptyDir: {}
         {{- if .Values.nicoHardwareHealth.tlsSecretName }}
         - name: tls
           secret:

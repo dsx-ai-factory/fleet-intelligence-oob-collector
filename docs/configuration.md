@@ -62,7 +62,7 @@ be mixed.
 
 The recommended configuration contains only credential paths and can be kept
 separate from the Kubernetes Secrets that hold the values. See
-[installation](installation.md#create-secrets).
+[installation](installation.md#create-configmap-and-secrets).
 
 ## Helm values
 
@@ -70,8 +70,8 @@ The commonly configured chart values are:
 
 | Value | Default | Description |
 | --- | --- | --- |
-| `config.secretName` | `fleet-intelligence-config` | Existing Secret containing the TOML file. |
-| `config.secretKey` | `config.toml` | Key containing the TOML file. |
+| `config.configMapName` | `fleet-intelligence-config` | Existing ConfigMap containing the password-free TOML file. |
+| `config.configKey` | `config.toml` | Key containing the TOML file. |
 | `credentials.secrets` | `[]` | Existing BMC credential Secrets projected under `/run/secrets/bmc/<target>`. |
 | `bmcCollector.backendUrl` | `https://data.fleet-intelligence.nvidia.com` | API base URL without `/v1/agent`. |
 | `bmcCollector.agentTokenSecretName` | `fleet-intelligence-oob-collector-agent-token` | Existing Secret containing `agent-token`. |
