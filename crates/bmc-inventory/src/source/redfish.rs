@@ -519,6 +519,9 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
                 name: raw.base.name.clone(),
                 version: raw.version.clone().flatten(),
                 release_date: raw.release_date.flatten().map(|date| date.to_string()),
+                status_state: status_state(raw.status.as_ref()),
+                health: status_health(raw.status.as_ref()),
+                health_rollup: status_health_rollup(raw.status.as_ref()),
             }
         })
         .collect())
@@ -928,6 +931,12 @@ mod tests {
             report.firmware[0].release_date.as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
+        assert_eq!(
+            report.firmware[0].status_state.as_deref(),
+            Some("StandbyOffline")
+        );
+        assert_eq!(report.firmware[0].health.as_deref(), Some("Critical"));
+        assert_eq!(report.firmware[0].health_rollup.as_deref(), Some("Warning"));
     }
 
     #[tokio::test]
@@ -1372,7 +1381,12 @@ mod tests {
         "Id": "BMC",
         "Name": "BMC",
         "Version": "3.19.00",
-        "ReleaseDate": "2026-01-01T00:00:00Z"
+        "ReleaseDate": "2026-01-01T00:00:00Z",
+        "Status": {
+            "State": "StandbyOffline",
+            "Health": "Critical",
+            "HealthRollup": "Warning"
+        }
     }"##;
 
     const MALFORMED_FIRMWARE: &str = r##"{

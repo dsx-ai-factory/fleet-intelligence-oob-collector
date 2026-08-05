@@ -135,6 +135,9 @@ struct FirmwareDetailRow {
     name: String,
     version: String,
     release_date: String,
+    status: String,
+    health: String,
+    health_rollup: String,
 }
 
 impl TableSink {
@@ -510,18 +513,24 @@ impl From<&FirmwareInventory> for FirmwareDetailRow {
             name: firmware.name.clone(),
             version: firmware.version.clone().unwrap_or_default(),
             release_date: firmware.release_date.clone().unwrap_or_default(),
+            status: firmware.status_state.clone().unwrap_or_default(),
+            health: firmware.health.clone().unwrap_or_default(),
+            health_rollup: firmware.health_rollup.clone().unwrap_or_default(),
         }
     }
 }
 
 impl FirmwareDetailRow {
-    fn values(&self) -> [String; 5] {
+    fn values(&self) -> [String; 8] {
         [
             self.service.clone(),
             self.id.clone(),
             self.name.clone(),
             self.version.clone(),
             self.release_date.clone(),
+            self.status.clone(),
+            self.health.clone(),
+            self.health_rollup.clone(),
         ]
     }
 }
@@ -673,7 +682,16 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         .map(|row| row.values());
     out.push_str("Firmware\n");
     out.push_str(&render_table(
-        &["Service", "ID", "Name", "Version", "Release Date"],
+        &[
+            "Service",
+            "ID",
+            "Name",
+            "Version",
+            "Release Date",
+            "Status",
+            "Health",
+            "Health Rollup",
+        ],
         firmware_rows,
     ));
 }
@@ -847,6 +865,8 @@ mod tests {
         assert!(rendered.contains("| GPU1"));
         assert!(rendered.contains("Firmware\n"));
         assert!(rendered.contains("| FirmwareInventory | BMC"));
+        assert!(rendered.contains("StandbyOffline"));
+        assert!(rendered.contains("Critical"));
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
@@ -980,6 +1000,9 @@ mod tests {
                 name: "BMC".to_string(),
                 version: Some("3.19.00".to_string()),
                 release_date: Some("2026-01-01T00:00:00Z".to_string()),
+                status_state: Some("StandbyOffline".to_string()),
+                health: Some("Critical".to_string()),
+                health_rollup: Some("Warning".to_string()),
             }],
             domain_errors: Vec::new(),
             target_error: None,
