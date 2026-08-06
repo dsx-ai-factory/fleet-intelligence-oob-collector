@@ -299,6 +299,9 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         name: firmware.name,
         version: firmware.version,
         release_date: firmware.release_date,
+        status_state: firmware.status_state,
+        health: firmware.health,
+        health_rollup: firmware.health_rollup,
     }
 }
 
@@ -614,6 +617,9 @@ mod tests {
                 name: "BMCImage1".to_string(),
                 version: Some("3.19.00".to_string()),
                 release_date: None,
+                status_state: Some("StandbyOffline".to_string()),
+                health: Some("Critical".to_string()),
+                health_rollup: Some("Warning".to_string()),
             }],
             errors: Vec::new(),
         });
@@ -637,6 +643,15 @@ mod tests {
         assert_eq!(
             inventory.firmware[0].odata_id.as_deref(),
             Some("/redfish/v1/UpdateService/FirmwareInventory/BMCImage1")
+        );
+        assert_eq!(
+            inventory.firmware[0].status_state.as_deref(),
+            Some("StandbyOffline")
+        );
+        assert_eq!(inventory.firmware[0].health.as_deref(), Some("Critical"));
+        assert_eq!(
+            inventory.firmware[0].health_rollup.as_deref(),
+            Some("Warning")
         );
     }
 
