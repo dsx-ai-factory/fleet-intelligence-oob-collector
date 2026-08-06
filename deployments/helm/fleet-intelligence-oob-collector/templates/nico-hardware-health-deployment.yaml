@@ -95,6 +95,8 @@ spec:
             - name: nico-hardware-health-config
               mountPath: /etc/nico-health
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.nicoHardwareHealth.tlsSecretName }}
             - name: tls
               mountPath: /var/run/secrets/spiffe.io
@@ -112,6 +114,8 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        - name: tmp
+          emptyDir: {}
         {{- if .Values.credentials.secrets }}
         - name: bmc-credentials
           projected:

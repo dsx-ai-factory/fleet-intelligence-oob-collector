@@ -11,6 +11,10 @@ not run during an update.
 Create a ConfigMap for the password-free collector configuration and separate
 Secrets for the backend bootstrap token and BMC credentials:
 
+The ConfigMap must contain credential file paths only. Do not put inline
+`machines[].username` or `machines[].password` values in it; ConfigMaps are not
+intended for sensitive data.
+
 ```bash
 kubectl create namespace fleet-intelligence \
   --dry-run=client -o yaml | kubectl apply -f -

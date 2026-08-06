@@ -60,8 +60,11 @@ complete inline pair, or inherit a complete top-level file pair.
 Per-machine credentials override the top-level pair as a unit; sources cannot
 be mixed.
 
-The recommended configuration contains only credential paths and can be kept
-separate from the Kubernetes Secrets that hold the values. See
+Inline credentials are supported for direct collector use, but they must not be
+used in the configuration referenced by the Helm chart. That configuration is
+stored in a ConfigMap, which is not intended for sensitive data. Helm
+deployments must use credential paths and store the credential values in
+Kubernetes Secrets. See
 [installation](installation.md#create-configmap-and-secrets).
 
 ## Helm values
