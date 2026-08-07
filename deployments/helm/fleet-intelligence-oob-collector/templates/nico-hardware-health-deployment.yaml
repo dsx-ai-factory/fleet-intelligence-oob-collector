@@ -45,7 +45,7 @@ spec:
           args:
             - render-nico-config
             - --config
-            - /etc/fleet-intelligence/{{ .Values.config.secretKey }}
+            - /etc/fleet-intelligence/{{ .Values.config.configKey }}
             - --output
             - /etc/nico-health/config.toml
             - --otlp-endpoint
@@ -62,7 +62,12 @@ spec:
             - name: collector-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
-            - name: generated-config
+            {{- if .Values.credentials.secrets }}
+            - name: bmc-credentials
+              mountPath: /run/secrets/bmc
+              readOnly: true
+            {{- end }}
+            - name: nico-hardware-health-config
               mountPath: /etc/nico-health
       containers:
         - name: nico-hardware-health
@@ -87,7 +92,7 @@ spec:
             periodSeconds: 300
             failureThreshold: 3
           volumeMounts:
-            - name: generated-config
+            - name: nico-hardware-health-config
               mountPath: /etc/nico-health
               readOnly: true
             - name: tmp
@@ -99,18 +104,33 @@ spec:
             {{- end }}
       volumes:
         - name: collector-config
-          secret:
-            secretName: {{ required "config.secretName is required" .Values.config.secretName | quote }}
+          configMap:
+            name: {{ required "config.configMapName is required" .Values.config.configMapName | quote }}
             items:
-              - key: {{ .Values.config.secretKey | quote }}
-                path: {{ .Values.config.secretKey | quote }}
+              - key: {{ .Values.config.configKey | quote }}
+                path: {{ .Values.config.configKey | quote }}
                 mode: 0440
-        - name: generated-config
+        - name: nico-hardware-health-config
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
         - name: tmp
           emptyDir: {}
+        {{- if .Values.credentials.secrets }}
+        - name: bmc-credentials
+          projected:
+            defaultMode: 0440
+            sources:
+              {{- range .Values.credentials.secrets }}
+              - secret:
+                  name: {{ required "credentials.secrets[].name is required" .name | quote }}
+                  items:
+                    - key: username
+                      path: {{ printf "%s/username" .target | quote }}
+                    - key: password
+                      path: {{ printf "%s/password" .target | quote }}
+              {{- end }}
+        {{- end }}
         {{- if .Values.nicoHardwareHealth.tlsSecretName }}
         - name: tls
           secret:
