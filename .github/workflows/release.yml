@@ -16,7 +16,7 @@ env:
   IMAGE: ghcr.io/nvidia/fleet-intelligence-oob-collector
   NICO_IMAGE: ghcr.io/nvidia/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
-  NICO_SOURCE_REF: 7748c8dd76a416833831c11b5460bee4a903e07b
+  NICO_SOURCE_REF: a76c3c56baab6385e3198494569f78441dbc6bca
   CHART_REGISTRY: oci://ghcr.io/nvidia/charts
 
 jobs:

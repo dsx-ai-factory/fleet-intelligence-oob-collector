@@ -422,6 +422,7 @@ pub fn render_nico_config(
                 targets: vec![NicoOtlpTarget {
                     endpoint: otlp_endpoint,
                     include_diagnostics: false,
+                    include_alert_details: true,
                     batch_size: 512,
                     flush_interval: "2s",
                 }],
@@ -504,6 +505,9 @@ struct NicoOtlpSink<'a> {
 struct NicoOtlpTarget<'a> {
     endpoint: &'a str,
     include_diagnostics: bool,
+    /// Ignored by NICo builds that predate the flag, which do not reject
+    /// unknown OTLP target keys.
+    include_alert_details: bool,
     batch_size: usize,
     flush_interval: &'a str,
 }
@@ -910,6 +914,10 @@ mod tests {
         assert_eq!(
             rendered["sinks"]["otlp"]["targets"][0]["endpoint"].as_str(),
             Some("http://localhost:4317")
+        );
+        assert_eq!(
+            rendered["sinks"]["otlp"]["targets"][0]["include_alert_details"].as_bool(),
+            Some(true)
         );
     }
 

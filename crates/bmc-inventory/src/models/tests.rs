@@ -111,6 +111,9 @@ fn node_inventory_serializes_as_backend_payload() {
             name: "BMC".to_string(),
             version: Some("3.19.00".to_string()),
             release_date: Some("2026-01-01T00:00:00Z".to_string()),
+            status_state: Some("StandbyOffline".to_string()),
+            health: Some("Critical".to_string()),
+            health_rollup: Some("Warning".to_string()),
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
@@ -230,7 +233,10 @@ fn node_inventory_serializes_as_backend_payload() {
                 "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
                 "name": "BMC",
                 "version": "3.19.00",
-                "releaseDate": "2026-01-01T00:00:00Z"
+                "releaseDate": "2026-01-01T00:00:00Z",
+                "statusState": "StandbyOffline",
+                "health": "Critical",
+                "healthRollup": "Warning"
             }],
             "domainErrors": [{
                 "domain": "chassis.pcieDevices",

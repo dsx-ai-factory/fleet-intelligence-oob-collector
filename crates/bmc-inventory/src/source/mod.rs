@@ -153,6 +153,9 @@ pub struct FirmwareData {
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
+    pub status_state: Option<String>,
+    pub health: Option<String>,
+    pub health_rollup: Option<String>,
 }
 
 #[derive(Clone, Debug)]
