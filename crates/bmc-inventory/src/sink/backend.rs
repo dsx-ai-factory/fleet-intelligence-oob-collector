@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bmc_error::sanitize_backend_error_message;
@@ -18,9 +19,10 @@ const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub type MachineLabels = BTreeMap<String, BTreeMap<String, String>>;
 
+#[derive(Clone)]
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
-    machine_labels: MachineLabels,
+    machine_labels: Arc<MachineLabels>,
 }
 
 impl BackendSink<HttpBackendClient> {
@@ -34,14 +36,33 @@ impl BackendSink<HttpBackendClient> {
             machine_labels,
         ))
     }
+
+    /// Update the bearer token without rebuilding the underlying HTTP client.
+    pub fn set_jwt(&mut self, jwt: impl Into<String>) {
+        self.client.set_jwt(jwt);
+    }
 }
 
 impl<C> BackendSink<C> {
     pub fn with_client(client: C, machine_labels: MachineLabels) -> Self {
         Self {
             client,
-            machine_labels,
+            machine_labels: Arc::new(machine_labels),
         }
+    }
+}
+
+impl<C> BackendSink<C>
+where
+    C: BackendClient,
+{
+    /// Write a batch and preserve the backend's result for each node.
+    pub fn write_batch(
+        &self,
+        inventories: &[NodeInventory],
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
+        self.client
+            .put_inventory(inventories, self.machine_labels.as_ref())
     }
 }
 
@@ -50,7 +71,7 @@ where
     C: BackendClient,
 {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.client.put_inventory(inventories, &self.machine_labels)
+        self.write_batch(inventories)?.into_result()
     }
 }
 
@@ -59,9 +80,10 @@ pub trait BackendClient {
         &self,
         inventories: &[NodeInventory],
         machine_labels: &MachineLabels,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>>;
 }
 
+#[derive(Clone)]
 pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
@@ -139,6 +161,10 @@ impl HttpBackendClient {
 
         Ok(response.jwt_assertion)
     }
+
+    fn set_jwt(&mut self, jwt: impl Into<String>) {
+        self.jwt = jwt.into();
+    }
 }
 
 fn backend_http_client(
@@ -175,7 +201,7 @@ impl BackendClient for HttpBackendClient {
         &self,
         inventories: &[NodeInventory],
         machine_labels: &MachineLabels,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(inventories, machine_labels))
@@ -194,18 +220,68 @@ impl BackendClient for HttpBackendClient {
         }
 
         let response: BatchUpsertResponse = response.json()?;
+        Ok(BackendBatchOutcome {
+            results: response.results,
+        })
+    }
+}
 
-        let failures: Vec<_> = response
+/// Itemized response from a successful backend batch request.
+#[derive(Debug)]
+pub struct BackendBatchOutcome {
+    results: Vec<NodeUpsertResult>,
+}
+
+impl BackendBatchOutcome {
+    /// Return the backend result for a submitted node UUID.
+    pub fn node_outcome(&self, node_uuid: &str) -> BackendNodeOutcome<'_> {
+        let Some(result) = self.results.iter().find(|result| {
+            result
+                .node_uuid
+                .as_deref()
+                .is_some_and(|result_uuid| result_uuid.eq_ignore_ascii_case(node_uuid))
+        }) else {
+            return BackendNodeOutcome::Missing;
+        };
+
+        if result.status.eq_ignore_ascii_case("OK") {
+            BackendNodeOutcome::Succeeded
+        } else {
+            BackendNodeOutcome::Rejected {
+                status: &result.status,
+                message: result.message.as_deref(),
+            }
+        }
+    }
+
+    /// Whether the backend accepted the node with the supplied UUID.
+    pub fn node_succeeded(&self, node_uuid: &str) -> bool {
+        self.node_outcome(node_uuid) == BackendNodeOutcome::Succeeded
+    }
+
+    fn into_result(self) -> Result<(), Box<dyn Error>> {
+        let failures = self
             .results
             .into_iter()
-            .filter(|result| result.status != "OK")
-            .collect();
-        if !failures.is_empty() {
-            return Err(Box::new(BackendUpsertError { failures }));
+            .filter(|result| !result.status.eq_ignore_ascii_case("OK"))
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Box::new(BackendUpsertError { failures }))
         }
-
-        Ok(())
     }
+}
+
+/// Result reported by the backend for one submitted node UUID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendNodeOutcome<'a> {
+    Succeeded,
+    Rejected {
+        status: &'a str,
+        message: Option<&'a str>,
+    },
+    Missing,
 }
 
 fn build_batch_upsert_request<'a>(
@@ -561,6 +637,64 @@ mod tests {
     }
 
     #[test]
+    fn batch_outcome_distinguishes_success_rejection_and_missing_rows() {
+        let outcome = BackendBatchOutcome {
+            results: vec![
+                NodeUpsertResult {
+                    node_uuid: Some("node-1".to_string()),
+                    status: "ok".to_string(),
+                    message: None,
+                },
+                NodeUpsertResult {
+                    node_uuid: Some("node-2".to_string()),
+                    status: "INVALID".to_string(),
+                    message: Some("rejected".to_string()),
+                },
+            ],
+        };
+
+        assert!(outcome.node_succeeded("NODE-1"));
+        assert!(!outcome.node_succeeded("node-2"));
+        assert!(!outcome.node_succeeded("missing"));
+        assert_eq!(
+            outcome.node_outcome("NODE-2"),
+            BackendNodeOutcome::Rejected {
+                status: "INVALID",
+                message: Some("rejected"),
+            }
+        );
+        assert_eq!(outcome.node_outcome("missing"), BackendNodeOutcome::Missing);
+        assert!(outcome.into_result().is_err());
+    }
+
+    #[test]
+    fn batch_outcome_accepts_case_insensitive_success_status() {
+        let outcome = BackendBatchOutcome {
+            results: vec![NodeUpsertResult {
+                node_uuid: Some("node-1".to_string()),
+                status: "ok".to_string(),
+                message: None,
+            }],
+        };
+
+        outcome.into_result().expect("lowercase success status");
+    }
+
+    #[test]
+    fn backend_sink_updates_jwt_without_rebuilding() {
+        let mut sink = BackendSink::new(
+            "https://backend.example.com/v1/agent/oob_nodes",
+            "old-jwt",
+            MachineLabels::new(),
+        )
+        .expect("sink");
+
+        sink.set_jwt("new-jwt");
+
+        assert_eq!(sink.client.jwt, "new-jwt");
+    }
+
+    #[test]
     fn backend_client_rejects_zero_timeout() {
         let Err(err) =
             HttpBackendClient::with_timeout("https://api.example.com", "jwt", Duration::ZERO)
@@ -599,14 +733,23 @@ mod tests {
             &self,
             inventories: &[NodeInventory],
             _machine_labels: &MachineLabels,
-        ) -> Result<(), Box<dyn Error>> {
+        ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
             self.put_batches.borrow_mut().push(
                 inventories
                     .iter()
                     .map(|inventory| inventory.source.address.clone())
                     .collect(),
             );
-            Ok(())
+            Ok(BackendBatchOutcome {
+                results: inventories
+                    .iter()
+                    .map(|inventory| NodeUpsertResult {
+                        node_uuid: inventory.uuid.as_ref().map(ToString::to_string),
+                        status: "OK".to_string(),
+                        message: None,
+                    })
+                    .collect(),
+            })
         }
     }
 

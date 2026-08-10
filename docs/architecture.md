@@ -37,20 +37,30 @@ per-BMC concurrency and rate limits.
 
 The configured BMC MAC correlates targets across workflows. Inventory normally
 uses `ComputerSystem.UUID` for node identity and provides deterministic
-fallbacks when it is missing. Attestation runs only after a successful
-inventory upload and only for records with a resolved node UUID.
+fallbacks when it is missing. Completed inventories flow through a bounded
+channel to a backend worker, which flushes small batches by size, time, or the
+end of the collection cycle. The current worker flushes when the batch reaches
+the configured target concurrency or after one second, and the channel holds at
+most twice that concurrency. Backend item results are evaluated per node, so
+one rejected item does not hide accepted nodes in the same batch. Attestation
+runs only for successfully exported records with a resolved node UUID. After
+concurrent nonce and evidence collection completes, attestation results are
+uploaded in mini-batches bounded by the same target concurrency. Attestation
+retains its collection barrier so nonce-driven JWT rotation and
+whole-collection authentication retry remain deterministic.
 
 ## Collection lifecycle
 
 At startup, the collector exchanges its bootstrap token for a runtime JWT. It
 then runs one collection cycle immediately and repeats every 24 hours by
-default. Each cycle collects and uploads inventory, collects attestation for
-resolved nodes when the inventory upload succeeds, uploads attestation, and
-waits for the configured interval. A backend `401 Unauthorized` during an
-inventory upload, attestation nonce request, or attestation upload causes one
-re-enrollment and retry. Re-enrollment cannot fix a `401` caused by missing
-customer context; a trusted edge must inject that context before requests reach
-the agent API.
+default. Each cycle collects inventory concurrently while a bounded backend
+worker uploads completed nodes in mini-batches. It then collects attestation for
+successfully exported nodes with resolved identities, uploads bounded
+attestation mini-batches, and waits for the configured interval. A backend `401 Unauthorized`
+during an inventory upload, attestation nonce request, or attestation upload
+causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by
+missing customer context; a trusted edge must inject that context before
+requests reach the agent API.
 
 The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
 set at the start of each cycle. This allows target changes from a projected
