@@ -104,6 +104,13 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
                         "inventory backend sync completed"
                     );
                 }
+                if outcome.unexportable > 0 {
+                    tracing::warn!(
+                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                        unexportable_count = outcome.unexportable,
+                        "inventory records without UUIDs were not exported"
+                    );
+                }
 
                 // Phase 2: Attest only nodes whose inventory export succeeded and
                 // produced a UUID known to the backend.
@@ -425,8 +432,9 @@ async fn collect_and_upload_inventory(
     let mut inventory_vec = Vec::new();
     let mut summary = InventoryCollectionSummary::default();
     let mut failed_uploads = 0;
+    let mut unexportable = 0;
     loop {
-        let mut batch =
+        let batch =
             receive_inventory_batch(&mut rx, target_concurrency, INVENTORY_EXPORT_FLUSH_INTERVAL)
                 .await;
         if batch.is_empty() {
@@ -434,10 +442,23 @@ async fn collect_and_upload_inventory(
         }
         summary.add(summarize_inventory_collection(&batch));
         let batch_size = batch.len();
+        let (exportable, batch_unexportable) = partition_exportable_inventory(batch);
+        unexportable += batch_unexportable;
+        if batch_unexportable > 0 {
+            tracing::warn!(
+                batch_size,
+                unexportable_count = batch_unexportable,
+                "inventory mini-batch contains records without UUIDs; skipping export"
+            );
+        }
+        if exportable.is_empty() {
+            continue;
+        }
+        let exportable_count = exportable.len();
         let (uploaded, upload_result) = upload_inventory_batch(
             endpoint.clone(),
             session,
-            std::mem::take(&mut batch),
+            exportable,
             machine_labels.clone(),
         )
         .await?;
@@ -447,20 +468,20 @@ async fn collect_and_upload_inventory(
                 failed_uploads += rejected;
                 if rejected > 0 {
                     tracing::warn!(
-                        batch_size,
+                        exportable_count,
                         accepted_count = accepted.len(),
                         rejected_count = rejected,
                         "inventory mini-batch export completed with rejected nodes"
                     );
                 } else {
-                    tracing::info!(batch_size, "inventory mini-batch export completed");
+                    tracing::info!(exportable_count, "inventory mini-batch export completed");
                 }
                 inventory_vec.extend(accepted);
             }
             Err(err) => {
-                failed_uploads += batch_size;
+                failed_uploads += exportable_count;
                 tracing::error!(
-                    batch_size,
+                    exportable_count,
                     error = %err,
                     "inventory mini-batch export failed"
                 );
@@ -492,12 +513,14 @@ async fn collect_and_upload_inventory(
     Ok(InventorySyncOutcome {
         inventories: Arc::new(inventory_vec),
         failed_uploads,
+        unexportable,
     })
 }
 
 struct InventorySyncOutcome {
     inventories: Arc<Vec<NodeInventory>>,
     failed_uploads: usize,
+    unexportable: usize,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -676,6 +699,16 @@ fn partition_uploaded_inventory(
     (accepted, rejected)
 }
 
+fn partition_exportable_inventory(inventories: Vec<NodeInventory>) -> (Vec<NodeInventory>, usize) {
+    let total = inventories.len();
+    let exportable = inventories
+        .into_iter()
+        .filter(|inventory| inventory.uuid.is_some())
+        .collect::<Vec<_>>();
+    let unexportable = total.saturating_sub(exportable.len());
+    (exportable, unexportable)
+}
+
 #[derive(Debug)]
 enum UploadError {
     AuthFailure(String),
@@ -734,7 +767,7 @@ fn start_dispatcher(
 #[cfg(test)]
 mod tests {
     use bmc_attestation::models::{AttestationEvidence, ComponentError, NodeAttestation};
-    use bmc_inventory::models::{DomainError, InventorySourceInfo};
+    use bmc_inventory::models::{DomainError, InventorySourceInfo, InventoryUuid};
 
     use super::*;
 
@@ -759,6 +792,21 @@ mod tests {
                 failed: 1,
             }
         );
+    }
+
+    #[test]
+    fn inventory_without_uuid_is_unexportable() {
+        let mut exportable = inventory("10.0.0.1");
+        exportable.uuid = InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187");
+        let mut collection_failure = inventory("10.0.0.2");
+        collection_failure.target_error = Some("connection refused".to_string());
+
+        let (exportable, unexportable) =
+            partition_exportable_inventory(vec![exportable, collection_failure]);
+
+        assert_eq!(exportable.len(), 1);
+        assert_eq!(exportable[0].source.address, "10.0.0.1");
+        assert_eq!(unexportable, 1);
     }
 
     #[test]
