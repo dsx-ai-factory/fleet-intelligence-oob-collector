@@ -3,6 +3,7 @@ mod backend;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bmc_attestation::collector;
 use bmc_attestation::config as attestation_config;
@@ -13,7 +14,7 @@ use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
-    BackendSink as InventoryBackendSink, InventorySink, JsonSink, TableSink,
+    BackendBatchOutcome, BackendSink as InventoryBackendSink, InventorySink, JsonSink, TableSink,
 };
 use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
@@ -27,6 +28,7 @@ pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
 pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
+const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InventoryFormat {
@@ -87,14 +89,25 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
         )
         .await
         {
-            Ok(inventories) => {
-                tracing::info!(
-                    elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                    "inventory backend sync completed"
-                );
+            Ok(outcome) => {
+                if outcome.failed_uploads > 0 {
+                    tracing::warn!(
+                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                        exported_count = outcome.inventories.len(),
+                        failed_upload_count = outcome.failed_uploads,
+                        "inventory backend sync completed with failed node exports"
+                    );
+                } else {
+                    tracing::info!(
+                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
+                        exported_count = outcome.inventories.len(),
+                        "inventory backend sync completed"
+                    );
+                }
 
-                // Phase 2: Collect and upload attestation for nodes with discovered UUIDs only when inventory succeeds
-                match build_attestation_targets(&options.inventory, &inventories) {
+                // Phase 2: Attest only nodes whose inventory export succeeded and
+                // produced a UUID known to the backend.
+                match build_attestation_targets(&options.inventory, &outcome.inventories) {
                     Err(err) => tracing::error!(
                         error = %err,
                         "failed to load targets for attestation; skipping attestation"
@@ -308,7 +321,7 @@ async fn collect_and_upload_inventory(
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
-) -> Result<Arc<Vec<NodeInventory>>, Box<dyn Error>> {
+) -> Result<InventorySyncOutcome, Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
     dispatcher.sync_endpoints(
         collector_config
@@ -321,9 +334,77 @@ async fn collect_and_upload_inventory(
         .iter()
         .map(|target| (target.mac.to_ascii_lowercase(), target.labels.clone()))
         .collect();
-    let mut inventory_vec =
-        collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
-    let summary = summarize_inventory_collection(&inventory_vec);
+    let timeout = Duration::from_secs(options.timeout_seconds);
+    let target_concurrency = options.target_concurrency.max(1);
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
+    let mapper = RedfishMapper::new();
+    let channel_capacity = target_concurrency.saturating_mul(2).max(1);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
+    let producer = tokio::spawn(async move {
+        let mut collections = stream::iter(collector_config.targets)
+            .map(|target| async {
+                let record = source.collect(target).await;
+                mapper.map(record).await
+            })
+            .buffer_unordered(target_concurrency);
+        while let Some(inventory) = collections.next().await {
+            if tx.send(inventory).await.is_err() {
+                return Err("inventory export worker stopped before collection completed");
+            }
+        }
+        Ok::<(), &'static str>(())
+    });
+
+    let mut inventory_vec = Vec::new();
+    let mut summary = InventoryCollectionSummary::default();
+    let mut failed_uploads = 0;
+    loop {
+        let mut batch =
+            receive_inventory_batch(&mut rx, target_concurrency, INVENTORY_EXPORT_FLUSH_INTERVAL)
+                .await;
+        if batch.is_empty() {
+            break;
+        }
+        summary.add(summarize_inventory_collection(&batch));
+        let batch_size = batch.len();
+        let (uploaded, upload_result) = upload_inventory_batch(
+            endpoint.clone(),
+            session,
+            std::mem::take(&mut batch),
+            machine_labels.clone(),
+        )
+        .await?;
+        match upload_result {
+            Ok(outcome) => {
+                let (accepted, rejected) = partition_uploaded_inventory(uploaded, &outcome);
+                failed_uploads += rejected;
+                if rejected > 0 {
+                    tracing::warn!(
+                        batch_size,
+                        accepted_count = accepted.len(),
+                        rejected_count = rejected,
+                        "inventory mini-batch export completed with rejected nodes"
+                    );
+                } else {
+                    tracing::info!(batch_size, "inventory mini-batch export completed");
+                }
+                inventory_vec.extend(accepted);
+            }
+            Err(err) => {
+                failed_uploads += batch_size;
+                tracing::error!(
+                    batch_size,
+                    error = %err,
+                    "inventory mini-batch export failed"
+                );
+            }
+        }
+    }
+    producer
+        .await
+        .map_err(|err| format!("inventory collection task failed: {err}"))?
+        .map_err(|err| -> Box<dyn Error> { err.into() })?;
+
     if summary.partial > 0 || summary.failed > 0 {
         tracing::warn!(
             target_count = summary.total,
@@ -341,49 +422,32 @@ async fn collect_and_upload_inventory(
             "inventory collection completed"
         );
     }
-    stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
-    let inventories = Arc::new(inventory_vec);
-    match upload_inventory(
-        endpoint.clone(),
-        session.jwt().to_string(),
-        Arc::clone(&inventories),
-        machine_labels.clone(),
-    )
-    .await
-    {
-        Ok(()) => Ok(inventories),
-        Err(UploadError::AuthFailure(message)) => {
-            tracing::warn!(
-                error = %message,
-                "backend JWT rejected; enrolling again before retry"
-            );
-            // Re-enroll refreshes both the JWT and enrolled_at; re-stamp the nodes
-            // so the retry carries the updated enrollment timestamp.
-            session.reenroll().await?;
-            let mut inventory_vec =
-                Arc::try_unwrap(inventories).expect("upload task released its inventory reference");
-            stamp_enrolled_at(&mut inventory_vec, session.enrolled_at());
-            let inventories = Arc::new(inventory_vec);
-            upload_inventory(
-                endpoint,
-                session.jwt().to_string(),
-                Arc::clone(&inventories),
-                machine_labels,
-            )
-            .await
-            .map_err(|err| -> Box<dyn Error> { err.to_string().into() })?;
-            Ok(inventories)
-        }
-        Err(err) => Err(err.to_string().into()),
-    }
+    Ok(InventorySyncOutcome {
+        inventories: Arc::new(inventory_vec),
+        failed_uploads,
+    })
 }
 
-#[derive(Debug, Eq, PartialEq)]
+struct InventorySyncOutcome {
+    inventories: Arc<Vec<NodeInventory>>,
+    failed_uploads: usize,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
 struct InventoryCollectionSummary {
     total: usize,
     successful: usize,
     partial: usize,
     failed: usize,
+}
+
+impl InventoryCollectionSummary {
+    fn add(&mut self, other: Self) {
+        self.total += other.total;
+        self.successful += other.successful;
+        self.partial += other.partial;
+        self.failed += other.failed;
+    }
 }
 
 fn summarize_inventory_collection(inventories: &[NodeInventory]) -> InventoryCollectionSummary {
@@ -446,11 +510,11 @@ async fn upload_inventory(
     jwt: String,
     inventories: Arc<Vec<NodeInventory>>,
     machine_labels: bmc_inventory::sink::MachineLabels,
-) -> Result<(), UploadError> {
+) -> Result<BackendBatchOutcome, UploadError> {
     tokio::task::spawn_blocking(move || {
         InventoryBackendSink::new(endpoint, jwt, machine_labels)
             .map_err(|err| UploadError::Other(err.to_string()))?
-            .write(inventories.as_slice())
+            .write_batch(inventories.as_slice())
             .map_err(|err| {
                 if is_auth_failure(err.as_ref()) {
                     UploadError::AuthFailure(err.to_string())
@@ -461,6 +525,88 @@ async fn upload_inventory(
     })
     .await
     .map_err(|err| UploadError::Other(err.to_string()))?
+}
+
+async fn receive_inventory_batch(
+    receiver: &mut tokio::sync::mpsc::Receiver<NodeInventory>,
+    max_size: usize,
+    max_wait: Duration,
+) -> Vec<NodeInventory> {
+    let Some(first) = receiver.recv().await else {
+        return Vec::new();
+    };
+    let mut batch = Vec::with_capacity(max_size.max(1));
+    batch.push(first);
+    let deadline = tokio::time::Instant::now() + max_wait;
+
+    while batch.len() < max_size.max(1) {
+        tokio::select! {
+            item = receiver.recv() => match item {
+                Some(inventory) => batch.push(inventory),
+                None => break,
+            },
+            () = tokio::time::sleep_until(deadline) => break,
+        }
+    }
+    batch
+}
+
+async fn upload_inventory_batch(
+    endpoint: String,
+    session: &mut BackendSession,
+    mut inventories: Vec<NodeInventory>,
+    machine_labels: bmc_inventory::sink::MachineLabels,
+) -> Result<(Vec<NodeInventory>, Result<BackendBatchOutcome, UploadError>), Box<dyn Error>> {
+    stamp_enrolled_at(&mut inventories, session.enrolled_at());
+    let inventories = Arc::new(inventories);
+    let mut result = upload_inventory(
+        endpoint.clone(),
+        session.jwt().to_string(),
+        Arc::clone(&inventories),
+        machine_labels.clone(),
+    )
+    .await;
+
+    let mut inventories =
+        Arc::try_unwrap(inventories).expect("upload task released its inventory reference");
+    if let Err(UploadError::AuthFailure(message)) = &result {
+        tracing::warn!(
+            error = %message,
+            "backend JWT rejected; enrolling again before retry"
+        );
+        session.reenroll().await?;
+        stamp_enrolled_at(&mut inventories, session.enrolled_at());
+        let retry_inventories = Arc::new(inventories);
+        result = upload_inventory(
+            endpoint,
+            session.jwt().to_string(),
+            Arc::clone(&retry_inventories),
+            machine_labels,
+        )
+        .await;
+        inventories = Arc::try_unwrap(retry_inventories)
+            .expect("upload task released its inventory reference");
+    }
+
+    Ok((inventories, result))
+}
+
+fn partition_uploaded_inventory(
+    inventories: Vec<NodeInventory>,
+    outcome: &BackendBatchOutcome,
+) -> (Vec<NodeInventory>, usize) {
+    let total = inventories.len();
+    let accepted = inventories
+        .into_iter()
+        .filter(|inventory| {
+            inventory
+                .uuid
+                .as_ref()
+                .is_some_and(|uuid| outcome.node_succeeded(&uuid.to_string()))
+        })
+        .collect::<Vec<_>>();
+    let rejected = total.saturating_sub(accepted.len());
+    (accepted, rejected)
 }
 
 #[derive(Debug)]
@@ -608,6 +754,52 @@ mod tests {
         };
 
         assert!(build_attestation_targets(&options, &[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn inventory_batch_flushes_at_maximum_size() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(3);
+        tx.send(inventory("10.0.0.1")).await.expect("send");
+        tx.send(inventory("10.0.0.2")).await.expect("send");
+        tx.send(inventory("10.0.0.3")).await.expect("send");
+
+        let batch = receive_inventory_batch(&mut rx, 2, Duration::from_secs(60)).await;
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].source.address, "10.0.0.1");
+        assert_eq!(batch[1].source.address, "10.0.0.2");
+    }
+
+    #[tokio::test]
+    async fn inventory_batch_flushes_after_maximum_wait() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.send(inventory("10.0.0.1")).await.expect("send");
+
+        let batch = tokio::time::timeout(
+            Duration::from_millis(250),
+            receive_inventory_batch(&mut rx, 32, Duration::from_millis(10)),
+        )
+        .await
+        .expect("batch flush timeout");
+
+        assert_eq!(batch.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn inventory_batch_flushes_when_collection_channel_closes() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        tx.send(inventory("10.0.0.1")).await.expect("send");
+        tx.send(inventory("10.0.0.2")).await.expect("send");
+        drop(tx);
+
+        let batch = tokio::time::timeout(
+            Duration::from_millis(250),
+            receive_inventory_batch(&mut rx, 32, Duration::from_secs(60)),
+        )
+        .await
+        .expect("channel-close flush timeout");
+
+        assert_eq!(batch.len(), 2);
     }
 
     fn inventory(address: &str) -> NodeInventory {

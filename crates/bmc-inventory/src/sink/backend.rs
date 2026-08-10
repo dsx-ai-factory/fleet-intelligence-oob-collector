@@ -41,12 +41,25 @@ impl<C> BackendSink<C> {
     }
 }
 
+impl<C> BackendSink<C>
+where
+    C: BackendClient,
+{
+    /// Write a batch and preserve the backend's result for each node.
+    pub fn write_batch(
+        &self,
+        inventories: &[NodeInventory],
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
+        self.client.put_inventory(inventories, &self.machine_labels)
+    }
+}
+
 impl<C> InventorySink for BackendSink<C>
 where
     C: BackendClient,
 {
     fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.client.put_inventory(inventories, &self.machine_labels)
+        self.write_batch(inventories)?.into_result()
     }
 }
 
@@ -55,7 +68,7 @@ pub trait BackendClient {
         &self,
         inventories: &[NodeInventory],
         machine_labels: &MachineLabels,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>>;
 }
 
 pub struct HttpBackendClient {
@@ -171,7 +184,7 @@ impl BackendClient for HttpBackendClient {
         &self,
         inventories: &[NodeInventory],
         machine_labels: &MachineLabels,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(inventories, machine_labels))
@@ -190,17 +203,37 @@ impl BackendClient for HttpBackendClient {
         }
 
         let response: BatchUpsertResponse = response.json()?;
+        Ok(BackendBatchOutcome {
+            results: response.results,
+        })
+    }
+}
 
-        let failures: Vec<_> = response
+/// Itemized response from a successful backend batch request.
+#[derive(Debug)]
+pub struct BackendBatchOutcome {
+    results: Vec<NodeUpsertResult>,
+}
+
+impl BackendBatchOutcome {
+    /// Whether the backend accepted the node with the supplied UUID.
+    pub fn node_succeeded(&self, node_uuid: &str) -> bool {
+        self.results
+            .iter()
+            .any(|result| result.status == "OK" && result.node_uuid.as_deref() == Some(node_uuid))
+    }
+
+    fn into_result(self) -> Result<(), Box<dyn Error>> {
+        let failures = self
             .results
             .into_iter()
             .filter(|result| result.status != "OK")
-            .collect();
-        if !failures.is_empty() {
-            return Err(Box::new(BackendUpsertError { failures }));
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Box::new(BackendUpsertError { failures }))
         }
-
-        Ok(())
     }
 }
 
@@ -463,6 +496,28 @@ mod tests {
     }
 
     #[test]
+    fn batch_outcome_reports_success_by_node_uuid() {
+        let outcome = BackendBatchOutcome {
+            results: vec![
+                NodeUpsertResult {
+                    node_uuid: Some("node-1".to_string()),
+                    status: "OK".to_string(),
+                    message: None,
+                },
+                NodeUpsertResult {
+                    node_uuid: Some("node-2".to_string()),
+                    status: "INVALID".to_string(),
+                    message: Some("rejected".to_string()),
+                },
+            ],
+        };
+
+        assert!(outcome.node_succeeded("node-1"));
+        assert!(!outcome.node_succeeded("node-2"));
+        assert!(!outcome.node_succeeded("missing"));
+    }
+
+    #[test]
     fn backend_client_rejects_zero_timeout() {
         let Err(err) =
             HttpBackendClient::with_timeout("https://api.example.com", "jwt", Duration::ZERO)
@@ -501,14 +556,23 @@ mod tests {
             &self,
             inventories: &[NodeInventory],
             _machine_labels: &MachineLabels,
-        ) -> Result<(), Box<dyn Error>> {
+        ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
             self.put_batches.borrow_mut().push(
                 inventories
                     .iter()
                     .map(|inventory| inventory.source.address.clone())
                     .collect(),
             );
-            Ok(())
+            Ok(BackendBatchOutcome {
+                results: inventories
+                    .iter()
+                    .map(|inventory| NodeUpsertResult {
+                        node_uuid: inventory.uuid.as_ref().map(ToString::to_string),
+                        status: "OK".to_string(),
+                        message: None,
+                    })
+                    .collect(),
+            })
         }
     }
 
