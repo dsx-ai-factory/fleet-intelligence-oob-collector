@@ -253,19 +253,86 @@ async fn collect_and_upload_attestation(
         session.set_jwt(token);
     }
 
-    let timeout = attestation_settings.redfish_timeout;
-    match upload_attestation(endpoints, session.jwt(), &outcome.batch, timeout).await {
-        Ok(()) => Ok(()),
-        Err(err) if is_auth_failure(err.as_ref()) => {
+    upload_attestation_batches(
+        endpoints,
+        session,
+        &outcome.batch,
+        attestation_settings.redfish_timeout,
+        attestation_settings.concurrency,
+    )
+    .await
+}
+
+async fn upload_attestation_batches(
+    endpoints: &BackendEndpoints,
+    session: &mut BackendSession,
+    batch: &BatchAttestation,
+    timeout: Duration,
+    batch_size: usize,
+) -> Result<(), Box<dyn Error>> {
+    let batches = split_attestation_batch(batch, batch_size);
+    let batch_count = batches.len();
+    let mut failures = Vec::new();
+
+    for (index, batch) in batches.into_iter().enumerate() {
+        let node_count = batch.results_by_node_uuid.len();
+        let mut result = upload_attestation(endpoints, session.jwt(), &batch, timeout).await;
+        if let Err(err) = &result
+            && is_auth_failure(err.as_ref())
+        {
             tracing::warn!(
                 error = %err,
+                batch_index = index + 1,
+                batch_count,
                 "backend JWT rejected on attestation upload; enrolling again before retry"
             );
             session.reenroll().await?;
-            upload_attestation(endpoints, session.jwt(), &outcome.batch, timeout).await
+            result = upload_attestation(endpoints, session.jwt(), &batch, timeout).await;
         }
-        Err(err) => Err(err),
+
+        match result {
+            Ok(()) => tracing::info!(
+                batch_index = index + 1,
+                batch_count,
+                node_count,
+                "attestation mini-batch export completed"
+            ),
+            Err(err) => {
+                tracing::error!(
+                    batch_index = index + 1,
+                    batch_count,
+                    node_count,
+                    error = %err,
+                    "attestation mini-batch export failed"
+                );
+                failures.push(err.to_string());
+            }
+        }
     }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} attestation mini-batch export(s) failed; first error: {}",
+            failures.len(),
+            failures[0]
+        )
+        .into())
+    }
+}
+
+fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {
+    let batch_size = batch_size.max(1);
+    let results = batch
+        .results_by_node_uuid
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    results
+        .chunks(batch_size)
+        .map(|chunk| BatchAttestation::new(batch.collected_at.clone(), chunk.to_vec()))
+        .collect()
 }
 
 async fn collect_attestation(
@@ -737,6 +804,35 @@ mod tests {
                 component_errors: 1,
             }
         );
+    }
+
+    #[test]
+    fn attestation_batches_follow_target_concurrency() {
+        let results = (0..5)
+            .map(|index| {
+                NodeAttestation::failed(
+                    format!("node-{index}"),
+                    format!("target-{index}"),
+                    format!("10.0.0.{index}"),
+                    "unsupported",
+                )
+            })
+            .collect();
+        let batch = BatchAttestation::new("2026-01-01T00:00:00Z".to_string(), results);
+
+        let batches = split_attestation_batch(&batch, 2);
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.results_by_node_uuid.len())
+                .collect::<Vec<_>>(),
+            [2, 2, 1]
+        );
+        assert!(batches.iter().all(|batch| {
+            batch.schema_version == bmc_attestation::models::ATTESTATION_SCHEMA_VERSION
+                && batch.collected_at == "2026-01-01T00:00:00Z"
+        }));
     }
 
     #[test]
