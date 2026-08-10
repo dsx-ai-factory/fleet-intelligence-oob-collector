@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bmc_error::sanitize_backend_error_message;
 use serde::Serialize;
 
 pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
@@ -123,8 +124,7 @@ impl NodeAttestation {
         BackendNodeAttestation {
             nonce_refresh_timestamp: self.nonce_refresh_timestamp.clone(),
             success: self.success,
-            // Strip absolute URLs before upload: AWS WAF GenericRFI_BODY blocks
-            // http(s):// with an IPv4 host in the request body.
+            // Redact absolute URLs before upload to avoid request body filters.
             error_message: self
                 .error_message
                 .as_deref()
@@ -144,47 +144,6 @@ impl NodeAttestation {
                 .collect(),
         }
     }
-}
-
-/// Drop absolute URLs from error text destined for the attestation backend.
-///
-/// Reqwest status errors look like:
-/// `HTTP status client error (404 Not Found) for url (https://10.x.x.x/...)`.
-/// Keep the status description; omit the URL so WAF RFI rules do not fire.
-fn sanitize_backend_error_message(message: &str) -> String {
-    let without_reqwest_url = match message.find(" for url (") {
-        Some(idx) => message[..idx].trim_end(),
-        None => message,
-    };
-    strip_absolute_urls(without_reqwest_url)
-}
-
-fn strip_absolute_urls(message: &str) -> String {
-    const SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://"];
-    let lower = message.to_ascii_lowercase();
-    let mut out = String::with_capacity(message.len());
-    let mut i = 0;
-    while i < message.len() {
-        if let Some(scheme) = SCHEMES
-            .iter()
-            .find(|scheme| lower[i..].starts_with(*scheme))
-        {
-            i += scheme.len();
-            while i < message.len() {
-                let ch = message[i..].chars().next().expect("char at i");
-                if ch.is_whitespace() {
-                    break;
-                }
-                i += ch.len_utf8();
-            }
-            continue;
-        }
-        let ch = message[i..].chars().next().expect("char at i");
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    // Collapse runs of whitespace left by removals.
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -272,7 +231,7 @@ mod tests {
         let value = serde_json::to_value(batch.backend_request()).expect("json");
         assert_eq!(
             value["attestations"]["node-1"]["errorMessage"],
-            "HTTP status client error (404 Not Found)"
+            "HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
         );
         // Local record keeps the full message for debugging.
         assert!(
@@ -285,12 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_backend_error_message_strips_embedded_urls() {
+    fn sanitize_backend_error_message_preserves_embedded_url_paths() {
         assert_eq!(
             sanitize_backend_error_message(
                 "fetch failed contacting https://10.0.0.1/redfish/v1/ComponentIntegrity"
             ),
-            "fetch failed contacting"
+            "fetch failed contacting /redfish/v1/ComponentIntegrity"
         );
         assert_eq!(
             sanitize_backend_error_message("no GPU IRoT ComponentIntegrity resources found"),
@@ -299,15 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_backend_error_message_strips_prefix_url_and_reqwest_suffix() {
+    fn sanitize_backend_error_message_preserves_paths_for_multiple_urls() {
         let sanitized = sanitize_backend_error_message(
             "proxy https://10.0.0.1/redfish/v1 failed: HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
         );
         assert_eq!(
             sanitized,
-            "proxy failed: HTTP status client error (404 Not Found)"
+            "proxy /redfish/v1 failed: HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
         );
         assert!(!sanitized.contains("http://") && !sanitized.contains("https://"));
-        assert!(!sanitized.contains(" for url ("));
     }
 }

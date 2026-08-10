@@ -8,6 +8,7 @@ license.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bmc-dispatch.workspace = true
+bmc-error.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true

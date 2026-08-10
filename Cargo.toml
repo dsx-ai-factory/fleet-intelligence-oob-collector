@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/bmc-attestation",
     "crates/bmc-dispatch",
+    "crates/bmc-error",
     "crates/bmc-inventory",
 ]
 resolver = "3"
@@ -18,6 +19,7 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 bmc-attestation = { path = "crates/bmc-attestation" }
 bmc-dispatch = { path = "crates/bmc-dispatch" }
+bmc-error = { path = "crates/bmc-error" }
 bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 hickory-resolver = "0.26"
