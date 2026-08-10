@@ -3,6 +3,10 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+use bmc_error::sanitize_backend_error_message;
+use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
+
 use crate::models::NodeInventory;
 
 use super::InventorySink;
@@ -213,7 +217,7 @@ fn build_batch_upsert_request<'a>(
         .map(|inventory| {
             let labels = machine_labels.get(&inventory.source.mac.to_ascii_lowercase());
             NodeUpsertRequest {
-                inventory,
+                inventory: BackendInventory(inventory),
                 compute_zone: labels.and_then(|labels| nonempty_label(labels, "compute_zone")),
                 node_group: labels.and_then(|labels| nonempty_label(labels, "node_group")),
             }
@@ -318,11 +322,69 @@ struct AgentInfo<'a> {
 #[serde(rename_all = "camelCase")]
 struct NodeUpsertRequest<'a> {
     #[serde(flatten)]
-    inventory: &'a NodeInventory,
+    inventory: BackendInventory<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compute_zone: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     node_group: Option<&'a str>,
+}
+
+struct BackendInventory<'a>(&'a NodeInventory);
+
+impl Serialize for BackendInventory<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let NodeInventory {
+            schema_version,
+            collected_at,
+            enrolled_at,
+            uuid,
+            source,
+            primary_system_id,
+            managers,
+            systems,
+            chassis,
+            firmware,
+            domain_errors,
+            target_error,
+        } = self.0;
+        let mut map = serializer.serialize_map(Some(12))?;
+        map.serialize_entry("schemaVersion", schema_version)?;
+        map.serialize_entry("collectedAt", collected_at)?;
+        map.serialize_entry("enrolledAt", enrolled_at)?;
+        map.serialize_entry("uuid", uuid)?;
+        map.serialize_entry("source", source)?;
+        map.serialize_entry("primarySystemId", primary_system_id)?;
+        map.serialize_entry("managers", managers)?;
+        map.serialize_entry("systems", systems)?;
+        map.serialize_entry("chassis", chassis)?;
+        map.serialize_entry("firmware", firmware)?;
+
+        let domain_errors = domain_errors
+            .iter()
+            .map(|error| BackendDomainError {
+                domain: &error.domain,
+                resource: error.resource.as_deref(),
+                message: sanitize_backend_error_message(&error.message),
+            })
+            .collect::<Vec<_>>();
+        map.serialize_entry("domainErrors", &domain_errors)?;
+        map.serialize_entry(
+            "targetError",
+            &target_error.as_deref().map(sanitize_backend_error_message),
+        )?;
+        map.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendDomainError<'a> {
+    domain: &'a str,
+    resource: Option<&'a str>,
+    message: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -444,6 +506,42 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
+    }
+
+    #[test]
+    fn batch_request_redacts_urls_from_inventory_errors() {
+        let mut inventory = inventory("10.0.0.1");
+        inventory.domain_errors.push(crate::models::DomainError {
+            domain: "systems.secureBoot".to_string(),
+            resource: Some("1".to_string()),
+            message: "request to https://10.0.0.1/redfish/v1/Systems/1 failed with 403".to_string(),
+        });
+        inventory.target_error =
+            Some("could not reach HTTP://10.0.0.1/redfish/v1/Systems/1?detail=all".to_string());
+        let inventories = [inventory];
+        let machine_labels = MachineLabels::new();
+        let request = build_batch_upsert_request(&inventories, &machine_labels);
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(
+            value["data"][0]["domainErrors"][0]["message"],
+            "request to /redfish/v1/Systems/1 failed with 403"
+        );
+        assert_eq!(
+            value["data"][0]["targetError"],
+            "could not reach /redfish/v1/Systems/1"
+        );
+
+        // Sanitization is limited to the backend projection so local output
+        // retains the original details for diagnostics.
+        assert!(inventories[0].domain_errors[0].message.contains("https://"));
+        assert!(
+            inventories[0]
+                .target_error
+                .as_deref()
+                .expect("target error")
+                .contains("HTTP://")
+        );
     }
 
     #[test]

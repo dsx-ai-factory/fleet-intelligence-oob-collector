@@ -109,6 +109,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bmc-dispatch",
+ "bmc-error",
  "futures",
  "reqwest",
  "serde",
@@ -133,11 +134,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bmc-error"
+version = "0.1.0"
+dependencies = [
+ "url",
+]
+
+[[package]]
 name = "bmc-inventory"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bmc-dispatch",
+ "bmc-error",
  "hickory-resolver",
  "nv-redfish",
  "nv-redfish-bmc-mock",

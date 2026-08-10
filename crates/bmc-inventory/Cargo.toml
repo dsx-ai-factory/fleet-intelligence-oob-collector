@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 bmc-dispatch.workspace = true
+bmc-error.workspace = true
 hickory-resolver.workspace = true
 nv-redfish.workspace = true
 reqwest.workspace = true
