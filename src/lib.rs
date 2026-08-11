@@ -29,7 +29,7 @@ pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
 pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
-const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InventoryFormat {
