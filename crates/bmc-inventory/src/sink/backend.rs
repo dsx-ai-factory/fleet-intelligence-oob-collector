@@ -472,6 +472,7 @@ struct BatchUpsertResponse {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeUpsertResult {
+    #[serde(rename = "nodeUUID", alias = "nodeUuid")]
     node_uuid: Option<String>,
     status: String,
     message: Option<String>,
@@ -678,6 +679,23 @@ mod tests {
         };
 
         outcome.into_result().expect("lowercase success status");
+    }
+
+    #[test]
+    fn batch_response_deserializes_backend_node_uuid_spelling() {
+        let response: BatchUpsertResponse = serde_json::from_value(serde_json::json!({
+            "results": [{
+                "message": "payload uuid missing",
+                "nodeUUID": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
+                "status": "OK"
+            }]
+        }))
+        .expect("batch response");
+        let outcome = BackendBatchOutcome {
+            results: response.results,
+        };
+
+        assert!(outcome.node_succeeded("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
     }
 
     #[test]
