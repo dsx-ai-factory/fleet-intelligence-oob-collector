@@ -14,7 +14,8 @@ use bmc_inventory::config;
 use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
-    BackendSink as InventoryBackendSink, InventorySink, JsonSink, TableSink,
+    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
+    JsonSink, TableSink,
 };
 use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
@@ -459,9 +460,38 @@ async fn collect_and_upload_inventory(
         let (uploaded, upload_result) =
             upload_inventory_batch(&mut backend_sink, session, exportable).await?;
         match upload_result {
-            Ok(()) => {
-                tracing::info!(exportable_count, "inventory mini-batch export completed");
-                inventory_vec.extend(uploaded);
+            Ok(outcome) => {
+                let (accepted, failures) = partition_uploaded_inventory(uploaded, &outcome);
+                failed_uploads += failures.len();
+                for failure in &failures {
+                    match failure {
+                        InventoryUploadFailure::Rejected {
+                            node_uuid,
+                            status,
+                            message,
+                        } => tracing::warn!(
+                            node_uuid,
+                            status,
+                            message = message.as_deref().unwrap_or(""),
+                            "backend rejected inventory node"
+                        ),
+                        InventoryUploadFailure::MissingResult { node_uuid } => tracing::warn!(
+                            node_uuid,
+                            "backend returned success without a result row for inventory node"
+                        ),
+                    }
+                }
+                if !failures.is_empty() {
+                    tracing::warn!(
+                        exportable_count,
+                        accepted_count = accepted.len(),
+                        failed_count = failures.len(),
+                        "inventory mini-batch export completed with failed nodes"
+                    );
+                } else {
+                    tracing::info!(exportable_count, "inventory mini-batch export completed");
+                }
+                inventory_vec.extend(accepted);
             }
             Err(err) => {
                 failed_uploads += exportable_count;
@@ -583,7 +613,7 @@ fn stamp_enrolled_at(inventories: &mut [NodeInventory], enrolled_at: &str) {
 async fn upload_inventory(
     sink: InventoryBackendSink,
     inventories: Arc<Vec<NodeInventory>>,
-) -> Result<(), UploadError> {
+) -> Result<BackendBatchOutcome, UploadError> {
     tokio::task::spawn_blocking(move || {
         sink.write_batch(inventories.as_slice()).map_err(|err| {
             if is_auth_failure(err.as_ref()) {
@@ -625,7 +655,7 @@ async fn upload_inventory_batch(
     sink: &mut InventoryBackendSink,
     session: &mut BackendSession,
     mut inventories: Vec<NodeInventory>,
-) -> Result<(Vec<NodeInventory>, Result<(), UploadError>), Box<dyn Error>> {
+) -> Result<(Vec<NodeInventory>, Result<BackendBatchOutcome, UploadError>), Box<dyn Error>> {
     stamp_enrolled_at(&mut inventories, session.enrolled_at());
     let inventories = Arc::new(inventories);
     let mut result = upload_inventory(sink.clone(), Arc::clone(&inventories)).await;
@@ -647,6 +677,45 @@ async fn upload_inventory_batch(
     }
 
     Ok((inventories, result))
+}
+
+fn partition_uploaded_inventory(
+    inventories: Vec<NodeInventory>,
+    outcome: &BackendBatchOutcome,
+) -> (Vec<NodeInventory>, Vec<InventoryUploadFailure>) {
+    let mut accepted = Vec::new();
+    let mut failures = Vec::new();
+    for inventory in inventories {
+        let Some(node_uuid) = inventory.uuid.as_ref().map(ToString::to_string) else {
+            continue;
+        };
+        match outcome.node_outcome(&node_uuid) {
+            BackendNodeOutcome::Succeeded => accepted.push(inventory),
+            BackendNodeOutcome::Rejected { status, message } => {
+                failures.push(InventoryUploadFailure::Rejected {
+                    node_uuid,
+                    status: status.to_string(),
+                    message: message.map(str::to_string),
+                });
+            }
+            BackendNodeOutcome::Missing => {
+                failures.push(InventoryUploadFailure::MissingResult { node_uuid });
+            }
+        }
+    }
+    (accepted, failures)
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum InventoryUploadFailure {
+    Rejected {
+        node_uuid: String,
+        status: String,
+        message: Option<String>,
+    },
+    MissingResult {
+        node_uuid: String,
+    },
 }
 
 fn partition_exportable_inventory(inventories: Vec<NodeInventory>) -> (Vec<NodeInventory>, usize) {

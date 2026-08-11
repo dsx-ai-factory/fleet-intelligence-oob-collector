@@ -41,10 +41,9 @@ fallbacks when it is missing. Completed inventories flow through a bounded
 channel to a backend worker, which flushes small batches by size, time, or the
 end of the collection cycle. The current worker flushes when the batch reaches
 the configured target concurrency or after one second, and the channel holds at
-most twice that concurrency. The inventory backend contract is status-only, so
-any 2xx response accepts the complete mini-batch and response bodies are
-ignored. Attestation runs only for records from successful mini-batches with a
-resolved node UUID. After
+most twice that concurrency. Backend item results are evaluated per node, so
+one rejected item does not hide accepted nodes in the same batch. Attestation
+runs only for successfully exported records with a resolved node UUID. After
 concurrent nonce and evidence collection completes, attestation results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
