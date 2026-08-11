@@ -37,6 +37,16 @@ bmcCollector:
     noProxy: ""
   intervalSeconds: 86400
   insecureTls: false
+  # Maximum number of target inventory or attestation workflows run concurrently.
+  targetConcurrency: 64
+  # Maximum number of concurrent Redfish requests to a single BMC.
+  bmcMaxInFlight: 4
+  # Sustained Redfish request rate allowed for each BMC.
+  bmcRequestsPerSecond: 10
+  # Per-BMC Redfish request burst capacity.
+  bmcBurst: 10
+  # Timeout for each Redfish request.
+  timeoutSeconds: 30
 
 # Optional NICo Redfish hardware-health service. Its generated TOML
 # configuration may contain BMC credentials and is kept in a memory-backed

@@ -1,6 +1,11 @@
 bmcCollector:
   backendUrl: https://data.fleet-intelligence.nvidia.com
   agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
+  targetConcurrency: 7
+  bmcMaxInFlight: 2
+  bmcRequestsPerSecond: 3
+  bmcBurst: 4
+  timeoutSeconds: 45
   proxy:
     httpProxy: http://proxy.test.example:3128
     httpsProxy: http://proxy.test.example:3128

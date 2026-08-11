@@ -81,6 +81,11 @@ The commonly configured chart values are:
 | `bmcCollector.intervalSeconds` | `86400` | Collection interval. |
 | `bmcCollector.insecureTls` | `false` | Disable BMC certificate verification. |
 | `bmcCollector.logLevel` | `info` | Rust tracing filter. |
+| `bmcCollector.targetConcurrency` | `64` | Maximum concurrent inventory or attestation target workflows. |
+| `bmcCollector.bmcMaxInFlight` | `4` | Maximum concurrent Redfish requests to each BMC. |
+| `bmcCollector.bmcRequestsPerSecond` | `10` | Sustained Redfish request rate for each BMC. |
+| `bmcCollector.bmcBurst` | `10` | Per-BMC Redfish request burst capacity. |
+| `bmcCollector.timeoutSeconds` | `30` | Timeout for each Redfish request. |
 | `nicoHardwareHealth.enabled` | `true` | Deploy NICo metrics and log collection. |
 | `nicoHardwareHealth.metricsPrefix` | `fleetint` | NICo metric prefix. |
 | `otelGateway.enabled` | `true` | Deploy the authenticated telemetry gateway. |

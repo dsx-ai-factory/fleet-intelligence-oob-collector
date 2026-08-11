@@ -44,6 +44,16 @@ spec:
             - /etc/fleet-intelligence/{{ .Values.config.configKey }}
             - --interval-seconds
             - {{ .Values.bmcCollector.intervalSeconds | quote }}
+            - --target-concurrency
+            - {{ .Values.bmcCollector.targetConcurrency | quote }}
+            - --bmc-max-in-flight
+            - {{ .Values.bmcCollector.bmcMaxInFlight | quote }}
+            - --bmc-requests-per-second
+            - {{ .Values.bmcCollector.bmcRequestsPerSecond | quote }}
+            - --bmc-burst
+            - {{ .Values.bmcCollector.bmcBurst | quote }}
+            - --timeout-seconds
+            - {{ .Values.bmcCollector.timeoutSeconds | quote }}
             {{- if .Values.bmcCollector.insecureTls }}
             - --insecure-tls
             {{- end }}
