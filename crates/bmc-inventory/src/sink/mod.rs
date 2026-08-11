@@ -6,10 +6,7 @@ use std::error::Error;
 
 use super::models::NodeInventory;
 
-pub use backend::{
-    BackendBatchOutcome, BackendClient, BackendHttpError, BackendNodeOutcome, BackendSink,
-    HttpBackendClient, MachineLabels,
-};
+pub use backend::{BackendClient, BackendHttpError, BackendSink, HttpBackendClient, MachineLabels};
 pub use json::JsonSink;
 pub use table::TableSink;
 
