@@ -170,6 +170,13 @@ use a different Fleet Intelligence endpoint.
 The collector logs at `info` by default. Set `bmcCollector.logLevel` to a Rust
 tracing filter such as `debug` or `fleet_intelligence_oob=debug,bmc_attestation=trace`.
 
+Inventory and attestation share the collector's BMC request controls. Configure
+the maximum concurrent target workflows with `bmcCollector.targetConcurrency`,
+the per-BMC in-flight limit with `bmcCollector.bmcMaxInFlight`, and per-BMC rate
+limiting with `bmcCollector.bmcRequestsPerSecond` and `bmcCollector.bmcBurst`.
+The global in-flight ceiling is `targetConcurrency * bmcMaxInFlight`. Set
+`bmcCollector.timeoutSeconds` to control the timeout for each Redfish request.
+
 See `values.yaml` for the small set of supported settings.
 When `bmcCollector.image.tag` is empty, the chart uses its own version as the
 image tag.

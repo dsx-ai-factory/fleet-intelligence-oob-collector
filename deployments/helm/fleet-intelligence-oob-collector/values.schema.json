@@ -50,7 +50,7 @@
     "bmcCollector": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["image", "backendUrl", "agentTokenSecretName", "logLevel", "proxy", "intervalSeconds", "insecureTls"],
+      "required": ["image", "backendUrl", "agentTokenSecretName", "logLevel", "proxy", "intervalSeconds", "insecureTls", "targetConcurrency", "bmcMaxInFlight", "bmcRequestsPerSecond", "bmcBurst", "timeoutSeconds"],
       "properties": {
         "image": {
           "type": "object",
@@ -77,7 +77,12 @@
           }
         },
         "intervalSeconds": { "type": "integer", "minimum": 1 },
-        "insecureTls": { "type": "boolean" }
+        "insecureTls": { "type": "boolean" },
+        "targetConcurrency": { "type": "integer", "minimum": 1 },
+        "bmcMaxInFlight": { "type": "integer", "minimum": 1 },
+        "bmcRequestsPerSecond": { "type": "integer", "minimum": 1 },
+        "bmcBurst": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
       }
     },
     "nicoHardwareHealth": {
