@@ -5,20 +5,22 @@ The collector and NICo hardware health share one TOML file. Start from
 
 ```toml
 [labels]
-compute_zone = "az51"
-node_group = "dev3-dh1"
+compute_zone = "us-west-dc1"
+node_group = "gb200-training"
 
 [credentials]
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
 [[machines]]
+name = "node-01"
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
 labels = { site = "dev", environment = "development" }
 
 [[machines]]
+name = "node-02"
 ip = "10.0.0.11"
 username_file = "/run/secrets/bmc/node-02/username"
 password_file = "/run/secrets/bmc/node-02/password"
@@ -32,9 +34,10 @@ credential pairs, blank credentials, and duplicate MACs are rejected.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| Top-level `labels` | No | Labels applied to every machine. |
+| Top-level `labels` | No | Labels inherited by every machine. Per-machine labels with the same key override them. |
 | `credentials.username_file` | Conditional | Default username file inherited by machines; must be paired with `password_file`. |
 | `credentials.password_file` | Conditional | Default password file inherited by machines; must be paired with `username_file`. |
+| `machines[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
 | `machines[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `machines[].port` | No | Redfish port; the HTTPS default is used when omitted. |
 | `machines[].mac` | No | Stable BMC identity. It must be unique in the file. |
@@ -42,17 +45,61 @@ credential pairs, blank credentials, and duplicate MACs are rejected.
 | `machines[].password_file` | Conditional | Per-machine password file override; must be paired with `username_file`. |
 | `machines[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
 | `machines[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
-| `machines[].labels` | No | Labels added to this machine or overriding shared labels. |
+| `machines[].labels` | No | Labels added to this machine or overriding inherited top-level labels. |
 
 When `mac` is omitted, the collector derives a locally administered MAC from
 `02:00` and the final four IP bytes. Because different IPv6 addresses can share
 the same final four bytes, configure an explicit, unique MAC for IPv6 targets.
 An explicit stable MAC is preferred for IPv4 targets as well.
 
-Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. Each machine supports 31
-user-defined labels with values up to 1,024 bytes. NICo identity fields and the
-collector-added `oob="true"` label are reserved. Effective `compute_zone` and
-`node_group` labels are also exported as backend placement fields.
+Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. An unnamed machine supports 31
+user-defined labels; a named machine supports 30 because the collector adds
+both `oob="true"` and `machine_name`. Label values and machine names are limited
+to 1,024 bytes. NICo identity fields, `oob`, and `machine_name` are reserved.
+Effective `compute_zone` and `node_group` labels are also exported as backend
+placement fields.
+
+### Fleet Intelligence placement labels
+
+Unlike ordinary custom labels, `compute_zone` and `node_group` have special
+meaning in Fleet Intelligence. They assign the node to its Fleet Intelligence
+compute zone and node group and have two destinations:
+
+| TOML label | NICo telemetry label | Backend inventory field |
+| --- | --- | --- |
+| `compute_zone` | `compute_zone` | `computeZone` |
+| `node_group` | `node_group` | `nodeGroup` |
+
+The example value `us-west-dc1` illustrates a location or failure domain, while
+`gb200-training` illustrates a logical hardware/workload pool. These are only
+examples: deployments must use the exact compute-zone and node-group names
+configured in their Fleet Intelligence account.
+
+Use the exact snake_case keys shown above. Put them in the top-level `[labels]`
+table when every configured machine belongs to the same Fleet Intelligence
+placement. Override them in a machine's `labels` table when placement differs:
+
+```toml
+[labels]
+compute_zone = "us-west-dc1"
+node_group = "gb200-training"
+
+[[machines]]
+name = "node-01"
+ip = "10.0.0.10"
+
+[[machines]]
+name = "node-02"
+ip = "10.0.0.11"
+labels = { compute_zone = "us-west-dc2", node_group = "gb200-inference" }
+```
+
+In this example, `node-01` inherits the `us-west-dc1` compute zone and the
+`gb200-training` node group. `node-02` belongs to the `us-west-dc2` compute zone
+and the `gb200-inference` node group. If either label is omitted from both
+scopes, its corresponding Fleet Intelligence inventory placement field is
+omitted. Other label keys are treated as ordinary telemetry labels and are not
+promoted to Fleet Intelligence inventory placement fields.
 
 Relative credential paths are resolved from the directory containing the
 collector configuration. A machine must provide a complete file pair, a

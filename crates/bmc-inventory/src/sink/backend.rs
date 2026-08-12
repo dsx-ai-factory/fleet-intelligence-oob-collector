@@ -416,6 +416,7 @@ impl Serialize for BackendInventory<'_> {
             schema_version,
             collected_at,
             enrolled_at,
+            name,
             uuid,
             source,
             primary_system_id,
@@ -426,10 +427,13 @@ impl Serialize for BackendInventory<'_> {
             domain_errors,
             target_error,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(12))?;
+        let mut map = serializer.serialize_map(Some(13))?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
+        if let Some(name) = name {
+            map.serialize_entry("name", name)?;
+        }
         map.serialize_entry("uuid", uuid)?;
         map.serialize_entry("source", source)?;
         map.serialize_entry("primarySystemId", primary_system_id)?;
@@ -554,12 +558,13 @@ mod tests {
 
     #[test]
     fn batch_request_exports_placement_labels() {
-        let inventory = inventory("10.0.0.1");
+        let mut inventory = inventory("10.0.0.1");
+        inventory.name = Some("node-01".to_string());
         let machine_labels = BTreeMap::from([(
             inventory.source.mac.to_ascii_lowercase(),
             BTreeMap::from([
-                ("compute_zone".to_string(), "az51".to_string()),
-                ("node_group".to_string(), "dev3-dh1".to_string()),
+                ("compute_zone".to_string(), "us-west-dc1".to_string()),
+                ("node_group".to_string(), "gb200-training".to_string()),
                 ("oob".to_string(), "true".to_string()),
             ]),
         )]);
@@ -569,8 +574,9 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert_eq!(value["agent"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
-        assert_eq!(value["data"][0]["computeZone"], "az51");
-        assert_eq!(value["data"][0]["nodeGroup"], "dev3-dh1");
+        assert_eq!(value["data"][0]["name"], "node-01");
+        assert_eq!(value["data"][0]["computeZone"], "us-west-dc1");
+        assert_eq!(value["data"][0]["nodeGroup"], "gb200-training");
     }
 
     #[test]
@@ -776,6 +782,7 @@ mod tests {
             schema_version: crate::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            name: None,
             uuid: None,
             source: crate::models::InventorySourceInfo {
                 source_type: "redfish".to_string(),

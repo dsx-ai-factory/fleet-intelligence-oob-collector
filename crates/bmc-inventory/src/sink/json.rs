@@ -38,6 +38,7 @@ mod tests {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            name: None,
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),

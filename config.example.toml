@@ -1,23 +1,24 @@
-# Optional NICo telemetry labels applied to every machine in this collector.
+# Fleet Intelligence placement; also attached to NICo metrics and logs.
 [labels]
-compute_zone = "az51"
-node_group = "dev3-dh1"
+compute_zone = "us-west-dc1"
+node_group = "gb200-training"
 
-# Default BMC credentials inherited by machines without an override. Omit this
-# section only when every machine defines a complete credential pair.
+# Credentials are read from the mounted Kubernetes Secret.
 [credentials]
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
 [[machines]]
+# Optional: inventory `name` and telemetry `machine_name`.
+name = "node-01"
 ip = "10.0.0.10"
-port = 443
-# Optional but recommended as the stable BMC identity. When omitted, derives
-# 02:00:<last four IP bytes>.
+# Optional but recommended stable BMC identity.
 mac = "aa:bb:cc:dd:ee:ff"
-# Optional per-machine credential override. Specify both files together.
-# username_file = "/run/secrets/bmc/node-01/username"
-# password_file = "/run/secrets/bmc/node-01/password"
-# Optional NICo telemetry labels specific to this machine. They override
-# top-level labels with the same name.
-labels = { site = "dev", environment = "development" }
+labels = { rack = "rack-12" }
+
+[[machines]]
+name = "node-02"
+ip = "10.0.0.11"
+username_file = "/run/secrets/bmc/node-02/username"
+password_file = "/run/secrets/bmc/node-02/password"
+labels = { rack = "rack-12" }

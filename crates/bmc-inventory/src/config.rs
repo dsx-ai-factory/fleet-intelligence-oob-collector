@@ -10,6 +10,7 @@ const MAX_NICO_LABELS: usize = 32;
 const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
 const OOB_LABEL_NAME: &str = "oob";
 const OOB_LABEL_VALUE: &str = "true";
+const MACHINE_NAME_LABEL_NAME: &str = "machine_name";
 const RESERVED_NICO_LABELS: &[&str] = &[
     "collector_type",
     "endpoint_ip",
@@ -18,6 +19,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     "machine_id",
     "machine_slot_number",
     "machine_tray_index",
+    MACHINE_NAME_LABEL_NAME,
     "nvlink_domain_uuid",
     OOB_LABEL_NAME,
     "rack_id",
@@ -35,6 +37,7 @@ pub struct CollectorConfig {
 
 #[derive(Clone)]
 pub struct Target {
+    pub name: Option<String>,
     pub ip: IpAddr,
     pub port: Option<u16>,
     pub mac: String,
@@ -48,6 +51,7 @@ impl fmt::Debug for Target {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Target")
+            .field("name", &self.name)
             .field("mac", &self.mac)
             .field("address", &self.address)
             .field("username", &self.username)
@@ -81,6 +85,8 @@ struct FileCredentialConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MachineConfig {
+    #[serde(default)]
+    name: Option<String>,
     ip: IpAddr,
     #[serde(default)]
     port: Option<u16>,
@@ -130,7 +136,17 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         let mut labels = config.labels.clone();
         labels.extend(target.labels);
         validate_nico_labels(&format!("machines[{index}].labels"), &labels)?;
+        if target.name.is_some() && labels.len() >= MAX_NICO_LABELS - 1 {
+            return Err(format!(
+                "machines[{index}].labels supports at most {} user-defined NICo labels because {OOB_LABEL_NAME:?} and {MACHINE_NAME_LABEL_NAME:?} are added internally",
+                MAX_NICO_LABELS - 2
+            )
+            .into());
+        }
         labels.insert(OOB_LABEL_NAME.to_string(), OOB_LABEL_VALUE.to_string());
+        if let Some(name) = &target.name {
+            labels.insert(MACHINE_NAME_LABEL_NAME.to_string(), name.clone());
+        }
         target.labels = labels;
         if !macs.insert(target.mac.to_ascii_lowercase()) {
             return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
@@ -184,6 +200,21 @@ impl MachineConfig {
     ) -> Result<Target, Box<dyn Error>> {
         let context = format!("machines[{index}]");
         let credentials = self.resolve_credentials(&context, default_credentials, config_dir)?;
+        let name = match self.name {
+            Some(name) if name.trim().is_empty() => {
+                return Err(format!("{context}.name cannot be blank").into());
+            }
+            Some(name) => Some(name.trim().to_string()),
+            None => None,
+        };
+        if name
+            .as_ref()
+            .is_some_and(|name| name.len() > MAX_NICO_LABEL_VALUE_BYTES)
+        {
+            return Err(
+                format!("{context}.name exceeds {MAX_NICO_LABEL_VALUE_BYTES} bytes").into(),
+            );
+        }
         let mac = match self.mac {
             Some(mac) if mac.trim().is_empty() => {
                 return Err(format!("{context}.mac cannot be blank").into());
@@ -199,6 +230,7 @@ impl MachineConfig {
         };
 
         Ok(Target {
+            name,
             ip: self.ip,
             port: self.port,
             mac,
@@ -528,11 +560,12 @@ mod tests {
             "valid",
             r#"
             [labels]
-            compute_zone = "az51"
-            node_group = "dev3-dh1"
+            compute_zone = "us-west-dc1"
+            node_group = "gb200-training"
             site = "shared"
 
             [[machines]]
+            name = "node-01"
             ip = "10.0.0.1"
             port = 8443
             mac = "00:11:22:33:44:55"
@@ -551,6 +584,7 @@ mod tests {
         let config = load_config(path.to_str().expect("path")).expect("config");
 
         assert_eq!(config.targets.len(), 2);
+        assert_eq!(config.targets[0].name.as_deref(), Some("node-01"));
         assert_eq!(config.targets[0].mac, "00:11:22:33:44:55");
         assert_eq!(config.targets[0].address, "10.0.0.1:8443");
         assert_eq!(
@@ -566,8 +600,12 @@ mod tests {
             Some(&"development".to_string())
         );
         assert_eq!(
+            config.targets[0].labels.get("machine_name"),
+            Some(&"node-01".to_string())
+        );
+        assert_eq!(
             config.targets[0].labels.get("compute_zone"),
-            Some(&"az51".to_string())
+            Some(&"us-west-dc1".to_string())
         );
         assert_eq!(config.targets[1].mac, "00:11:22:33:44:66");
         assert_eq!(config.targets[1].address, "[2001:db8::1]");
@@ -581,7 +619,7 @@ mod tests {
         );
         assert_eq!(
             config.targets[1].labels.get("node_group"),
-            Some(&"dev3-dh1".to_string())
+            Some(&"gb200-training".to_string())
         );
     }
 
@@ -708,9 +746,48 @@ mod tests {
     }
 
     #[test]
+    fn trims_machine_name_and_rejects_blank_name() {
+        let config = parse_config(
+            r#"
+            [[machines]]
+            name = "  node-01  "
+            ip = "10.0.0.10"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("config");
+        assert_eq!(config.targets[0].name.as_deref(), Some("node-01"));
+        assert_eq!(
+            config.targets[0]
+                .labels
+                .get("machine_name")
+                .map(String::as_str),
+            Some("node-01")
+        );
+
+        let error = parse_config(
+            r#"
+            [[machines]]
+            name = "   "
+            ip = "10.0.0.10"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect_err("blank name should fail")
+        .to_string();
+        assert!(error.contains("name cannot be blank"));
+    }
+
+    #[test]
     fn repository_oob_config_example_is_valid() {
         let username = write_credential("example-username", "admin\n");
         let password = write_credential("example-password", "secret\n");
+        let override_username = write_credential("example-node-02-username", "node-admin\n");
+        let override_password = write_credential("example-node-02-password", "node-secret\n");
         let contents = include_str!("../../../config.example.toml")
             .replace(
                 "/run/secrets/bmc/default/username",
@@ -719,19 +796,31 @@ mod tests {
             .replace(
                 "/run/secrets/bmc/default/password",
                 password.to_str().expect("password path"),
+            )
+            .replace(
+                "/run/secrets/bmc/node-02/username",
+                override_username.to_str().expect("override username path"),
+            )
+            .replace(
+                "/run/secrets/bmc/node-02/password",
+                override_password.to_str().expect("override password path"),
             );
         let config = parse_config(&contents, "config.example.toml").expect("OOB config example");
 
-        assert_eq!(config.targets.len(), 1);
+        assert_eq!(config.targets.len(), 2);
+        assert_eq!(config.targets[0].name.as_deref(), Some("node-01"));
         assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
         assert_eq!(
             config.targets[0].labels.get("compute_zone"),
-            Some(&"az51".to_string())
+            Some(&"us-west-dc1".to_string())
         );
         assert_eq!(
             config.targets[0].labels.get("node_group"),
-            Some(&"dev3-dh1".to_string())
+            Some(&"gb200-training".to_string())
         );
+        assert_eq!(config.targets[1].name.as_deref(), Some("node-02"));
+        assert_eq!(config.targets[1].mac, "02:00:0a:00:00:0b");
+        assert_eq!(config.targets[1].username, "node-admin");
     }
 
     #[test]
@@ -879,10 +968,11 @@ mod tests {
         let collector = parse_config(
             r#"
             [labels]
-            compute_zone = "az51"
-            node_group = "dev3-dh1"
+            compute_zone = "us-west-dc1"
+            node_group = "gb200-training"
 
             [[machines]]
+            name = "node-01"
             ip = "10.0.0.1"
             port = 8443
             username = "admin"
@@ -900,9 +990,16 @@ mod tests {
         assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
         assert_eq!(endpoint["port"].as_integer(), Some(8443));
         assert_eq!(endpoint["mac"].as_str(), Some("02:00:0a:00:00:01"));
-        assert_eq!(endpoint["labels"]["compute_zone"].as_str(), Some("az51"));
-        assert_eq!(endpoint["labels"]["node_group"].as_str(), Some("dev3-dh1"));
+        assert_eq!(
+            endpoint["labels"]["compute_zone"].as_str(),
+            Some("us-west-dc1")
+        );
+        assert_eq!(
+            endpoint["labels"]["node_group"].as_str(),
+            Some("gb200-training")
+        );
         assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
+        assert_eq!(endpoint["labels"]["machine_name"].as_str(), Some("node-01"));
         assert_eq!(endpoint["labels"]["site"].as_str(), Some("dev"));
         assert!(endpoint.get("machine").is_some());
         assert_eq!(
@@ -1002,12 +1099,13 @@ mod tests {
         assert_eq!(endpoint["username"].as_str(), Some("admin\"name"));
         assert_eq!(endpoint["password"].as_str(), Some("secret\"value"));
         assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
+        assert!(endpoint["labels"].get("machine_name").is_none());
         assert!(endpoint.get("port").is_none());
     }
 
     #[test]
     fn rejects_labels_that_override_internal_labels() {
-        for label in ["oob", "system_uuid"] {
+        for label in ["machine_name", "oob", "system_uuid"] {
             let error = parse_config(
                 &format!(
                     r#"

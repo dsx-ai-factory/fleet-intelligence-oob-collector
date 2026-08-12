@@ -104,20 +104,25 @@ The OOB TOML declares shared NICo labels once and defines one or more machines:
 
 ```toml
 [labels]
-compute_zone = "az51"
-node_group = "dev3-dh1"
+# These keys have special meaning in Fleet Intelligence: they assign node
+# placement, are exported as inventory computeZone/nodeGroup, and are also
+# emitted on NICo telemetry.
+compute_zone = "us-west-dc1"
+node_group = "gb200-training"
 
 [credentials]
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
 [[machines]]
+name = "node-01"
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
 labels = { site = "dev", environment = "development" }
 
 [[machines]]
+name = "node-02"
 ip = "10.0.0.11"
 username_file = "/run/secrets/bmc/node-02/username"
 password_file = "/run/secrets/bmc/node-02/password"
@@ -131,16 +136,24 @@ keys under `/run/secrets/bmc/<target>`.
 The MAC is optional. If omitted, the collector and generated NICo config use a
 locally administered MAC formed as `02:00:<last four IP bytes>`.
 
+The machine `name` is optional. When present, the collector includes it as the
+top-level `name` in inventory uploads and adds it to NICo metrics and logs as
+the reserved `machine_name` label.
+
 When a machine's effective labels include `compute_zone` or `node_group`, the
-collector also exports them as the backend `computeZone` and `nodeGroup`
-placement fields during inventory upload.
+collector treats them as Fleet Intelligence placement metadata and exports them
+as the inventory `computeZone` and `nodeGroup` fields. Values in `[labels]` are
+inherited by all machines; a value in `machines[].labels` overrides the shared
+value for that machine. Other custom labels remain telemetry labels and are not
+promoted to Fleet Intelligence placement fields.
 
 An init container translates the generic config into NICo static endpoints and
 marks every endpoint as a machine. NICo then emits the shared labels and the
 discovered primary Redfish ComputerSystem UUID (`system.uuid`) on OTLP
 resources. Per-machine labels can add to or override the shared labels. The
-collector adds the reserved `oob="true"` label to every endpoint so it is
-present on NICo metrics and logs.
+collector adds the reserved `oob="true"` label to every endpoint, plus the
+reserved `machine_name` label for named machines, so both are present on NICo
+metrics and logs.
 
 ## Proxy configuration
 

@@ -14,6 +14,7 @@ pub struct TableSink {
 
 #[derive(Debug)]
 struct SummaryRow {
+    name: String,
     mac: String,
     address: String,
     host_name: String,
@@ -157,6 +158,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
     let mut out = render_table(
         &[
+            "Name",
             "MAC",
             "Address",
             "Host Name",
@@ -188,6 +190,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
 impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
+            name: inventory.name.clone().unwrap_or_default(),
             mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
             host_name: inventory.source.host_name.clone().unwrap_or_default(),
@@ -212,8 +215,9 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 15] {
+    fn values(&self) -> [String; 16] {
         [
+            self.name.clone(),
             self.mac.clone(),
             self.address.clone(),
             self.host_name.clone(),
@@ -903,6 +907,7 @@ mod tests {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            name: Some("node-01".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
