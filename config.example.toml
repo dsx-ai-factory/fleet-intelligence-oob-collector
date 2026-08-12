@@ -1,5 +1,4 @@
-# Fleet Intelligence placement; also attached to NICo metrics and logs.
-[labels]
+# Fleet Intelligence placement; inherited by machines and mirrored to telemetry.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 

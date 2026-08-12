@@ -9,6 +9,8 @@ fn node_inventory_serializes_as_backend_payload() {
         collected_at: "2026-01-01T00:00:00Z".to_string(),
         enrolled_at: Some("2026-01-02T00:00:00Z".to_string()),
         name: Some("node-01".to_string()),
+        compute_zone: Some("us-west-dc1".to_string()),
+        node_group: Some("gb200-training".to_string()),
         uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
         primary_system_id: Some("System".to_string()),
         systems: vec![SystemInventory {
@@ -133,6 +135,8 @@ fn node_inventory_serializes_as_backend_payload() {
             "collectedAt": "2026-01-01T00:00:00Z",
             "enrolledAt": "2026-01-02T00:00:00Z",
             "name": "node-01",
+            "computeZone": "us-west-dc1",
+            "nodeGroup": "gb200-training",
             "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
             "primarySystemId": "System",
             "systems": [{
@@ -257,6 +261,8 @@ fn target_error_inventory_serializes_absent_uuid() {
         collected_at: "2026-01-01T00:00:00Z".to_string(),
         enrolled_at: None,
         name: None,
+        compute_zone: None,
+        node_group: None,
         uuid: None,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -280,6 +286,8 @@ fn target_error_inventory_serializes_absent_uuid() {
 
     assert!(value["uuid"].is_null());
     assert!(value.get("name").is_none());
+    assert!(value.get("computeZone").is_none());
+    assert!(value.get("nodeGroup").is_none());
     assert!(value["enrolledAt"].is_null());
     assert_eq!(value["targetError"], "malformed system UUID");
 }

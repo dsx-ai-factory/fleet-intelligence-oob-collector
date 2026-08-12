@@ -39,6 +39,8 @@ mod tests {
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
             name: None,
+            compute_zone: None,
+            node_group: None,
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),

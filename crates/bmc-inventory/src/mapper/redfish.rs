@@ -78,6 +78,8 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                 collected_at,
                 enrolled_at: None,
                 name: target.name,
+                compute_zone: target.compute_zone,
+                node_group: target.node_group,
                 uuid: Some(node_uuid.clone()),
                 source,
                 primary_system_id: primary_system_id.clone(),
@@ -113,6 +115,8 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
             collected_at,
             enrolled_at: None,
             name: target.name,
+            compute_zone: target.compute_zone,
+            node_group: target.node_group,
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
@@ -344,6 +348,8 @@ mod tests {
     fn maps_configured_machine_name_for_success_and_failure() {
         let mut successful_target = target();
         successful_target.name = Some("node-01".to_string());
+        successful_target.compute_zone = Some("us-west-dc1".to_string());
+        successful_target.node_group = Some("gb200-training".to_string());
         let successful = map_record(
             SourceRecord {
                 target: successful_target,
@@ -372,6 +378,8 @@ mod tests {
         );
 
         assert_eq!(successful.name.as_deref(), Some("node-01"));
+        assert_eq!(successful.compute_zone.as_deref(), Some("us-west-dc1"));
+        assert_eq!(successful.node_group.as_deref(), Some("gb200-training"));
         assert_eq!(failed.name.as_deref(), Some("node-02"));
     }
 
@@ -711,6 +719,8 @@ mod tests {
     fn target() -> Target {
         Target {
             name: None,
+            compute_zone: None,
+            node_group: None,
             ip: "10.0.0.1".parse().expect("IP address"),
             port: None,
             mac: "00:11:22:33:44:55".to_string(),

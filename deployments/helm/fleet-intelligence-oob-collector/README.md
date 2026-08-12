@@ -103,10 +103,7 @@ does not match the chart version.
 The OOB TOML declares shared NICo labels once and defines one or more machines:
 
 ```toml
-[labels]
-# These keys have special meaning in Fleet Intelligence: they assign node
-# placement, are exported as inventory computeZone/nodeGroup, and are also
-# emitted on NICo telemetry.
+# Fleet Intelligence placement defaults. Machines can override these fields.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
@@ -140,12 +137,10 @@ The machine `name` is optional. When present, the collector includes it as the
 top-level `name` in inventory uploads and adds it to NICo metrics and logs as
 the reserved `machine_name` label.
 
-When a machine's effective labels include `compute_zone` or `node_group`, the
-collector treats them as Fleet Intelligence placement metadata and exports them
-as the inventory `computeZone` and `nodeGroup` fields. Values in `[labels]` are
-inherited by all machines; a value in `machines[].labels` overrides the shared
-value for that machine. Other custom labels remain telemetry labels and are not
-promoted to Fleet Intelligence placement fields.
+Top-level `compute_zone` and `node_group` values are inherited by every machine.
+A machine can override either field directly. The collector exports the values
+as inventory `computeZone` and `nodeGroup` and mirrors them to NICo telemetry as
+`compute_zone` and `node_group`. Custom labels remain telemetry-only.
 
 An init container translates the generic config into NICo static endpoints and
 marks every endpoint as a machine. NICo then emits the shared labels and the

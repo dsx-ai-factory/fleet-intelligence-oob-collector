@@ -15,6 +15,8 @@ pub struct TableSink {
 #[derive(Debug)]
 struct SummaryRow {
     name: String,
+    compute_zone: String,
+    node_group: String,
     mac: String,
     address: String,
     host_name: String,
@@ -159,6 +161,8 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
     let mut out = render_table(
         &[
             "Name",
+            "Compute Zone",
+            "Node Group",
             "MAC",
             "Address",
             "Host Name",
@@ -191,6 +195,8 @@ impl From<&NodeInventory> for SummaryRow {
     fn from(inventory: &NodeInventory) -> Self {
         Self {
             name: inventory.name.clone().unwrap_or_default(),
+            compute_zone: inventory.compute_zone.clone().unwrap_or_default(),
+            node_group: inventory.node_group.clone().unwrap_or_default(),
             mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
             host_name: inventory.source.host_name.clone().unwrap_or_default(),
@@ -215,9 +221,11 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 16] {
+    fn values(&self) -> [String; 18] {
         [
             self.name.clone(),
+            self.compute_zone.clone(),
+            self.node_group.clone(),
             self.mac.clone(),
             self.address.clone(),
             self.host_name.clone(),
@@ -797,6 +805,9 @@ mod tests {
 
         let row = SummaryRow::from(&inventory);
 
+        assert_eq!(row.name, "node-01");
+        assert_eq!(row.compute_zone, "us-west-dc1");
+        assert_eq!(row.node_group, "gb200-training");
         assert_eq!(row.source_type, "redfish");
         assert_eq!(row.host_name, "bmc-a.example.com");
         assert_eq!(row.redfish_version, "1.15.1");
@@ -908,6 +919,8 @@ mod tests {
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
             name: Some("node-01".to_string()),
+            compute_zone: Some("us-west-dc1".to_string()),
+            node_group: Some("gb200-training".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
