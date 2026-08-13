@@ -13,6 +13,12 @@ pub struct NodeInventory {
     pub schema_version: String,
     pub collected_at: String,
     pub enrolled_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_group: Option<String>,
     pub uuid: Option<InventoryUuid>,
     pub source: InventorySourceInfo,
     pub primary_system_id: Option<String>,

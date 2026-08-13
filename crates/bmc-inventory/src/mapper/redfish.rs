@@ -77,6 +77,9 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                 schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                 collected_at,
                 enrolled_at: None,
+                name: target.name,
+                compute_zone: target.compute_zone,
+                node_group: target.node_group,
                 uuid: Some(node_uuid.clone()),
                 source,
                 primary_system_id: primary_system_id.clone(),
@@ -111,6 +114,9 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at,
             enrolled_at: None,
+            name: target.name,
+            compute_zone: target.compute_zone,
+            node_group: target.node_group,
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
@@ -336,6 +342,45 @@ mod tests {
             inventory.source.host_name.as_deref(),
             Some("bmc-a.example.com")
         );
+    }
+
+    #[test]
+    fn maps_configured_machine_name_for_success_and_failure() {
+        let mut successful_target = target();
+        successful_target.name = Some("node-01".to_string());
+        successful_target.compute_zone = Some("us-west-dc1".to_string());
+        successful_target.node_group = Some("gb200-training".to_string());
+        let successful = map_record(
+            SourceRecord {
+                target: successful_target,
+                collected_at: collected_at(),
+                result: Ok(RedfishReport {
+                    service_root: ServiceRootData::default(),
+                    managers: Vec::new(),
+                    systems: Vec::new(),
+                    chassis: Vec::new(),
+                    firmware: Vec::new(),
+                    errors: Vec::new(),
+                }),
+            },
+            None,
+        );
+
+        let mut failed_target = target();
+        failed_target.name = Some("node-02".to_string());
+        let failed = map_record(
+            SourceRecord {
+                target: failed_target,
+                collected_at: collected_at(),
+                result: Err("unreachable".to_string()),
+            },
+            None,
+        );
+
+        assert_eq!(successful.name.as_deref(), Some("node-01"));
+        assert_eq!(successful.compute_zone.as_deref(), Some("us-west-dc1"));
+        assert_eq!(successful.node_group.as_deref(), Some("gb200-training"));
+        assert_eq!(failed.name.as_deref(), Some("node-02"));
     }
 
     #[test]
@@ -673,6 +718,9 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            name: None,
+            compute_zone: None,
+            node_group: None,
             ip: "10.0.0.1".parse().expect("IP address"),
             port: None,
             mac: "00:11:22:33:44:55".to_string(),

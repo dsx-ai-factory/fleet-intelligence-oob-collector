@@ -404,12 +404,7 @@ async fn collect_and_upload_inventory(
             .iter()
             .map(|target| target.mac.clone()),
     )?;
-    let machine_labels: bmc_inventory::sink::MachineLabels = collector_config
-        .targets
-        .iter()
-        .map(|target| (target.mac.to_ascii_lowercase(), target.labels.clone()))
-        .collect();
-    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), machine_labels)?;
+    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
@@ -970,6 +965,9 @@ mod tests {
             schema_version: bmc_inventory::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            name: None,
+            compute_zone: None,
+            node_group: None,
             uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
