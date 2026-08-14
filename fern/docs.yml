@@ -1,0 +1,46 @@
+instances:
+  - url: fleet-intel.docs.buildwithfern.com/fleet-intel/oob-collector
+    custom-domain: docs.nvidia.com/fleet-intel/oob-collector
+    multi-source: true
+
+title: NVIDIA Fleet Intelligence Out-of-Band Collector
+
+global-theme: nvidia
+
+metadata:
+  canonical-host: "docs.nvidia.com/fleet-intel/oob-collector"
+
+# HEAD navigation — used by fern check (PRs) and fern docs dev (local preview).
+# The publish workflow replaces this block with a versioned `versions:` list
+# built from release tags at publish time. Do not edit the versions: block here;
+# it is entirely CI-managed. Update this navigation: block when pages are added
+# or removed from docs/.
+navigation:
+  - page: Installation
+    path: ../docs/installation.md
+    slug: installation
+  - page: Configuration
+    path: ../docs/configuration.md
+    slug: configuration
+  - page: Architecture
+    path: ../docs/architecture.md
+    slug: architecture
+
+redirects:
+  - source: "/fleet-intel/oob-collector/index.html"
+    destination: "/fleet-intel/oob-collector/"
+
+logo:
+  href: /fleet-intel/oob-collector
+  right-text: Fleet Intelligence OOB Collector
+
+navbar-links:
+  - type: secondary
+    text: Fleet Intelligence Docs
+    url: https://docs.nvidia.com/fleet-intel
+  - type: github
+    value: https://github.com/NVIDIA/fleet-intelligence-oob-collector
+
+experimental:
+  mdx-components:
+    - ./components
