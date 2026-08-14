@@ -31,7 +31,7 @@ on:
         description: >
           Fall back to RC tags for version groups with no stable release yet.
         type: boolean
-        default: false
+        default: true
     secrets:
       DOCS_FERN_TOKEN:
         required: true
@@ -43,7 +43,7 @@ on:
           Use before v1.0.0 stable to publish preview docs. Has no effect once
           a stable tag exists for the same major.minor group.
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
