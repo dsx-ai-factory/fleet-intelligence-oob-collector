@@ -62,7 +62,7 @@ PAGE_ORDER = [
 def get_title(filename: str) -> str:
     if filename in TITLE_MAP:
         return TITLE_MAP[filename]
-    return filename.removesuffix(".md").replace("-", " ").title()
+    return Path(filename).stem.replace("-", " ").title()
 
 
 def sort_files(files: list[str]) -> list[str]:
@@ -178,17 +178,19 @@ def fetch_version(version_label: str, tag: str) -> list[str]:
         check=True,
     )
     with tarfile.open(fileobj=io.BytesIO(archive_result.stdout)) as tar:
-        tar.extractall(content_dir)
+        tar.extractall(content_dir, filter="data")
 
-    # git archive preserves the docs/ prefix — flatten it
+    # git archive preserves the docs/ prefix — flatten it, keeping any
+    # subdirectory structure relative to docs/
     docs_subdir = content_dir / "docs"
     md_files: list[str] = []
     if docs_subdir.is_dir():
-        for src in docs_subdir.iterdir():
-            if src.suffix == ".md":
-                dest = content_dir / src.name
-                dest.write_text(fix_mdx(src.read_text()))
-                md_files.append(src.name)
+        for src in sorted(docs_subdir.rglob("*.md")):
+            rel = src.relative_to(docs_subdir)
+            dest = content_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(fix_mdx(src.read_text(encoding="utf-8")), encoding="utf-8")
+            md_files.append(rel.as_posix())
         shutil.rmtree(docs_subdir)
 
     return sort_files(md_files)

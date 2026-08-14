@@ -50,7 +50,7 @@ permissions:
 
 concurrency:
   group: fern-publish
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -79,46 +79,14 @@ jobs:
           fi
           npm install -g "fern-api@${VERSION}"
 
-      - name: Fetch versioned docs from tags
-        run: |
-          ARGS=""
-          if [ "${{ inputs.include_rc }}" = "true" ]; then
-            ARGS="--include-rc"
-          fi
-          python3 scripts/docs-fetch-versions.py $ARGS
-
-      - name: Patch fern/docs.yml for versioned publish
+      - name: Fetch and patch versioned docs from tags
         run: |
           cp fern/docs.yml fern/docs.yml.bak
-          python3 - <<'PYEOF'
-          import json, re
-          from pathlib import Path
-
-          manifest = json.loads(Path("fern/versions/manifest.json").read_text())
-
-          versions_lines = ["versions:"]
-          for v in manifest:
-              versions_lines += [
-                  f'  - display-name: "{v["display_name"]}"',
-                  f'    path: {v["nav_path"]}',
-                  f'    slug: "{v["slug"]}"',
-              ]
-          versions_block = "\n".join(versions_lines) + "\n"
-
-          content = Path("fern/docs.yml").read_text()
-          # Replace the navigation: block (HEAD mode) with versions: (publish mode)
-          patched, count = re.subn(
-              r"^navigation:(\n  .*)*\n",
-              versions_block,
-              content,
-              flags=re.MULTILINE,
-          )
-          if count != 1:
-              raise RuntimeError(
-                  f"Expected exactly one top-level navigation: block in fern/docs.yml, found {count}"
-              )
-          Path("fern/docs.yml").write_text(patched)
-          PYEOF
+          ARGS="--patch-fern-docs"
+          if [ "${{ inputs.include_rc }}" = "true" ]; then
+            ARGS="$ARGS --include-rc"
+          fi
+          python3 scripts/docs-fetch-versions.py $ARGS
 
       - name: Publish docs
         env:

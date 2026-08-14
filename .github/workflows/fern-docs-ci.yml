@@ -62,6 +62,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-tags: true
+          persist-credentials: false
 
       ## --- OPTION: filename convention check (warning) ---
       # - name: Warn on non-lowercase or underscore markdown filenames
@@ -100,7 +101,8 @@ jobs:
           npm install -g "fern-api@${VERSION}"
 
       - name: Generate versioned docs
-        run: python3 scripts/docs-fetch-versions.py --patch-fern-docs
+        # No v1.0.0 stable tag exists yet, so fall back to RC content.
+        run: python3 scripts/docs-fetch-versions.py --include-rc --patch-fern-docs
 
       - name: Fern check
         run: fern check
