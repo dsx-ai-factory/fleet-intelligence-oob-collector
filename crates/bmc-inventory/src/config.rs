@@ -491,6 +491,7 @@ pub fn render_nico_config(
             },
         },
         sinks: NicoSinks {
+            tracing: NicoEnabled { enabled: true },
             health_report: NicoEnabled { enabled: false },
             rack_health_report: NicoEnabled { enabled: false },
             switch_health_report: NicoEnabled { enabled: false },
@@ -561,6 +562,10 @@ struct NicoLogsCollector {
 
 #[derive(Serialize)]
 struct NicoSinks<'a> {
+    /// NICo defaults this sink off, which leaves collected health results with
+    /// no path to its own logs: the OTLP sink carries alert details only, so a
+    /// cycle that finds no alerts emits nothing observable.
+    tracing: NicoEnabled,
     health_report: NicoEnabled,
     rack_health_report: NicoEnabled,
     switch_health_report: NicoEnabled,
@@ -1144,6 +1149,28 @@ mod tests {
         assert_eq!(
             rendered["collectors"]["logs"]["mode"].as_str(),
             Some("auto")
+        );
+    }
+
+    #[test]
+    fn rendered_nico_config_enables_tracing_sink() {
+        let collector = parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered =
+            render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["sinks"]["tracing"]["enabled"].as_bool(),
+            Some(true)
         );
     }
 
