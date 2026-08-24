@@ -24,7 +24,7 @@ ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="Fleet Intelligence OOB Collector" \
       org.opencontainers.image.description="Out-of-band BMC inventory and attestation collector" \
-      org.opencontainers.image.source="https://github.com/NVIDIA/fleet-intelligence-oob-collector" \
+      org.opencontainers.image.source="https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
       org.opencontainers.image.licenses="Apache-2.0"

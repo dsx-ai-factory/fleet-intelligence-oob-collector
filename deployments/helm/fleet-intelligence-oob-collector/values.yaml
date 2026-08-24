@@ -19,7 +19,7 @@ credentials:
 # Fleet Intelligence BMC inventory and attestation collector.
 bmcCollector:
   image:
-    repository: ghcr.io/nvidia/fleet-intelligence-oob-collector
+    repository: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
     # Defaults to the chart version when empty.
     tag: ""
     pullPolicy: IfNotPresent
@@ -57,7 +57,7 @@ nicoHardwareHealth:
   otlpEndpoint: ""
   metricsPrefix: fleetint
   image:
-    repository: ghcr.io/nvidia/nico-hardware-health
+    repository: ghcr.io/dsx-ai-factory/nico-hardware-health
     # Defaults to the chart version when empty.
     tag: ""
     pullPolicy: IfNotPresent
@@ -73,7 +73,7 @@ otelGateway:
   enabled: true
   image:
     repository: ghcr.io/nvidia/fleetint-otelcol
-    tag: 0.0.2-poc.otelgateway
+    tag: 1.4.0
     pullPolicy: IfNotPresent
   replicas: 1
   terminationGracePeriodSeconds: 30

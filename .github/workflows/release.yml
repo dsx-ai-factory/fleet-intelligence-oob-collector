@@ -13,11 +13,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/nvidia/fleet-intelligence-oob-collector
-  NICO_IMAGE: ghcr.io/nvidia/nico-hardware-health
+  IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
+  NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   NICO_SOURCE_REF: a76c3c56baab6385e3198494569f78441dbc6bca
-  CHART_REGISTRY: oci://ghcr.io/nvidia/charts
+  CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
   validate:

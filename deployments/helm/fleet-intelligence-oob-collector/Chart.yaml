@@ -4,8 +4,8 @@ description: Fleet Intelligence out-of-band collector
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/NVIDIA/fleet-intelligence-oob-collector
+home: https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector
 sources:
-  - https://github.com/NVIDIA/fleet-intelligence-oob-collector
+  - https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector
 annotations:
-  org.opencontainers.image.source: https://github.com/NVIDIA/fleet-intelligence-oob-collector
+  org.opencontainers.image.source: https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector

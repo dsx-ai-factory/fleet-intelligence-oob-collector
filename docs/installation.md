@@ -87,7 +87,7 @@ Kubernetes nodes pull the deployed images.
 export OOB_CHART_VERSION=0.1.0
 
 helm upgrade --install fleet-intelligence-oob-collector \
-  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
   --version "$OOB_CHART_VERSION" \
   --values /path/to/credentials-values.yaml \
   --namespace fleet-intelligence \
