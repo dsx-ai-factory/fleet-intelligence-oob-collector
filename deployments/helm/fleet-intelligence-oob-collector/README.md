@@ -81,7 +81,7 @@ OpenTelemetry gateway uses its independently pinned image tag.
 export OOB_CHART_VERSION=0.1.0
 
 helm upgrade --install fleet-intelligence-oob-collector \
-  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
   --version "$OOB_CHART_VERSION" \
   --values /path/to/credentials-values.yaml \
   --namespace fleet-intelligence \
@@ -197,7 +197,7 @@ is needed. It can be disabled when only inventory and attestation are needed:
 
 ```bash
 helm upgrade --install fleet-intelligence-oob-collector \
-  oci://ghcr.io/nvidia/charts/fleet-intelligence-oob-collector \
+  oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
   --version 0.1.0 \
   --set nicoHardwareHealth.enabled=false \
   --set otelGateway.enabled=false
@@ -208,10 +208,10 @@ cycle. When `nicoHardwareHealth.enabled=true`, restart the NICo Deployment
 after changing the Secret so its init container regenerates the pod-local
 configuration. Skip the restart when NICo is disabled.
 
-The service image is `ghcr.io/nvidia/nico-hardware-health`; its tag defaults to
+The service image is `ghcr.io/dsx-ai-factory/nico-hardware-health`; its tag defaults to
 the chart version. By default, NICo sends OTLP/gRPC to a separate gateway
 Deployment and ClusterIP Service running
-`ghcr.io/nvidia/fleetint-otelcol:0.0.2-poc.otelgateway`. The gateway reuses
+`ghcr.io/nvidia/fleetint-otelcol:1.4.0`. The gateway reuses
 `bmcCollector.backendUrl` and the `agent-token` Secret to authenticate to the
 Fleet Intelligence telemetry API. Its NetworkPolicy accepts OTLP only from
 workloads in the same Helm release when supported by the cluster CNI.
