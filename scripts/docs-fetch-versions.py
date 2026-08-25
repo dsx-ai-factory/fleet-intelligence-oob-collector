@@ -91,7 +91,7 @@ def fix_mdx(content: str) -> str:
             # Cross-directory CONTRIBUTING link
             line = line.replace(
                 "../CONTRIBUTING.md",
-                "https://github.com/NVIDIA/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md",
+                "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md",
             )
         result.append(line)
     return "\n".join(result)

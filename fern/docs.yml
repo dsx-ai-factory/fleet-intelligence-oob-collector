@@ -39,7 +39,7 @@ navbar-links:
     text: Fleet Intelligence Docs
     url: https://docs.nvidia.com/fleet-intel
   - type: github
-    value: https://github.com/NVIDIA/fleet-intelligence-oob-collector
+    value: https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector
 
 experimental:
   mdx-components:
