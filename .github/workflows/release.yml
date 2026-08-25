@@ -301,3 +301,10 @@ jobs:
             --app-version "$VERSION" \
             --destination dist
           helm push "dist/fleet-intelligence-oob-collector-${VERSION}.tgz" "$CHART_REGISTRY"
+
+  publish-docs:
+    name: Publish Fern docs
+    needs: publish-chart
+    uses: ./.github/workflows/publish-fern-docs.yml
+    secrets:
+      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
