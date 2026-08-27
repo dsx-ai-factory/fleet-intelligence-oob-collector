@@ -606,20 +606,16 @@ fn stamp_enrolled_at(inventories: &mut [NodeInventory], enrolled_at: &str) {
 }
 
 async fn upload_inventory(
-    sink: InventoryBackendSink,
-    inventories: Arc<Vec<NodeInventory>>,
+    sink: &InventoryBackendSink,
+    inventories: &[NodeInventory],
 ) -> Result<BackendBatchOutcome, UploadError> {
-    tokio::task::spawn_blocking(move || {
-        sink.write_batch(inventories.as_slice()).map_err(|err| {
-            if is_auth_failure(err.as_ref()) {
-                UploadError::AuthFailure(err.to_string())
-            } else {
-                UploadError::Other(err.to_string())
-            }
-        })
+    sink.write_batch(inventories).await.map_err(|err| {
+        if is_auth_failure(err.as_ref()) {
+            UploadError::AuthFailure(err.to_string())
+        } else {
+            UploadError::Other(err.to_string())
+        }
     })
-    .await
-    .map_err(|err| UploadError::Other(err.to_string()))?
 }
 
 async fn receive_inventory_batch(
@@ -652,11 +648,7 @@ async fn upload_inventory_batch(
     mut inventories: Vec<NodeInventory>,
 ) -> Result<(Vec<NodeInventory>, Result<BackendBatchOutcome, UploadError>), Box<dyn Error>> {
     stamp_enrolled_at(&mut inventories, session.enrolled_at());
-    let inventories = Arc::new(inventories);
-    let mut result = upload_inventory(sink.clone(), Arc::clone(&inventories)).await;
-
-    let mut inventories =
-        Arc::try_unwrap(inventories).expect("upload task released its inventory reference");
+    let mut result = upload_inventory(sink, &inventories).await;
     if let Err(UploadError::AuthFailure(message)) = &result {
         tracing::warn!(
             error = %message,
@@ -665,10 +657,7 @@ async fn upload_inventory_batch(
         session.reenroll().await?;
         sink.set_jwt(session.jwt());
         stamp_enrolled_at(&mut inventories, session.enrolled_at());
-        let retry_inventories = Arc::new(inventories);
-        result = upload_inventory(sink.clone(), Arc::clone(&retry_inventories)).await;
-        inventories = Arc::try_unwrap(retry_inventories)
-            .expect("upload task released its inventory reference");
+        result = upload_inventory(sink, &inventories).await;
     }
 
     Ok((inventories, result))
