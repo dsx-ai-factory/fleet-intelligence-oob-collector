@@ -8,8 +8,6 @@ use serde::ser::{SerializeMap, Serializer};
 
 use crate::models::NodeInventory;
 
-use super::InventorySink;
-
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
@@ -45,25 +43,17 @@ where
     C: BackendClient,
 {
     /// Write a batch and preserve the backend's result for each node.
-    pub fn write_batch(
+    pub async fn write_batch(
         &self,
         inventories: &[NodeInventory],
     ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
-        self.client.put_inventory(inventories)
+        self.client.put_inventory(inventories).await
     }
 }
 
-impl<C> InventorySink for BackendSink<C>
-where
-    C: BackendClient,
-{
-    fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.write_batch(inventories)?.into_result()
-    }
-}
-
+#[async_trait::async_trait(?Send)]
 pub trait BackendClient {
-    fn put_inventory(
+    async fn put_inventory(
         &self,
         inventories: &[NodeInventory],
     ) -> Result<BackendBatchOutcome, Box<dyn Error>>;
@@ -73,7 +63,7 @@ pub trait BackendClient {
 pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 impl HttpBackendClient {
@@ -103,15 +93,16 @@ impl HttpBackendClient {
         })
     }
 
-    pub fn enroll(endpoint: &str, agent_token: &str) -> Result<String, Box<dyn Error>> {
+    pub async fn enroll(endpoint: &str, agent_token: &str) -> Result<String, Box<dyn Error>> {
         Self::enroll_with_timeout(
             endpoint,
             agent_token,
             Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
         )
+        .await
     }
 
-    pub fn enroll_with_timeout(
+    pub async fn enroll_with_timeout(
         endpoint: &str,
         agent_token: &str,
         request_timeout: Duration,
@@ -126,12 +117,13 @@ impl HttpBackendClient {
         let client = backend_http_client(request_timeout)?;
         let response = backend_request(&client, reqwest::Method::POST, endpoint)
             .bearer_auth(agent_token)
-            .send()?;
+            .send()
+            .await?;
         let status = response.status();
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
@@ -139,7 +131,7 @@ impl HttpBackendClient {
                 request_id,
             )));
         }
-        let response: EnrollResponse = response.json()?;
+        let response: EnrollResponse = response.json().await?;
 
         if response.jwt_assertion.trim().is_empty() {
             return Err("enrollment response missing jwtAssertion field".into());
@@ -153,10 +145,8 @@ impl HttpBackendClient {
     }
 }
 
-fn backend_http_client(
-    request_timeout: Duration,
-) -> Result<reqwest::blocking::Client, reqwest::Error> {
-    reqwest::blocking::Client::builder()
+fn backend_http_client(request_timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
         .timeout(request_timeout)
         .connect_timeout(
             request_timeout.min(Duration::from_secs(DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS)),
@@ -165,16 +155,16 @@ fn backend_http_client(
 }
 
 fn backend_request(
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     method: reqwest::Method,
     endpoint: &str,
-) -> reqwest::blocking::RequestBuilder {
+) -> reqwest::RequestBuilder {
     client
         .request(method, endpoint)
         .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
 }
 
-fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option<String> {
+fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
     response
         .headers()
         .get(name)
@@ -182,20 +172,22 @@ fn response_header(response: &reqwest::blocking::Response, name: &str) -> Option
         .map(str::to_string)
 }
 
+#[async_trait::async_trait(?Send)]
 impl BackendClient for HttpBackendClient {
-    fn put_inventory(
+    async fn put_inventory(
         &self,
         inventories: &[NodeInventory],
     ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(inventories))
-            .send()?;
+            .send()
+            .await?;
         let status = response.status();
         if !status.is_success() {
             let server = response_header(&response, reqwest::header::SERVER.as_str());
             let request_id = response_header(&response, "x-request-id");
-            let body = response.text().unwrap_or_default();
+            let body = response.text().await.unwrap_or_default();
             return Err(Box::new(BackendHttpError::with_metadata(
                 status.as_u16(),
                 body,
@@ -204,7 +196,7 @@ impl BackendClient for HttpBackendClient {
             )));
         }
 
-        let response: BatchUpsertResponse = response.json()?;
+        let response: BatchUpsertResponse = response.json().await?;
         Ok(BackendBatchOutcome {
             results: response.results,
         })
@@ -242,19 +234,6 @@ impl BackendBatchOutcome {
     /// Whether the backend accepted the node with the supplied UUID.
     pub fn node_succeeded(&self, node_uuid: &str) -> bool {
         self.node_outcome(node_uuid) == BackendNodeOutcome::Succeeded
-    }
-
-    fn into_result(self) -> Result<(), Box<dyn Error>> {
-        let failures = self
-            .results
-            .into_iter()
-            .filter(|result| !result.status.eq_ignore_ascii_case("OK"))
-            .collect::<Vec<_>>();
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(Box::new(BackendUpsertError { failures }))
-        }
     }
 }
 
@@ -456,36 +435,6 @@ struct NodeUpsertResult {
     message: Option<String>,
 }
 
-#[derive(Debug)]
-struct BackendUpsertError {
-    failures: Vec<NodeUpsertResult>,
-}
-
-impl fmt::Display for BackendUpsertError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "backend rejected {} inventory item(s)",
-            self.failures.len()
-        )?;
-        for failure in self.failures.iter().take(3) {
-            write!(
-                f,
-                "; nodeUUID={} status={} message={}",
-                failure.node_uuid.as_deref().unwrap_or("<missing>"),
-                failure.status,
-                failure.message.as_deref().unwrap_or("")
-            )?;
-        }
-        if self.failures.len() > 3 {
-            write!(f, "; ...")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for BackendUpsertError {}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -510,15 +459,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn backend_sink_puts_node_inventory_batch() {
+    #[tokio::test]
+    async fn backend_sink_puts_node_inventory_batch() {
         let put_batches = Rc::new(RefCell::new(Vec::new()));
         let sink = BackendSink::with_client(RecordingClient {
             put_batches: Rc::clone(&put_batches),
         });
 
-        sink.write(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
-            .expect("write");
+        sink.write_batch(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
+            .await
+            .expect("write batch");
 
         let put_batches = put_batches.borrow();
         assert_eq!(put_batches.len(), 1);
@@ -591,22 +541,6 @@ mod tests {
     }
 
     #[test]
-    fn backend_error_summarizes_failed_items() {
-        let err = BackendUpsertError {
-            failures: vec![NodeUpsertResult {
-                node_uuid: None,
-                status: "MISSING_UUID".to_string(),
-                message: Some("item missing top-level uuid".to_string()),
-            }],
-        };
-
-        assert_eq!(
-            err.to_string(),
-            "backend rejected 1 inventory item(s); nodeUUID=<missing> status=MISSING_UUID message=item missing top-level uuid"
-        );
-    }
-
-    #[test]
     fn batch_outcome_distinguishes_success_rejection_and_missing_rows() {
         let outcome = BackendBatchOutcome {
             results: vec![
@@ -634,20 +568,6 @@ mod tests {
             }
         );
         assert_eq!(outcome.node_outcome("missing"), BackendNodeOutcome::Missing);
-        assert!(outcome.into_result().is_err());
-    }
-
-    #[test]
-    fn batch_outcome_accepts_case_insensitive_success_status() {
-        let outcome = BackendBatchOutcome {
-            results: vec![NodeUpsertResult {
-                node_uuid: Some("node-1".to_string()),
-                status: "ok".to_string(),
-                message: None,
-            }],
-        };
-
-        outcome.into_result().expect("lowercase success status");
     }
 
     #[test]
@@ -676,6 +596,14 @@ mod tests {
         sink.set_jwt("new-jwt");
 
         assert_eq!(sink.client.jwt, "new-jwt");
+    }
+
+    #[tokio::test]
+    async fn backend_sink_can_be_created_and_dropped_in_async_context() {
+        let sink = BackendSink::new("https://backend.example.com/v1/agent/oob_nodes", "jwt")
+            .expect("sink");
+
+        drop(sink);
     }
 
     #[test]
@@ -712,8 +640,9 @@ mod tests {
         put_batches: Rc<RefCell<Vec<Vec<String>>>>,
     }
 
+    #[async_trait::async_trait(?Send)]
     impl BackendClient for RecordingClient {
-        fn put_inventory(
+        async fn put_inventory(
             &self,
             inventories: &[NodeInventory],
         ) -> Result<BackendBatchOutcome, Box<dyn Error>> {

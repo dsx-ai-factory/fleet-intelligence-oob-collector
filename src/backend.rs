@@ -118,14 +118,7 @@ async fn enroll_once(
     enroll_endpoint: &str,
     agent_token: &str,
 ) -> Result<Enrollment, Box<dyn Error>> {
-    let enroll_endpoint = enroll_endpoint.to_string();
-    let agent_token = agent_token.to_string();
-    let jwt = tokio::task::spawn_blocking(move || {
-        InventoryHttpBackendClient::enroll(&enroll_endpoint, &agent_token)
-            .map_err(|err| err.to_string())
-    })
-    .await?
-    .map_err(|err| -> Box<dyn Error> { err.into() })?;
+    let jwt = InventoryHttpBackendClient::enroll(enroll_endpoint, agent_token).await?;
     Ok(Enrollment {
         jwt,
         enrolled_at: now_rfc3339(),
