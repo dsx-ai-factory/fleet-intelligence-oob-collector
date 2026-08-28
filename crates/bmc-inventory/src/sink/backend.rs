@@ -49,10 +49,6 @@ where
     ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         self.client.put_inventory(inventories).await
     }
-
-    pub async fn write(&self, inventories: &[NodeInventory]) -> Result<(), Box<dyn Error>> {
-        self.write_batch(inventories).await?.into_result()
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -238,19 +234,6 @@ impl BackendBatchOutcome {
     /// Whether the backend accepted the node with the supplied UUID.
     pub fn node_succeeded(&self, node_uuid: &str) -> bool {
         self.node_outcome(node_uuid) == BackendNodeOutcome::Succeeded
-    }
-
-    fn into_result(self) -> Result<(), Box<dyn Error>> {
-        let failures = self
-            .results
-            .into_iter()
-            .filter(|result| !result.status.eq_ignore_ascii_case("OK"))
-            .collect::<Vec<_>>();
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(Box::new(BackendUpsertError { failures }))
-        }
     }
 }
 
@@ -452,36 +435,6 @@ struct NodeUpsertResult {
     message: Option<String>,
 }
 
-#[derive(Debug)]
-struct BackendUpsertError {
-    failures: Vec<NodeUpsertResult>,
-}
-
-impl fmt::Display for BackendUpsertError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "backend rejected {} inventory item(s)",
-            self.failures.len()
-        )?;
-        for failure in self.failures.iter().take(3) {
-            write!(
-                f,
-                "; nodeUUID={} status={} message={}",
-                failure.node_uuid.as_deref().unwrap_or("<missing>"),
-                failure.status,
-                failure.message.as_deref().unwrap_or("")
-            )?;
-        }
-        if self.failures.len() > 3 {
-            write!(f, "; ...")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for BackendUpsertError {}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -513,9 +466,9 @@ mod tests {
             put_batches: Rc::clone(&put_batches),
         });
 
-        sink.write(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
+        sink.write_batch(&[inventory("10.0.0.1"), inventory("10.0.0.2")])
             .await
-            .expect("write");
+            .expect("write batch");
 
         let put_batches = put_batches.borrow();
         assert_eq!(put_batches.len(), 1);
@@ -588,22 +541,6 @@ mod tests {
     }
 
     #[test]
-    fn backend_error_summarizes_failed_items() {
-        let err = BackendUpsertError {
-            failures: vec![NodeUpsertResult {
-                node_uuid: None,
-                status: "MISSING_UUID".to_string(),
-                message: Some("item missing top-level uuid".to_string()),
-            }],
-        };
-
-        assert_eq!(
-            err.to_string(),
-            "backend rejected 1 inventory item(s); nodeUUID=<missing> status=MISSING_UUID message=item missing top-level uuid"
-        );
-    }
-
-    #[test]
     fn batch_outcome_distinguishes_success_rejection_and_missing_rows() {
         let outcome = BackendBatchOutcome {
             results: vec![
@@ -631,20 +568,6 @@ mod tests {
             }
         );
         assert_eq!(outcome.node_outcome("missing"), BackendNodeOutcome::Missing);
-        assert!(outcome.into_result().is_err());
-    }
-
-    #[test]
-    fn batch_outcome_accepts_case_insensitive_success_status() {
-        let outcome = BackendBatchOutcome {
-            results: vec![NodeUpsertResult {
-                node_uuid: Some("node-1".to_string()),
-                status: "ok".to_string(),
-                message: None,
-            }],
-        };
-
-        outcome.into_result().expect("lowercase success status");
     }
 
     #[test]
