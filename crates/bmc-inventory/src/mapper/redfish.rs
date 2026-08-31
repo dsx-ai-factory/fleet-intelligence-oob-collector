@@ -234,12 +234,14 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
     ProcessorInventory {
         id: processor.id,
         odata_id: processor.odata_id,
+        uuid: processor.uuid,
         socket: processor.socket,
         processor_type: processor.processor_type,
         processor_architecture: processor.processor_architecture,
         instruction_set: processor.instruction_set,
         manufacturer: processor.manufacturer,
         model: processor.model,
+        serial_number: processor.serial_number,
         max_speed_mhz: processor.max_speed_mhz,
         total_cores: processor.total_cores,
         total_threads: processor.total_threads,
@@ -437,7 +439,15 @@ mod tests {
         );
         assert_eq!(system.processors.len(), 1);
         assert_eq!(system.processors[0].id, "CPU1");
+        assert_eq!(
+            system.processors[0].uuid.as_deref(),
+            Some("22222222-3333-4444-5555-666666666666")
+        );
         assert_eq!(system.processors[0].processor_type.as_deref(), Some("cpu"));
+        assert_eq!(
+            system.processors[0].serial_number.as_deref(),
+            Some("CPU-SN123")
+        );
         assert_eq!(system.processors[0].total_cores, Some(72));
     }
 
@@ -760,12 +770,14 @@ mod tests {
         ProcessorData {
             id: id.to_string(),
             odata_id: Some(format!("/redfish/v1/Systems/System/Processors/{id}")),
+            uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
             socket: Some("CPU Socket 1".to_string()),
             processor_type: Some("cpu".to_string()),
             processor_architecture: Some("ARM".to_string()),
             instruction_set: Some("ARM-A64".to_string()),
             manufacturer: Some("NVIDIA".to_string()),
             model: Some("Grace".to_string()),
+            serial_number: Some("CPU-SN123".to_string()),
             max_speed_mhz: Some(3600),
             total_cores: Some(72),
             total_threads: Some(72),

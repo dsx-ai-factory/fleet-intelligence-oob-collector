@@ -117,12 +117,14 @@ struct DeviceDetailRow {
 struct ProcessorDetailRow {
     system_id: String,
     id: String,
+    uuid: String,
     socket: String,
     processor_type: String,
     architecture: String,
     instruction_set: String,
     manufacturer: String,
     model: String,
+    serial: String,
     max_speed_mhz: String,
     total_cores: String,
     total_threads: String,
@@ -473,12 +475,14 @@ impl ProcessorDetailRow {
         Self {
             system_id: system.id.clone(),
             id: processor.id.clone(),
+            uuid: processor.uuid.clone().unwrap_or_default(),
             socket: processor.socket.clone().unwrap_or_default(),
             processor_type: processor.processor_type.clone().unwrap_or_default(),
             architecture: processor.processor_architecture.clone().unwrap_or_default(),
             instruction_set: processor.instruction_set.clone().unwrap_or_default(),
             manufacturer: processor.manufacturer.clone().unwrap_or_default(),
             model: processor.model.clone().unwrap_or_default(),
+            serial: processor.serial_number.clone().unwrap_or_default(),
             max_speed_mhz: processor
                 .max_speed_mhz
                 .map(|speed| speed.to_string())
@@ -497,16 +501,18 @@ impl ProcessorDetailRow {
         }
     }
 
-    fn values(&self) -> [String; 14] {
+    fn values(&self) -> [String; 16] {
         [
             self.system_id.clone(),
             self.id.clone(),
+            self.uuid.clone(),
             self.socket.clone(),
             self.processor_type.clone(),
             self.architecture.clone(),
             self.instruction_set.clone(),
             self.manufacturer.clone(),
             self.model.clone(),
+            self.serial.clone(),
             self.max_speed_mhz.clone(),
             self.total_cores.clone(),
             self.total_threads.clone(),
@@ -620,12 +626,14 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         &[
             "System",
             "ID",
+            "UUID",
             "Socket",
             "Type",
             "Arch",
             "Instruction",
             "Manufacturer",
             "Model",
+            "Serial",
             "Max MHz",
             "Cores",
             "Threads",
@@ -872,7 +880,9 @@ mod tests {
         assert!(rendered.contains("Grace CPU"));
         assert!(rendered.contains("Secure Boot"));
         assert!(rendered.contains("Processors\n"));
+        assert!(rendered.contains("22222222-3333-4444-5555-666666666666"));
         assert!(rendered.contains("CPU Socket 1"));
+        assert!(rendered.contains("CPU-SN123"));
         assert!(rendered.contains("Health Rollup"));
         assert!(rendered.contains("Chassis\n"));
         assert!(rendered.contains("| BMC_0 | module"));
@@ -955,12 +965,14 @@ mod tests {
                 processors: vec![ProcessorInventory {
                     id: "CPU1".to_string(),
                     odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
+                    uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
                     socket: Some("CPU Socket 1".to_string()),
                     processor_type: Some("cpu".to_string()),
                     processor_architecture: Some("ARM".to_string()),
                     instruction_set: Some("ARM-A64".to_string()),
                     manufacturer: Some("NVIDIA".to_string()),
                     model: Some("Grace CPU".to_string()),
+                    serial_number: Some("CPU-SN123".to_string()),
                     max_speed_mhz: Some(3600),
                     total_cores: Some(72),
                     total_threads: Some(72),

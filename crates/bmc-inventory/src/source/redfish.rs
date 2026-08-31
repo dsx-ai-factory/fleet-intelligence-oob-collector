@@ -416,6 +416,7 @@ async fn collect_processors<B: Bmc>(
         out.push(ProcessorData {
             id: processor.id().to_string(),
             odata_id: Some(processor.odata_id().to_string()),
+            uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             socket: raw.socket.clone().flatten(),
             processor_type: raw
                 .processor_type
@@ -429,6 +430,7 @@ async fn collect_processors<B: Bmc>(
             instruction_set: raw.instruction_set.clone().flatten(),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
+            serial_number: raw.serial_number.clone().flatten(),
             max_speed_mhz: raw.max_speed_mhz.flatten(),
             total_cores: raw.total_cores.flatten(),
             total_threads: raw.total_threads.flatten(),
@@ -883,12 +885,17 @@ mod tests {
             processor.odata_id.as_deref(),
             Some("/redfish/v1/Systems/System/Processors/CPU1")
         );
+        assert_eq!(
+            processor.uuid.as_deref(),
+            Some("22222222-3333-4444-5555-666666666666")
+        );
         assert_eq!(processor.socket.as_deref(), Some("CPU Socket 1"));
         assert_eq!(processor.processor_type.as_deref(), Some("cpu"));
         assert_eq!(processor.processor_architecture.as_deref(), Some("ARM"));
         assert_eq!(processor.instruction_set.as_deref(), Some("ARM-A64"));
         assert_eq!(processor.manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(processor.model.as_deref(), Some("Grace"));
+        assert_eq!(processor.serial_number.as_deref(), Some("CPU-SN123"));
         assert_eq!(processor.max_speed_mhz, Some(3600));
         assert_eq!(processor.total_cores, Some(72));
         assert_eq!(processor.total_threads, Some(72));
@@ -1269,6 +1276,8 @@ mod tests {
         "InstructionSet": "ARM-A64",
         "Manufacturer": "NVIDIA",
         "Model": "Grace",
+        "UUID": "22222222-3333-4444-5555-666666666666",
+        "SerialNumber": "CPU-SN123",
         "MaxSpeedMHz": 3600,
         "TotalCores": 72,
         "TotalThreads": 72,
