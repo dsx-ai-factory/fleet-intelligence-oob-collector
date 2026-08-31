@@ -15,6 +15,7 @@ release and use the sections that apply.
   release automation.
 - OCI Helm chart for deploying the collector with existing credential Secrets
   and hardened pod defaults.
+- Processor UUID and serial-number collection from Redfish inventory.
 
 ### Changed
 
