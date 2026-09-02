@@ -928,6 +928,7 @@ mod tests {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            kind: crate::models::TargetKind::Compute,
             name: Some("node-01".to_string()),
             compute_zone: Some("us-west-dc1".to_string()),
             node_group: Some("gb200-training".to_string()),

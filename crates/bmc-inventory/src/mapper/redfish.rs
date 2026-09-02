@@ -77,6 +77,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                 schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
                 collected_at,
                 enrolled_at: None,
+                kind: target.kind,
                 name: target.name,
                 compute_zone: target.compute_zone,
                 node_group: target.node_group,
@@ -114,6 +115,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at,
             enrolled_at: None,
+            kind: target.kind,
             name: target.name,
             compute_zone: target.compute_zone,
             node_group: target.node_group,
@@ -316,7 +318,7 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Target;
+    use crate::config::{Target, TargetKind};
     use crate::source::{
         ChassisData, FirmwareData, ManagerData, ProcessorData, RedfishReport, ServiceRootData,
         SourceRecord, SystemData,
@@ -728,6 +730,7 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            kind: TargetKind::Compute,
             name: None,
             compute_zone: None,
             node_group: None,

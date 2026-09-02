@@ -5,7 +5,7 @@ pub use inventory::{
     ChassisInventory, ChassisLocation, FirmwareInventory, InventorySourceInfo, ManagerInventory,
     PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
-pub use node::{DomainError, InventoryUuid, NodeInventory};
+pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 
 pub const INVENTORY_SCHEMA_VERSION: &str = "inventory.v1alpha1";
 
