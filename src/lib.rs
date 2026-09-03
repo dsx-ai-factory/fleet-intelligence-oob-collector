@@ -954,6 +954,7 @@ mod tests {
             schema_version: bmc_inventory::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            kind: bmc_inventory::models::TargetKind::Unknown,
             name: None,
             compute_zone: None,
             node_group: None,

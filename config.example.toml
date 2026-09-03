@@ -1,4 +1,4 @@
-# Fleet Intelligence placement; inherited by machines and mirrored to telemetry.
+# Fleet Intelligence placement; inherited by targets and mirrored to telemetry.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
@@ -7,7 +7,8 @@ node_group = "gb200-training"
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
-[[machines]]
+[[targets]]
+kind = "compute"
 # Optional: inventory `name` and telemetry `machine_name`.
 name = "node-01"
 ip = "10.0.0.10"
@@ -15,9 +16,16 @@ ip = "10.0.0.10"
 mac = "aa:bb:cc:dd:ee:ff"
 labels = { rack = "rack-12" }
 
-[[machines]]
-name = "node-02"
+[[targets]]
+kind = "nvswitch"
+name = "switch-tray-01"
 ip = "10.0.0.11"
-username_file = "/run/secrets/bmc/node-02/username"
-password_file = "/run/secrets/bmc/node-02/password"
+username_file = "/run/secrets/bmc/switch-tray-01/username"
+password_file = "/run/secrets/bmc/switch-tray-01/password"
+labels = { rack = "rack-12" }
+
+[[targets]]
+kind = "power_shelf"
+name = "power-shelf-01"
+ip = "10.0.0.12"
 labels = { rack = "rack-12" }

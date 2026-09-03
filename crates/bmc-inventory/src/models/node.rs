@@ -1,11 +1,22 @@
 use std::fmt;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use super::{
     ChassisInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory, SystemInventory,
 };
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    #[default]
+    Unknown,
+    Compute,
+    #[serde(rename = "nvswitch")]
+    NvSwitch,
+    PowerShelf,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +24,7 @@ pub struct NodeInventory {
     pub schema_version: String,
     pub collected_at: String,
     pub enrolled_at: Option<String>,
+    pub kind: TargetKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
