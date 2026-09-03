@@ -41,21 +41,24 @@ unavailable Redfish domains do not erase otherwise valid data.
 
 ## Documentation
 
-- [Installation](docs/installation.md)
-- [Configuration](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Contributing](CONTRIBUTING.md)
+Full documentation is available at **[docs.nvidia.com/fleet-intel/oob-collector](https://docs.nvidia.com/fleet-intel/oob-collector)**, including installation guides, configuration reference, and architecture overview.
+
+For the broader Fleet Intelligence platform documentation, see [docs.nvidia.com/fleet-intel](https://docs.nvidia.com/fleet-intel).
 
 Component-specific details are available in the
-[inventory collection notes](crates/bmc-inventory/README.md),
-[Helm chart reference](deployments/helm/fleet-intelligence-oob-collector/README.md),
-and [local observability guide](dev/local-observability/README.md).
+[inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md),
+[Helm chart reference](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
+and [local observability guide](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/dev/local-observability/README.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md) for development setup and guidelines.
 
 ## Security
 
-Do not report vulnerabilities in public issues. Follow
-[SECURITY.md](SECURITY.md) for private reporting instructions.
+Do not report vulnerabilities in public issues. Follow the
+[security policy](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private reporting instructions.
 
 ## License
 
-This project is licensed under Apache-2.0. See [LICENSE](LICENSE).
+This project is licensed under Apache-2.0. See [LICENSE](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE).
