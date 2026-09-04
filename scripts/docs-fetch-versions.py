@@ -83,7 +83,10 @@ def sort_files(files: list[str]) -> list[str]:
     return ordered + remaining
 
 
-def fix_mdx(content: str) -> str:
+REPO_URL = "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector"
+
+
+def fix_mdx(content: str, tag: str) -> str:
     """Apply MDX safety fixes to markdown content, skipping fenced code blocks."""
     lines = content.split("\n")
     in_code_block = False
@@ -103,8 +106,12 @@ def fix_mdx(content: str) -> str:
             # Cross-directory CONTRIBUTING link
             line = line.replace(
                 "../CONTRIBUTING.md",
-                "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md",
+                f"{REPO_URL}/blob/main/CONTRIBUTING.md",
             )
+            # Pin repo-relative GitHub links to the tag being staged, so a
+            # versioned page's links resolve to that release instead of
+            # drifting to whatever is on main today.
+            line = line.replace(f"{REPO_URL}/blob/main/", f"{REPO_URL}/blob/{tag}/")
         result.append(line)
     return "\n".join(result)
 
@@ -214,14 +221,14 @@ def fetch_version(version_label: str, tag: str) -> list[str]:
             rel = src.relative_to(docs_subdir)
             dest = content_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(fix_mdx(src.read_text(encoding="utf-8")), encoding="utf-8")
+            dest.write_text(fix_mdx(src.read_text(encoding="utf-8"), tag), encoding="utf-8")
             md_files.append(rel.as_posix())
         shutil.rmtree(docs_subdir)
 
     for src_name, dest_name in ROOT_PAGES:
         content = get_git_file(tag, src_name)
         if content is not None:
-            (content_dir / dest_name).write_text(fix_mdx(content), encoding="utf-8")
+            (content_dir / dest_name).write_text(fix_mdx(content, tag), encoding="utf-8")
             md_files.append(dest_name)
 
     return sort_files(md_files)
