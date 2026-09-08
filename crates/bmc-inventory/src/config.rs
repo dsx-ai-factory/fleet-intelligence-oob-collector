@@ -15,6 +15,7 @@ const OOB_LABEL_VALUE: &str = "true";
 const MACHINE_NAME_LABEL_NAME: &str = "machine_name";
 const COMPUTE_ZONE_LABEL_NAME: &str = "compute_zone";
 const NODE_GROUP_LABEL_NAME: &str = "node_group";
+pub const DEFAULT_NMX_C_PORT: u16 = 9370;
 const RESERVED_NICO_LABELS: &[&str] = &[
     "collector_type",
     "endpoint_ip",
@@ -38,7 +39,41 @@ const RESERVED_NICO_LABELS: &[&str] = &[
 
 #[derive(Clone, Debug)]
 pub struct CollectorConfig {
+    pub racks: Vec<Rack>,
     pub targets: Vec<Target>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rack {
+    pub id: String,
+    pub nmxc: Option<NmxcConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NmxcConfig {
+    pub ip: IpAddr,
+    pub port: u16,
+    pub ca_file: Option<PathBuf>,
+    pub client_cert_file: Option<PathBuf>,
+    pub client_key_file: Option<PathBuf>,
+    pub server_name: Option<String>,
+}
+
+impl NmxcConfig {
+    pub fn uses_tls(&self) -> bool {
+        self.ca_file.is_some()
+            || self.client_cert_file.is_some()
+            || self.client_key_file.is_some()
+            || self.server_name.is_some()
+    }
+
+    pub fn endpoint_url(&self) -> String {
+        let scheme = if self.uses_tls() { "https" } else { "http" };
+        match self.ip {
+            IpAddr::V4(ip) => format!("{scheme}://{ip}:{}", self.port),
+            IpAddr::V6(ip) => format!("{scheme}://[{ip}]:{}", self.port),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -47,6 +82,7 @@ pub struct Target {
     pub name: Option<String>,
     pub compute_zone: Option<String>,
     pub node_group: Option<String>,
+    pub rack_id: Option<String>,
     pub ip: IpAddr,
     pub port: Option<u16>,
     pub mac: String,
@@ -64,6 +100,7 @@ impl fmt::Debug for Target {
             .field("name", &self.name)
             .field("compute_zone", &self.compute_zone)
             .field("node_group", &self.node_group)
+            .field("rack_id", &self.rack_id)
             .field("mac", &self.mac)
             .field("address", &self.address)
             .field("username", &self.username)
@@ -85,9 +122,39 @@ struct Config {
     #[serde(default)]
     credentials: Option<FileCredentialConfig>,
     #[serde(default)]
+    racks: Vec<RawRackConfig>,
+    #[serde(default)]
     machines: Vec<RawTargetConfig>,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRackConfig {
+    id: String,
+    #[serde(default)]
+    nmxc: Option<RawNmxcConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNmxcConfig {
+    ip: IpAddr,
+    #[serde(default = "default_nmxc_port")]
+    port: u16,
+    #[serde(default)]
+    ca_file: Option<PathBuf>,
+    #[serde(default)]
+    client_cert_file: Option<PathBuf>,
+    #[serde(default)]
+    client_key_file: Option<PathBuf>,
+    #[serde(default)]
+    server_name: Option<String>,
+}
+
+fn default_nmxc_port() -> u16 {
+    DEFAULT_NMX_C_PORT
 }
 
 /// Paths containing a complete BMC username and password pair.
@@ -111,6 +178,8 @@ struct RawTargetConfig {
     compute_zone: Option<String>,
     #[serde(default)]
     node_group: Option<String>,
+    #[serde(default)]
+    rack_id: Option<String>,
     ip: IpAddr,
     #[serde(default)]
     port: Option<u16>,
@@ -141,9 +210,9 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
     let config: Config = toml::from_str(contents)
         .map_err(|error| format!("failed to parse TOML config {path}: {error}"))?;
 
-    if config.machines.is_empty() && config.targets.is_empty() {
+    if config.machines.is_empty() && config.targets.is_empty() && config.racks.is_empty() {
         return Err(format!(
-            "no BMC targets found in {path}; configure [[targets]] (legacy [[machines]] is also accepted)"
+            "no racks or BMC targets found in {path}; configure [[racks]] or [[targets]] (legacy [[machines]] is also accepted)"
         )
         .into());
     }
@@ -152,6 +221,15 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
     let default_compute_zone = normalize_config_value("compute_zone", config.compute_zone)?;
     let default_node_group = normalize_config_value("node_group", config.node_group)?;
     let config_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    let mut rack_ids = HashSet::new();
+    let mut racks = Vec::with_capacity(config.racks.len());
+    for (index, rack) in config.racks.into_iter().enumerate() {
+        let rack = rack.into_rack(index, config_dir)?;
+        if !rack_ids.insert(rack.id.clone()) {
+            return Err(format!("duplicate rack id {:?}", rack.id).into());
+        }
+        racks.push(rack);
+    }
     let default_credentials = config
         .credentials
         .as_ref()
@@ -188,10 +266,25 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         let mut labels = config.labels.clone();
         labels.extend(target.labels);
         validate_nico_labels(&format!("{context}.labels"), &labels)?;
+        let rack_has_nmxc = match &target.rack_id {
+            Some(rack_id) if !rack_ids.contains(rack_id) => {
+                return Err(format!(
+                    "{context}.rack_id {rack_id:?} does not match a configured rack"
+                )
+                .into());
+            }
+            Some(rack_id) => racks
+                .iter()
+                .find(|rack| &rack.id == rack_id)
+                .is_some_and(|rack| rack.nmxc.is_some()),
+            None => false,
+        };
         let internal_label_count = 1
             + usize::from(target.name.is_some())
             + usize::from(target.compute_zone.is_some())
-            + usize::from(target.node_group.is_some());
+            + usize::from(target.node_group.is_some())
+            + usize::from(target.rack_id.is_some())
+            + usize::from(rack_has_nmxc);
         if labels.len() + internal_label_count > MAX_NICO_LABELS {
             return Err(format!(
                 "{context}.labels supports at most {} user-defined NICo labels because {internal_label_count} labels are added internally",
@@ -209,6 +302,9 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         if let Some(node_group) = &target.node_group {
             labels.insert(NODE_GROUP_LABEL_NAME.to_string(), node_group.clone());
         }
+        if let Some(rack_id) = &target.rack_id {
+            labels.insert("rack_id".to_string(), rack_id.clone());
+        }
         target.labels = labels;
         if !macs.insert(target.mac.to_ascii_lowercase()) {
             return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
@@ -216,7 +312,54 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         targets.push(target);
     }
 
-    Ok(CollectorConfig { targets })
+    Ok(CollectorConfig { racks, targets })
+}
+
+impl RawRackConfig {
+    fn into_rack(self, index: usize, config_dir: &Path) -> Result<Rack, Box<dyn Error>> {
+        let context = format!("racks[{index}]");
+        let id = normalize_config_value(&format!("{context}.id"), Some(self.id))?
+            .expect("rack id is present");
+        let nmxc = self
+            .nmxc
+            .map(|nmxc| nmxc.resolve(&format!("{context}.nmxc"), config_dir))
+            .transpose()?;
+        Ok(Rack { id, nmxc })
+    }
+}
+
+impl RawNmxcConfig {
+    fn resolve(self, context: &str, config_dir: &Path) -> Result<NmxcConfig, Box<dyn Error>> {
+        if self.port == 0 {
+            return Err(format!("{context}.port must be greater than zero").into());
+        }
+        if self.client_cert_file.is_some() != self.client_key_file.is_some() {
+            return Err(format!(
+                "{context}.client_cert_file and {context}.client_key_file must be configured together"
+            )
+            .into());
+        }
+        let server_name =
+            normalize_config_value(&format!("{context}.server_name"), self.server_name)?;
+        Ok(NmxcConfig {
+            ip: self.ip,
+            port: self.port,
+            ca_file: resolve_optional_path(self.ca_file, config_dir),
+            client_cert_file: resolve_optional_path(self.client_cert_file, config_dir),
+            client_key_file: resolve_optional_path(self.client_key_file, config_dir),
+            server_name,
+        })
+    }
+}
+
+fn resolve_optional_path(path: Option<PathBuf>, config_dir: &Path) -> Option<PathBuf> {
+    path.map(|path| {
+        if path.is_absolute() {
+            path
+        } else {
+            config_dir.join(path)
+        }
+    })
 }
 
 fn validate_nico_labels(
@@ -288,6 +431,7 @@ impl RawTargetConfig {
             self.node_group
                 .or_else(|| default_node_group.map(str::to_string)),
         )?;
+        let rack_id = normalize_config_value(&format!("{context}.rack_id"), self.rack_id)?;
         let mac = match self.mac {
             Some(mac) if mac.trim().is_empty() => {
                 return Err(format!("{context}.mac cannot be blank").into());
@@ -307,6 +451,7 @@ impl RawTargetConfig {
             name,
             compute_zone,
             node_group,
+            rack_id,
             ip: self.ip,
             port: self.port,
             mac,
@@ -479,6 +624,14 @@ pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
 ) -> Result<String, Box<dyn Error>> {
+    render_nico_config_with_domains(config, options, &BTreeMap::new())
+}
+
+pub fn render_nico_config_with_domains(
+    config: &CollectorConfig,
+    options: &NicoConfigOptions,
+    domain_uuids: &BTreeMap<String, String>,
+) -> Result<String, Box<dyn Error>> {
     let otlp_endpoint = options.otlp_endpoint.trim();
     let metrics_endpoint = options.metrics_endpoint.trim();
     let metrics_prefix = options.metrics_prefix.trim();
@@ -495,17 +648,27 @@ pub fn render_nico_config(
     let static_bmc_endpoints = config
         .targets
         .iter()
-        .map(|target| NicoStaticBmcEndpoint {
-            ip: target.ip,
-            port: target.port,
-            mac: &target.mac,
-            username: &target.username,
-            password: &target.password,
-            labels: target.labels.clone(),
-            unknown: (target.kind == TargetKind::Unknown).then_some(NicoEndpointKind {}),
-            machine: (target.kind == TargetKind::Compute).then_some(NicoEndpointKind {}),
-            switch: (target.kind == TargetKind::NvSwitch).then_some(NicoEndpointKind {}),
-            power_shelf: (target.kind == TargetKind::PowerShelf).then_some(NicoEndpointKind {}),
+        .map(|target| {
+            let mut labels = target.labels.clone();
+            if let Some(domain_uuid) = target
+                .rack_id
+                .as_ref()
+                .and_then(|rack_id| domain_uuids.get(rack_id))
+            {
+                labels.insert("nvlink_domain_uuid".to_string(), domain_uuid.clone());
+            }
+            NicoStaticBmcEndpoint {
+                ip: target.ip,
+                port: target.port,
+                mac: &target.mac,
+                username: &target.username,
+                password: &target.password,
+                labels,
+                unknown: (target.kind == TargetKind::Unknown).then_some(NicoEndpointKind {}),
+                machine: (target.kind == TargetKind::Compute).then_some(NicoEndpointKind {}),
+                switch: (target.kind == TargetKind::NvSwitch).then_some(NicoEndpointKind {}),
+                power_shelf: (target.kind == TargetKind::PowerShelf).then_some(NicoEndpointKind {}),
+            }
         })
         .collect();
 
@@ -644,6 +807,83 @@ struct NicoMetrics<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_rack_nmxc_and_defaults_plaintext_port() {
+        let config = parse_config(
+            r#"
+            [[racks]]
+            id = "rack-12"
+
+            [racks.nmxc]
+            ip = "192.0.2.12"
+            "#,
+            "test.toml",
+        )
+        .expect("rack-only NMX-C config");
+
+        let nmxc = config.racks[0].nmxc.as_ref().expect("NMX-C config");
+        assert_eq!(nmxc.port, DEFAULT_NMX_C_PORT);
+        assert_eq!(nmxc.endpoint_url(), "http://192.0.2.12:9370");
+    }
+
+    #[test]
+    fn resolves_nmxc_tls_paths_and_requires_client_cert_pair() {
+        let config = parse_config(
+            r#"
+            [[racks]]
+            id = "rack-12"
+
+            [racks.nmxc]
+            ip = "192.0.2.12"
+            ca_file = "secrets/ca.pem"
+            client_cert_file = "secrets/tls.crt"
+            client_key_file = "secrets/tls.key"
+            server_name = "nmxc.example.com"
+            "#,
+            "/etc/fleetint/config.toml",
+        )
+        .expect("TLS config");
+        let nmxc = config.racks[0].nmxc.as_ref().expect("NMX-C config");
+        assert_eq!(nmxc.endpoint_url(), "https://192.0.2.12:9370");
+        assert_eq!(
+            nmxc.ca_file,
+            Some(PathBuf::from("/etc/fleetint/secrets/ca.pem"))
+        );
+
+        let error = parse_config(
+            r#"
+            [[racks]]
+            id = "rack-12"
+
+            [racks.nmxc]
+            ip = "192.0.2.12"
+            client_cert_file = "tls.crt"
+            "#,
+            "test.toml",
+        )
+        .expect_err("partial mTLS config must fail")
+        .to_string();
+        assert!(error.contains("must be configured together"));
+    }
+
+    #[test]
+    fn target_rack_reference_must_exist() {
+        let error = parse_config(
+            r#"
+            [[targets]]
+            kind = "compute"
+            rack_id = "missing-rack"
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect_err("unknown rack must fail")
+        .to_string();
+        assert!(error.contains("does not match a configured rack"));
+    }
 
     #[test]
     fn parses_target_kinds_and_normalizes_legacy_machines_to_compute() {
@@ -1024,6 +1264,12 @@ mod tests {
             );
         let config = parse_config(&contents, "config.example.toml").expect("OOB config example");
 
+        assert_eq!(config.racks.len(), 1);
+        assert_eq!(config.racks[0].id, "rack-12");
+        assert_eq!(
+            config.racks[0].nmxc.as_ref().map(NmxcConfig::endpoint_url),
+            Some("http://192.0.2.12:9370".to_string())
+        );
         assert_eq!(config.targets.len(), 3);
         assert_eq!(config.targets[0].kind, TargetKind::Compute);
         assert_eq!(config.targets[0].name.as_deref(), Some("node-01"));
@@ -1036,6 +1282,7 @@ mod tests {
             Some("gb200-training")
         );
         assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(config.targets[0].rack_id.as_deref(), Some("rack-12"));
         assert_eq!(
             config.targets[0].labels.get("compute_zone"),
             Some(&"us-west-dc1".to_string())
@@ -1043,6 +1290,10 @@ mod tests {
         assert_eq!(
             config.targets[0].labels.get("node_group"),
             Some(&"gb200-training".to_string())
+        );
+        assert_eq!(
+            config.targets[0].labels.get("rack_id"),
+            Some(&"rack-12".to_string())
         );
         assert_eq!(config.targets[1].kind, TargetKind::NvSwitch);
         assert_eq!(config.targets[1].name.as_deref(), Some("switch-tray-01"));
@@ -1244,6 +1495,46 @@ mod tests {
         assert_eq!(
             rendered["sinks"]["otlp"]["targets"][0]["include_alert_details"].as_bool(),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn renders_discovered_nvlink_domain_uuid_on_targets_in_the_rack() {
+        let collector = parse_config(
+            r#"
+            [[racks]]
+            id = "rack-12"
+
+            [racks.nmxc]
+            ip = "192.0.2.12"
+
+            [[targets]]
+            kind = "compute"
+            rack_id = "rack-12"
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let domain_uuids = BTreeMap::from([(
+            "rack-12".to_string(),
+            "c2a9196f-9264-4c42-8298-09d2d1dc14d5".to_string(),
+        )]);
+        let rendered = render_nico_config_with_domains(
+            &collector,
+            &NicoConfigOptions::default(),
+            &domain_uuids,
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+        let labels = &rendered["endpoint_sources"]["static_bmc_endpoints"][0]["labels"];
+
+        assert_eq!(labels["rack_id"].as_str(), Some("rack-12"));
+        assert_eq!(
+            labels["nvlink_domain_uuid"].as_str(),
+            Some("c2a9196f-9264-4c42-8298-09d2d1dc14d5")
         );
     }
 

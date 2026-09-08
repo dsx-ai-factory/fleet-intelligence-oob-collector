@@ -12,6 +12,7 @@ use fleet_intelligence_oob::{
     DEFAULT_TARGET_CONCURRENCY, InventoryFormat, InventoryOptions, RuntimeOptions, run_inventory,
     run_runtime,
 };
+use nmxc_inventory::sink::{render_json as render_nmxc_json, render_table as render_nmxc_table};
 
 #[derive(Debug, Parser)]
 #[command(name = "fleet-intelligence-oob")]
@@ -25,10 +26,27 @@ struct Cli {
 enum Command {
     #[command(about = "Collect BMC data and write it to local output")]
     Inventory(InventoryArgs),
+    #[command(about = "Collect NMX-C fabric metadata and write it to local output")]
+    FabricInventory(FabricInventoryArgs),
     #[command(about = "Continuously collect BMC data and export it to Fleet Intelligence")]
     Run(RuntimeArgs),
     #[command(about = "Generate NICo static configuration from the collector config")]
     RenderNicoConfig(RenderNicoConfigArgs),
+}
+
+#[derive(Debug, Parser)]
+struct FabricInventoryArgs {
+    #[arg(short, long, default_value = "config.toml")]
+    config: String,
+
+    #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
+    timeout_seconds: u64,
+
+    #[arg(long)]
+    detail: bool,
+
+    #[arg(long, default_value = "table", value_enum)]
+    format: CliInventoryFormat,
 }
 
 #[derive(Debug, Parser)]
@@ -98,6 +116,9 @@ struct RenderNicoConfigArgs {
 
     #[arg(long, default_value = "fleetint")]
     metrics_prefix: String,
+
+    #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
+    nmxc_timeout_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -161,6 +182,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let format = args.format.into();
             run_inventory(args.collector.into_inventory_options(args.detail, format)).await?
         }
+        Command::FabricInventory(args) => {
+            if args.timeout_seconds == 0 {
+                return Err("NMX-C timeout must be greater than zero".into());
+            }
+            let collector_config = config::load_config(&args.config)?;
+            let inventories = nmxc_inventory::collect(
+                &collector_config.racks,
+                std::time::Duration::from_secs(args.timeout_seconds),
+            )
+            .await;
+            if inventories.is_empty() {
+                return Err("no [racks.nmxc] endpoints are configured".into());
+            }
+            let rendered = match args.format {
+                CliInventoryFormat::Table => render_nmxc_table(&inventories, args.detail),
+                CliInventoryFormat::Json => render_nmxc_json(&inventories)?,
+            };
+            std::io::stdout().write_all(rendered.as_bytes())?;
+            if !rendered.ends_with('\n') {
+                std::io::stdout().write_all(b"\n")?;
+            }
+        }
         Command::Run(args) => {
             let format = InventoryFormat::Json;
             run_runtime(RuntimeOptions {
@@ -172,14 +215,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await?
         }
         Command::RenderNicoConfig(args) => {
+            if args.nmxc_timeout_seconds == 0 {
+                return Err("NMX-C timeout must be greater than zero".into());
+            }
             let collector_config = config::load_config(&args.config)?;
-            let rendered = config::render_nico_config(
+            let (domain_uuids, errors) = nmxc_inventory::discover_domain_uuids(
+                &collector_config.racks,
+                std::time::Duration::from_secs(args.nmxc_timeout_seconds),
+            )
+            .await;
+            if !errors.is_empty() {
+                let details = errors
+                    .iter()
+                    .map(|error| {
+                        format!("{} {}: {}", error.rack_id, error.operation, error.message)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(format!(
+                    "failed to discover an NVLink domain UUID for NICo config: {details}"
+                )
+                .into());
+            }
+            let rendered = config::render_nico_config_with_domains(
                 &collector_config,
                 &NicoConfigOptions {
                     otlp_endpoint: args.otlp_endpoint,
                     metrics_endpoint: args.metrics_endpoint,
                     metrics_prefix: args.metrics_prefix,
                 },
+                &domain_uuids,
             )?;
             write_private_file(&args.output, &rendered)?;
         }

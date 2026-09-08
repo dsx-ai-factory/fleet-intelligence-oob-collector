@@ -5,6 +5,7 @@ members = [
     "crates/bmc-dispatch",
     "crates/bmc-error",
     "crates/bmc-inventory",
+    "crates/nmxc-inventory",
 ]
 resolver = "3"
 
@@ -24,6 +25,8 @@ bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 hickory-resolver = "0.26"
 http = "1"
+libnmxc = { git = "https://github.com/NVIDIA/infra-controller.git", rev = "ca4e1ac7b251a1b09abff6b9ae1127c5534b4d79" }
+nmxc-inventory = { path = "crates/nmxc-inventory" }
 nv-redfish = { version = "0.15.1", features = ["bmc-http", "std-redfish"] }
 nv-redfish-bmc-mock = "0.15.1"
 nv-redfish-dispatcher = "0.15.1"
@@ -54,6 +57,7 @@ bmc-attestation.workspace = true
 bmc-dispatch.workspace = true
 bmc-inventory.workspace = true
 futures.workspace = true
+nmxc-inventory.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

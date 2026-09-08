@@ -11,12 +11,20 @@ node_group = "gb200-training"
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
+[[racks]]
+id = "rack-12"
+
+[racks.nmxc]
+ip = "192.0.2.12"
+# port = 9370
+
 [[targets]]
 kind = "compute"
 name = "node-01"
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
+rack_id = "rack-12"
 labels = { site = "dev", environment = "development" }
 
 [[targets]]
@@ -37,6 +45,11 @@ NVSwitch target overrides both files. Unknown fields, an empty target list,
 unsupported target kinds, incomplete or mixed credential pairs, blank
 credentials, and duplicate MACs are rejected.
 
+Each `[[racks]]` entry has a unique customer-defined `id` and may contain one
+`[racks.nmxc]` endpoint. A target's optional `rack_id` must reference one of
+these IDs. This lets the collector retrieve the NVLink domain UUID from NMX-C
+and add both `rack_id` and `nvlink_domain_uuid` to the target's NICo telemetry.
+
 `[[targets]]` is the canonical syntax. Its optional `kind` is one of `unknown`,
 `compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
 Legacy `[[machines]]` entries remain accepted and are normalized to
@@ -52,10 +65,18 @@ forms during migration.
 | Top-level `labels` | No | Labels inherited by every target. Per-target labels with the same key override them. |
 | `credentials.username_file` | Conditional | Default username file inherited by targets; must be paired with `password_file`. |
 | `credentials.password_file` | Conditional | Default password file inherited by targets; must be paired with `username_file`. |
+| `racks[].id` | Yes | Customer-defined rack identifier, unique within the file. |
+| `racks[].nmxc.ip` | Yes when `nmxc` is present | NMX-C controller IPv4 or IPv6 address. |
+| `racks[].nmxc.port` | No | NMX-C gRPC port; defaults to `9370`. |
+| `racks[].nmxc.ca_file` | No | CA certificate path; setting any TLS field selects HTTPS. |
+| `racks[].nmxc.client_cert_file` | Conditional | mTLS client certificate; must be paired with `client_key_file`. |
+| `racks[].nmxc.client_key_file` | Conditional | mTLS client key; must be paired with `client_cert_file`. |
+| `racks[].nmxc.server_name` | No | TLS server name used for SNI and certificate validation. |
 | `targets[].kind` | No | Target type: `unknown`, `compute`, `nvswitch`, or `power_shelf`; defaults to `unknown`. |
 | `targets[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
 | `targets[].compute_zone` | No | Per-target compute-zone override. |
 | `targets[].node_group` | No | Per-target node-group override. |
+| `targets[].rack_id` | No | Rack reference, exported as `rack_id` and used to discover `nvlink_domain_uuid`. |
 | `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
 | `targets[].mac` | No | Stable BMC identity. It must be unique in the file. |
@@ -124,6 +145,19 @@ collector configuration. A target must provide a complete file pair, a
 complete inline pair, or inherit a complete top-level file pair.
 Per-target credentials override the top-level pair as a unit; sources cannot
 be mixed.
+
+NMX-C does not use the Redfish username and password. With only `ip` and
+optional `port`, the collector uses plaintext gRPC. Configure `ca_file` to use
+server-authenticated TLS, and add the client certificate/key pair when the
+controller requires mTLS. Relative NMX-C certificate paths are resolved from
+the configuration directory.
+
+For prototype validation, collect a rack snapshot locally with either sink:
+
+```bash
+bmc-collector fabric-inventory --config config.toml --format table --detail
+bmc-collector fabric-inventory --config config.toml --format json
+```
 
 Inline credentials are supported for direct collector use, but they must not be
 used in the configuration referenced by the Helm chart. That configuration is

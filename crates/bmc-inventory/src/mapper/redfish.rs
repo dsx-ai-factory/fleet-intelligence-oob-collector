@@ -734,6 +734,7 @@ mod tests {
             name: None,
             compute_zone: None,
             node_group: None,
+            rack_id: None,
             ip: "10.0.0.1".parse().expect("IP address"),
             port: None,
             mac: "00:11:22:33:44:55".to_string(),

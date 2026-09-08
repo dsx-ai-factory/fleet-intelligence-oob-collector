@@ -7,6 +7,19 @@ node_group = "gb200-training"
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
+[[racks]]
+id = "rack-12"
+
+[racks.nmxc]
+ip = "192.0.2.12"
+# Defaults to 9370. Without TLS fields, the collector uses plaintext gRPC.
+port = 9370
+# To enable TLS, set ca_file and optionally the mTLS client pair:
+# ca_file = "/run/secrets/nmxc/ca.pem"
+# client_cert_file = "/run/secrets/nmxc/tls.crt"
+# client_key_file = "/run/secrets/nmxc/tls.key"
+# server_name = "nmxc.example.com"
+
 [[targets]]
 kind = "compute"
 # Optional: inventory `name` and telemetry `machine_name`.
@@ -14,7 +27,7 @@ name = "node-01"
 ip = "10.0.0.10"
 # Optional but recommended stable BMC identity.
 mac = "aa:bb:cc:dd:ee:ff"
-labels = { rack = "rack-12" }
+rack_id = "rack-12"
 
 [[targets]]
 kind = "nvswitch"
@@ -22,10 +35,10 @@ name = "switch-tray-01"
 ip = "10.0.0.11"
 username_file = "/run/secrets/bmc/switch-tray-01/username"
 password_file = "/run/secrets/bmc/switch-tray-01/password"
-labels = { rack = "rack-12" }
+rack_id = "rack-12"
 
 [[targets]]
 kind = "power_shelf"
 name = "power-shelf-01"
 ip = "10.0.0.12"
-labels = { rack = "rack-12" }
+rack_id = "rack-12"
