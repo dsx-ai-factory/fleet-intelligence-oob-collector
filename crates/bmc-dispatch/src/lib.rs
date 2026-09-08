@@ -256,7 +256,7 @@ impl Dispatcher {
         let changes = self
             .lifecycle
             .handle
-            .with_root_mut::<Root, _>(|root| {
+            .with_root_mut::<Root, _>(|mut root| {
                 for (_, child_id) in &removals {
                     if root.remove_child(*child_id).is_none() {
                         return Err(ConfigError(
@@ -576,6 +576,8 @@ impl Scheduler<Work> for QueueLeaf {
     }
 
     fn on_complete(&mut self, _completion: Completion<Self::Meta>) {}
+
+    fn register_queue_event_sink(&mut self, _sink: nv_redfish_dispatcher::QueueEventSink) {}
 }
 
 #[cfg(test)]

@@ -361,6 +361,7 @@ impl Serialize for BackendInventory<'_> {
             schema_version,
             collected_at,
             enrolled_at,
+            kind,
             name,
             compute_zone,
             node_group,
@@ -374,10 +375,11 @@ impl Serialize for BackendInventory<'_> {
             domain_errors,
             target_error,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(15))?;
+        let mut map = serializer.serialize_map(Some(16))?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
+        map.serialize_entry("kind", kind)?;
         if let Some(name) = name {
             map.serialize_entry("name", name)?;
         }
@@ -480,6 +482,7 @@ mod tests {
     #[test]
     fn batch_request_exports_inventory_placement_fields() {
         let mut inventory = inventory("10.0.0.1");
+        inventory.kind = crate::models::TargetKind::NvSwitch;
         inventory.name = Some("node-01".to_string());
         inventory.compute_zone = Some("us-west-dc1".to_string());
         inventory.node_group = Some("gb200-training".to_string());
@@ -489,6 +492,7 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert_eq!(value["agent"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
+        assert_eq!(value["data"][0]["kind"], "nvswitch");
         assert_eq!(value["data"][0]["name"], "node-01");
         assert_eq!(value["data"][0]["computeZone"], "us-west-dc1");
         assert_eq!(value["data"][0]["nodeGroup"], "gb200-training");
@@ -670,6 +674,7 @@ mod tests {
             schema_version: crate::models::INVENTORY_SCHEMA_VERSION.to_string(),
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             enrolled_at: None,
+            kind: crate::models::TargetKind::Unknown,
             name: None,
             compute_zone: None,
             node_group: None,

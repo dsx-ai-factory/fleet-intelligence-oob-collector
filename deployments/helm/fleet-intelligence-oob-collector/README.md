@@ -12,7 +12,7 @@ Create a ConfigMap for the password-free collector configuration and separate
 Secrets for the backend bootstrap token and BMC credentials:
 
 The ConfigMap must contain credential file paths only. Do not put inline
-`machines[].username` or `machines[].password` values in it; ConfigMaps are not
+`targets[].username` or `targets[].password` values in it; ConfigMaps are not
 intended for sensitive data.
 
 ```bash
@@ -100,10 +100,10 @@ accept credentials as values, preventing them from being stored in Helm release
 state. Override the collector or NICo image tag only for testing an image that
 does not match the chart version.
 
-The OOB TOML declares shared NICo labels once and defines one or more machines:
+The OOB TOML declares shared NICo labels once and defines one or more targets:
 
 ```toml
-# Fleet Intelligence placement defaults. Machines can override these fields.
+# Fleet Intelligence placement defaults. Targets can override these fields.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
@@ -111,21 +111,23 @@ node_group = "gb200-training"
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
-[[machines]]
+[[targets]]
+kind = "compute"
 name = "node-01"
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
 labels = { site = "dev", environment = "development" }
 
-[[machines]]
-name = "node-02"
+[[targets]]
+kind = "nvswitch"
+name = "switch-tray-01"
 ip = "10.0.0.11"
-username_file = "/run/secrets/bmc/node-02/username"
-password_file = "/run/secrets/bmc/node-02/password"
+username_file = "/run/secrets/bmc/switch-tray-01/username"
+password_file = "/run/secrets/bmc/switch-tray-01/password"
 ```
 
-Machines inherit the top-level credential files unless both file paths are
+Targets inherit the top-level credential files unless both file paths are
 overridden. Add another `credentials.secrets` entry with a distinct `target`
 for each override; the chart projects each Secret's `username` and `password`
 keys under `/run/secrets/bmc/<target>`.
@@ -133,22 +135,27 @@ keys under `/run/secrets/bmc/<target>`.
 The MAC is optional. If omitted, the collector and generated NICo config use a
 locally administered MAC formed as `02:00:<last four IP bytes>`.
 
-The machine `name` is optional. When present, the collector includes it as the
+The target `name` is optional. When present, the collector includes it as the
 top-level `name` in inventory uploads and adds it to NICo metrics and logs as
 the reserved `machine_name` label.
 
-Top-level `compute_zone` and `node_group` values are inherited by every machine.
-A machine can override either field directly. The collector exports the values
+Top-level `compute_zone` and `node_group` values are inherited by every target.
+A target can override either field directly. The collector exports the values
 as inventory `computeZone` and `nodeGroup` and mirrors them to NICo telemetry as
 `compute_zone` and `node_group`. Custom labels remain telemetry-only.
 
 An init container translates the generic config into NICo static endpoints and
-marks every endpoint as a machine. NICo then emits the shared labels and the
-discovered primary Redfish ComputerSystem UUID (`system.uuid`) on OTLP
-resources. Per-machine labels can add to or override the shared labels. The
-collector adds the reserved `oob="true"` label to every endpoint, plus the
-reserved `machine_name` label for named machines, so both are present on NICo
+marks each endpoint as a `machine`, `switch`, or `power_shelf` according to its
+`compute`, `nvswitch`, or `power_shelf` target kind. A target with an omitted or
+explicit `unknown` kind is marked as `unknown`. NICo then emits the shared labels
+and discovered Redfish identity on OTLP resources. Per-target labels can add to
+or override the shared labels. The collector adds the reserved
+`oob="true"` label to every endpoint, plus the
+reserved `machine_name` label for named targets, so both are present on NICo
 metrics and logs.
+
+Legacy `[[machines]]` entries remain accepted and are treated as
+`kind = "compute"`, but new configurations should use `[[targets]]`.
 
 ## Proxy configuration
 

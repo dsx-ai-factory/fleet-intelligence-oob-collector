@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::models::TargetKind;
+
 const MAX_NICO_LABELS: usize = 32;
 const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
 const OOB_LABEL_NAME: &str = "oob";
@@ -45,6 +47,7 @@ pub struct CollectorConfig {
 
 #[derive(Clone)]
 pub struct Target {
+    pub kind: TargetKind,
     pub name: Option<String>,
     pub compute_zone: Option<String>,
     pub node_group: Option<String>,
@@ -61,6 +64,7 @@ impl fmt::Debug for Target {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Target")
+            .field("kind", &self.kind)
             .field("name", &self.name)
             .field("compute_zone", &self.compute_zone)
             .field("node_group", &self.node_group)
@@ -85,7 +89,9 @@ struct Config {
     #[serde(default)]
     credentials: Option<FileCredentialConfig>,
     #[serde(default)]
-    machines: Vec<MachineConfig>,
+    machines: Vec<RawTargetConfig>,
+    #[serde(default)]
+    targets: Vec<RawTargetConfig>,
 }
 
 /// Paths containing a complete BMC username and password pair.
@@ -100,7 +106,9 @@ struct FileCredentialConfig {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct MachineConfig {
+struct RawTargetConfig {
+    #[serde(default)]
+    kind: Option<TargetKind>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -137,8 +145,11 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
     let config: Config = toml::from_str(contents)
         .map_err(|error| format!("failed to parse TOML config {path}: {error}"))?;
 
-    if config.machines.is_empty() {
-        return Err(format!("no BMC targets found in {path}; configure [[machines]]").into());
+    if config.machines.is_empty() && config.targets.is_empty() {
+        return Err(format!(
+            "no BMC targets found in {path}; configure [[targets]] (legacy [[machines]] is also accepted)"
+        )
+        .into());
     }
 
     validate_nico_labels("labels", &config.labels)?;
@@ -151,11 +162,28 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         .map(|credentials| credentials.resolve("credentials", config_dir))
         .transpose()?;
 
-    let mut macs = HashSet::new();
-    let mut targets = Vec::with_capacity(config.machines.len());
+    let target_count = config.machines.len() + config.targets.len();
+    let mut configured_targets = Vec::with_capacity(target_count);
     for (index, machine) in config.machines.into_iter().enumerate() {
-        let mut target = machine.into_target(
-            index,
+        if machine.kind.is_some() {
+            return Err(format!(
+                "machines[{index}].kind is not supported; use [[targets]] to configure a target kind"
+            )
+            .into());
+        }
+        configured_targets.push((machine, TargetKind::Compute, format!("machines[{index}]")));
+    }
+    for (index, target) in config.targets.into_iter().enumerate() {
+        let kind = target.kind.unwrap_or_default();
+        configured_targets.push((target, kind, format!("targets[{index}]")));
+    }
+
+    let mut macs = HashSet::new();
+    let mut targets = Vec::with_capacity(target_count);
+    for (configured_target, kind, context) in configured_targets {
+        let mut target = configured_target.into_target(
+            kind,
+            &context,
             default_credentials.as_ref(),
             config_dir,
             default_compute_zone.as_deref(),
@@ -163,14 +191,14 @@ fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn E
         )?;
         let mut labels = config.labels.clone();
         labels.extend(target.labels);
-        validate_nico_labels(&format!("machines[{index}].labels"), &labels)?;
+        validate_nico_labels(&format!("{context}.labels"), &labels)?;
         let internal_label_count = 1
             + usize::from(target.name.is_some())
             + usize::from(target.compute_zone.is_some())
             + usize::from(target.node_group.is_some());
         if labels.len() + internal_label_count > MAX_NICO_LABELS {
             return Err(format!(
-                "machines[{index}].labels supports at most {} user-defined NICo labels because {internal_label_count} labels are added internally",
+                "{context}.labels supports at most {} user-defined NICo labels because {internal_label_count} labels are added internally",
                 MAX_NICO_LABELS - internal_label_count
             )
             .into());
@@ -242,17 +270,17 @@ fn normalize_config_value(
     Ok(value)
 }
 
-impl MachineConfig {
+impl RawTargetConfig {
     fn into_target(
         self,
-        index: usize,
+        kind: TargetKind,
+        context: &str,
         default_credentials: Option<&ResolvedCredentials>,
         config_dir: &Path,
         default_compute_zone: Option<&str>,
         default_node_group: Option<&str>,
     ) -> Result<Target, Box<dyn Error>> {
-        let context = format!("machines[{index}]");
-        let credentials = self.resolve_credentials(&context, default_credentials, config_dir)?;
+        let credentials = self.resolve_credentials(context, default_credentials, config_dir)?;
         let name = normalize_config_value(&format!("{context}.name"), self.name)?;
         let compute_zone = normalize_config_value(
             &format!("{context}.compute_zone"),
@@ -279,6 +307,7 @@ impl MachineConfig {
         };
 
         Ok(Target {
+            kind,
             name,
             compute_zone,
             node_group,
@@ -477,7 +506,10 @@ pub fn render_nico_config(
             username: &target.username,
             password: &target.password,
             labels: target.labels.clone(),
-            machine: NicoMachine {},
+            unknown: (target.kind == TargetKind::Unknown).then_some(NicoEndpointKind {}),
+            machine: (target.kind == TargetKind::Compute).then_some(NicoEndpointKind {}),
+            switch: (target.kind == TargetKind::NvSwitch).then_some(NicoEndpointKind {}),
+            power_shelf: (target.kind == TargetKind::PowerShelf).then_some(NicoEndpointKind {}),
         })
         .collect();
 
@@ -547,11 +579,18 @@ struct NicoStaticBmcEndpoint<'a> {
     username: &'a str,
     password: &'a str,
     labels: BTreeMap<String, String>,
-    machine: NicoMachine,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unknown: Option<NicoEndpointKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine: Option<NicoEndpointKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    switch: Option<NicoEndpointKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_shelf: Option<NicoEndpointKind>,
 }
 
 #[derive(Serialize)]
-struct NicoMachine {}
+struct NicoEndpointKind {}
 
 /// NICo's opt-in telemetry attributes.
 ///
@@ -627,6 +666,81 @@ struct NicoMetrics<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_target_kinds_and_normalizes_legacy_machines_to_compute() {
+        let config = parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "compute"
+            ip = "10.0.0.2"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "nvswitch"
+            ip = "10.0.0.3"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "power_shelf"
+            ip = "10.0.0.4"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("config");
+
+        assert_eq!(
+            config
+                .targets
+                .iter()
+                .map(|target| target.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                TargetKind::Compute,
+                TargetKind::Compute,
+                TargetKind::NvSwitch,
+                TargetKind::PowerShelf,
+            ]
+        );
+    }
+
+    #[test]
+    fn omitted_target_kind_defaults_to_unknown_and_legacy_machines_cannot_set_kind() {
+        let config = parse_config(
+            r#"
+            [[targets]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("target kind should be optional");
+        assert_eq!(config.targets[0].kind, TargetKind::Unknown);
+
+        let legacy = parse_config(
+            r#"
+            [[machines]]
+            kind = "nvswitch"
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect_err("legacy machine kind should be rejected")
+        .to_string();
+        assert!(legacy.contains("use [[targets]]"));
+    }
 
     #[test]
     fn applies_shared_placement_and_machine_label_overrides() {
@@ -909,8 +1023,10 @@ mod tests {
     fn repository_oob_config_example_is_valid() {
         let username = write_credential("example-username", "admin\n");
         let password = write_credential("example-password", "secret\n");
-        let override_username = write_credential("example-node-02-username", "node-admin\n");
-        let override_password = write_credential("example-node-02-password", "node-secret\n");
+        let override_username =
+            write_credential("example-switch-tray-01-username", "switch-admin\n");
+        let override_password =
+            write_credential("example-switch-tray-01-password", "switch-secret\n");
         let contents = include_str!("../../../config.example.toml")
             .replace(
                 "/run/secrets/bmc/default/username",
@@ -921,16 +1037,17 @@ mod tests {
                 password.to_str().expect("password path"),
             )
             .replace(
-                "/run/secrets/bmc/node-02/username",
+                "/run/secrets/bmc/switch-tray-01/username",
                 override_username.to_str().expect("override username path"),
             )
             .replace(
-                "/run/secrets/bmc/node-02/password",
+                "/run/secrets/bmc/switch-tray-01/password",
                 override_password.to_str().expect("override password path"),
             );
         let config = parse_config(&contents, "config.example.toml").expect("OOB config example");
 
-        assert_eq!(config.targets.len(), 2);
+        assert_eq!(config.targets.len(), 3);
+        assert_eq!(config.targets[0].kind, TargetKind::Compute);
         assert_eq!(config.targets[0].name.as_deref(), Some("node-01"));
         assert_eq!(
             config.targets[0].compute_zone.as_deref(),
@@ -949,9 +1066,13 @@ mod tests {
             config.targets[0].labels.get("node_group"),
             Some(&"gb200-training".to_string())
         );
-        assert_eq!(config.targets[1].name.as_deref(), Some("node-02"));
+        assert_eq!(config.targets[1].kind, TargetKind::NvSwitch);
+        assert_eq!(config.targets[1].name.as_deref(), Some("switch-tray-01"));
         assert_eq!(config.targets[1].mac, "02:00:0a:00:00:0b");
-        assert_eq!(config.targets[1].username, "node-admin");
+        assert_eq!(config.targets[1].username, "switch-admin");
+        assert_eq!(config.targets[2].kind, TargetKind::PowerShelf);
+        assert_eq!(config.targets[2].name.as_deref(), Some("power-shelf-01"));
+        assert_eq!(config.targets[2].mac, "02:00:0a:00:00:0c");
     }
 
     #[test]
@@ -1146,6 +1267,54 @@ mod tests {
             rendered["sinks"]["otlp"]["targets"][0]["include_alert_details"].as_bool(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn renders_nico_endpoint_discriminator_for_each_target_kind() {
+        let collector = parse_config(
+            r#"
+            [[targets]]
+            kind = "unknown"
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "compute"
+            ip = "10.0.0.2"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "nvswitch"
+            ip = "10.0.0.3"
+            username = "admin"
+            password = "secret"
+
+            [[targets]]
+            kind = "power_shelf"
+            ip = "10.0.0.4"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered =
+            render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+        let endpoints = rendered["endpoint_sources"]["static_bmc_endpoints"]
+            .as_array()
+            .expect("static endpoints");
+
+        assert!(endpoints[0].get("unknown").is_some());
+        assert!(endpoints[0].get("machine").is_none());
+        assert!(endpoints[0].get("switch").is_none());
+        assert!(endpoints[0].get("power_shelf").is_none());
+        assert!(endpoints[1].get("unknown").is_none());
+        assert!(endpoints[1].get("machine").is_some());
+        assert!(endpoints[2].get("switch").is_some());
+        assert!(endpoints[3].get("power_shelf").is_some());
     }
 
     #[test]

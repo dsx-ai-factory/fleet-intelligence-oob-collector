@@ -1,7 +1,7 @@
 # Configuration
 
 The collector and NICo hardware health share one TOML file. Start from
-`config.example.toml` and define one or more BMCs:
+`config.example.toml` and define one or more Redfish targets:
 
 ```toml
 compute_zone = "us-west-dc1"
@@ -11,44 +11,59 @@ node_group = "gb200-training"
 username_file = "/run/secrets/bmc/default/username"
 password_file = "/run/secrets/bmc/default/password"
 
-[[machines]]
+[[targets]]
+kind = "compute"
 name = "node-01"
 ip = "10.0.0.10"
 port = 443
 mac = "00:11:22:33:44:55"
 labels = { site = "dev", environment = "development" }
 
-[[machines]]
-name = "node-02"
+[[targets]]
+kind = "nvswitch"
+name = "switch-tray-01"
 ip = "10.0.0.11"
-username_file = "/run/secrets/bmc/node-02/username"
-password_file = "/run/secrets/bmc/node-02/password"
+username_file = "/run/secrets/bmc/switch-tray-01/username"
+password_file = "/run/secrets/bmc/switch-tray-01/password"
+
+[[targets]]
+kind = "power_shelf"
+name = "power-shelf-01"
+ip = "10.0.0.12"
 ```
 
-The first machine inherits the top-level credential files. The second machine
-overrides both files. Unknown fields, an empty machine list, incomplete or mixed
-credential pairs, blank credentials, and duplicate MACs are rejected.
+The compute and power-shelf targets inherit the top-level credential files. The
+NVSwitch target overrides both files. Unknown fields, an empty target list,
+unsupported target kinds, incomplete or mixed credential pairs, blank
+credentials, and duplicate MACs are rejected.
+
+`[[targets]]` is the canonical syntax. Its optional `kind` is one of `unknown`,
+`compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
+Legacy `[[machines]]` entries remain accepted and are normalized to
+`kind = "compute"`; a legacy machine cannot set `kind`. A file may contain both
+forms during migration.
 
 ## Collector TOML
 
 | Field | Required | Description |
 | --- | --- | --- |
-| Top-level `compute_zone` | No | Default Fleet Intelligence compute zone inherited by machines and mirrored to telemetry as `compute_zone`. |
-| Top-level `node_group` | No | Default Fleet Intelligence node group inherited by machines and mirrored to telemetry as `node_group`. |
-| Top-level `labels` | No | Labels inherited by every machine. Per-machine labels with the same key override them. |
-| `credentials.username_file` | Conditional | Default username file inherited by machines; must be paired with `password_file`. |
-| `credentials.password_file` | Conditional | Default password file inherited by machines; must be paired with `username_file`. |
-| `machines[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
-| `machines[].compute_zone` | No | Per-machine compute-zone override. |
-| `machines[].node_group` | No | Per-machine node-group override. |
-| `machines[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
-| `machines[].port` | No | Redfish port; the HTTPS default is used when omitted. |
-| `machines[].mac` | No | Stable BMC identity. It must be unique in the file. |
-| `machines[].username_file` | Conditional | Per-machine username file override; must be paired with `password_file`. |
-| `machines[].password_file` | Conditional | Per-machine password file override; must be paired with `username_file`. |
-| `machines[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
-| `machines[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
-| `machines[].labels` | No | Labels added to this machine or overriding inherited top-level labels. |
+| Top-level `compute_zone` | No | Default Fleet Intelligence compute zone inherited by targets and mirrored to telemetry as `compute_zone`. |
+| Top-level `node_group` | No | Default Fleet Intelligence node group inherited by targets and mirrored to telemetry as `node_group`. |
+| Top-level `labels` | No | Labels inherited by every target. Per-target labels with the same key override them. |
+| `credentials.username_file` | Conditional | Default username file inherited by targets; must be paired with `password_file`. |
+| `credentials.password_file` | Conditional | Default password file inherited by targets; must be paired with `username_file`. |
+| `targets[].kind` | No | Target type: `unknown`, `compute`, `nvswitch`, or `power_shelf`; defaults to `unknown`. |
+| `targets[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
+| `targets[].compute_zone` | No | Per-target compute-zone override. |
+| `targets[].node_group` | No | Per-target node-group override. |
+| `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
+| `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
+| `targets[].mac` | No | Stable BMC identity. It must be unique in the file. |
+| `targets[].username_file` | Conditional | Per-target username file override; must be paired with `password_file`. |
+| `targets[].password_file` | Conditional | Per-target password file override; must be paired with `username_file`. |
+| `targets[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
+| `targets[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
+| `targets[].labels` | No | Labels added to this target or overriding inherited top-level labels. |
 
 When `mac` is omitted, the collector derives a locally administered MAC from
 `02:00` and the final four IP bytes. Because different IPv6 addresses can share
@@ -76,19 +91,21 @@ The example value `us-west-dc1` illustrates a location or failure domain, while
 examples: deployments must use the exact compute-zone and node-group names
 configured in their Fleet Intelligence account.
 
-Set them at the top level when every configured machine belongs to the same
-Fleet Intelligence placement. Override them directly on a machine when its
+Set them at the top level when every configured target belongs to the same
+Fleet Intelligence placement. Override them directly on a target when its
 placement differs:
 
 ```toml
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
-[[machines]]
+[[targets]]
+kind = "compute"
 name = "node-01"
 ip = "10.0.0.10"
 
-[[machines]]
+[[targets]]
+kind = "compute"
 name = "node-02"
 ip = "10.0.0.11"
 compute_zone = "us-west-dc2"
@@ -103,9 +120,9 @@ telemetry label are omitted. Custom labels are not promoted to Fleet
 Intelligence placement fields.
 
 Relative credential paths are resolved from the directory containing the
-collector configuration. A machine must provide a complete file pair, a
+collector configuration. A target must provide a complete file pair, a
 complete inline pair, or inherit a complete top-level file pair.
-Per-machine credentials override the top-level pair as a unit; sources cannot
+Per-target credentials override the top-level pair as a unit; sources cannot
 be mixed.
 
 Inline credentials are supported for direct collector use, but they must not be
