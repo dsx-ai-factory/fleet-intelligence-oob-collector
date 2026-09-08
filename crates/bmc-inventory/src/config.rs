@@ -20,6 +20,10 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     "endpoint_ip",
     "endpoint_key",
     "endpoint_mac",
+    "gpu_chassis_serial",
+    "gpu_model",
+    "gpu_serial",
+    "gpu_uuid",
     "machine_id",
     "machine_slot_number",
     "machine_tray_index",
@@ -522,6 +526,7 @@ pub fn render_nico_config(
                 mode: "auto",
             },
         },
+        attributes: NicoAttributes { gpu_identity: true },
         sinks: NicoSinks {
             tracing: NicoEnabled { enabled: true },
             health_report: NicoEnabled { enabled: false },
@@ -554,6 +559,7 @@ pub fn render_nico_config(
 struct NicoConfig<'a> {
     endpoint_sources: NicoEndpointSources<'a>,
     collectors: NicoCollectors,
+    attributes: NicoAttributes,
     sinks: NicoSinks<'a>,
     metrics: NicoMetrics<'a>,
 }
@@ -585,6 +591,22 @@ struct NicoStaticBmcEndpoint<'a> {
 
 #[derive(Serialize)]
 struct NicoEndpointKind {}
+
+/// NICo's opt-in telemetry attributes.
+///
+/// `gpu_identity` adds `gpu_uuid`, `gpu_serial`, and `gpu_model` to GPU metrics
+/// and log records, and `gpu_chassis_serial` to log records that name a GPU
+/// chassis as their origin. NICo reads all of them from Redfish resources it
+/// already fetches during discovery, so they cost no extra requests.
+///
+/// Always rendered on. NICo defaults the gate off because the labels reshape a
+/// consumer's series and it cannot know whether a deployment wants that; we do,
+/// and we do not expose the choice, so turning it off is a code change here
+/// rather than a value an operator can set.
+#[derive(Serialize)]
+struct NicoAttributes {
+    gpu_identity: bool,
+}
 
 #[derive(Serialize)]
 struct NicoCollectors {
@@ -1322,6 +1344,25 @@ mod tests {
     }
 
     #[test]
+    fn rendered_nico_config_always_enables_gpu_identity() {
+        let collector = parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered =
+            render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(rendered["attributes"]["gpu_identity"].as_bool(), Some(true));
+    }
+
+    #[test]
     fn rendered_nico_config_enables_tracing_sink() {
         let collector = parse_config(
             r#"
@@ -1361,6 +1402,7 @@ mod tests {
                 otlp_endpoint: "  http://localhost:4317  ".to_string(),
                 metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
                 metrics_prefix: "  fleetint  ".to_string(),
+                ..NicoConfigOptions::default()
             },
         )
         .expect("NICo config");
@@ -1406,6 +1448,10 @@ mod tests {
     fn rejects_labels_that_override_internal_labels() {
         for label in [
             "compute_zone",
+            "gpu_chassis_serial",
+            "gpu_model",
+            "gpu_serial",
+            "gpu_uuid",
             "machine_name",
             "node_group",
             "oob",
