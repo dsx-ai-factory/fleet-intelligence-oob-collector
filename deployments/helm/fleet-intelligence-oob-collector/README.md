@@ -256,6 +256,40 @@ needed. When using NICo API mTLS, create a Secret containing `ca.crt`,
 `tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The
 files are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
 
+## Redfish diagnostic payloads
+
+BMC log records may carry a Redfish `DiagnosticData` payload, which is how CPER
+records arrive. NICo keeps the payload opaque, embedding it in the log body
+alongside the `redfish.diagnostic_data.*` attributes and leaving decoding to
+downstream consumers. Export is off by default because the payloads are opaque
+BMC state and are larger than ordinary log records:
+
+```yaml
+nicoHardwareHealth:
+  diagnostics:
+    enabled: true
+```
+
+Because the generated configuration carries no per-target TLS profile, NICo
+negotiates TLS purely from the OTLP endpoint scheme. Diagnostic export
+therefore requires an `https://` endpoint, and the init container that renders
+the configuration fails with an explanatory error otherwise. The bundled
+gateway is reached over plaintext OTLP/gRPC in-cluster, so exporting to it
+requires acknowledging that the payloads cross the pod network unencrypted:
+
+```yaml
+nicoHardwareHealth:
+  diagnostics:
+    enabled: true
+    allowInsecureExport: true
+```
+
+Prefer terminating TLS on the OTLP endpoint over setting
+`allowInsecureExport`. Enabling diagnostics also changes the shape of affected
+log bodies: records that carry a payload are emitted as a JSON object holding
+the original `message`, the `diagnostic_data`, and the diagnostic attributes,
+while records without one are unchanged.
+
 The release workflow builds this image from the pinned `infra-controller`
 commit configured by `NICO_SOURCE_REF` in `.github/workflows/release.yml`,
 publishes amd64 and arm64 images, then publishes the chart only after both

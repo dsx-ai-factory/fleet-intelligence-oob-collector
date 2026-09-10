@@ -16,6 +16,14 @@ release and use the sections that apply.
 - OCI Helm chart for deploying the collector with existing credential Secrets
   and hardened pod defaults.
 - Processor UUID and serial-number collection from Redfish inventory.
+- Opt-in export of Redfish `DiagnosticData` payloads, which carry CPER records,
+  through `nicoHardwareHealth.diagnostics.enabled` and the
+  `render-nico-config --include-diagnostics` flag. Payload bodies stay opaque;
+  decoding is left to downstream consumers. Because NICo negotiates TLS from the
+  OTLP endpoint scheme and the generated configuration carries no per-target TLS
+  profile, export requires an `https://` endpoint unless
+  `nicoHardwareHealth.diagnostics.allowInsecureExport` explicitly permits
+  plaintext transport.
 
 ### Changed
 
@@ -23,10 +31,6 @@ release and use the sections that apply.
   instead of `"auto"`, so BMC log entries are only streamed over Redfish SSE
   and are no longer polled from LogService when an endpoint has no
   `/EventService`.
-- The rendered NICo OTLP target sets `include_diagnostics = true`, which exports
-  the Redfish `DiagnosticData` payload carrying CPER records along with the
-  `redfish.diagnostic_data.*` attributes. Payload bodies stay opaque; decoding is
-  left to downstream consumers.
 
 ### Fixed
 

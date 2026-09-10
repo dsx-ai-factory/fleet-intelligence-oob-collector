@@ -88,11 +88,20 @@
     "nicoHardwareHealth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "image", "tlsSecretName", "service"],
+      "required": ["enabled", "otlpEndpoint", "metricsPrefix", "diagnostics", "image", "tlsSecretName", "service"],
       "properties": {
         "enabled": { "type": "boolean" },
         "otlpEndpoint": { "type": "string", "pattern": "^$|.*\\S.*" },
         "metricsPrefix": { "type": "string", "pattern": ".*\\S.*" },
+        "diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "allowInsecureExport"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "allowInsecureExport": { "type": "boolean" }
+          }
+        },
         "image": {
           "type": "object",
           "additionalProperties": false,

@@ -153,6 +153,8 @@ The commonly configured chart values are:
 | `bmcCollector.timeoutSeconds` | `30` | Timeout for each Redfish request. |
 | `nicoHardwareHealth.enabled` | `true` | Deploy NICo metrics and log collection. |
 | `nicoHardwareHealth.metricsPrefix` | `fleetint` | NICo metric prefix. |
+| `nicoHardwareHealth.diagnostics.enabled` | `false` | Export Redfish `DiagnosticData` payloads, which carry CPER. |
+| `nicoHardwareHealth.diagnostics.allowInsecureExport` | `false` | Permit diagnostic export to a plaintext OTLP endpoint. |
 | `otelGateway.enabled` | `true` | Deploy the authenticated telemetry gateway. |
 
 See the chart's

@@ -462,11 +462,35 @@ fn derive_mac_from_ip(ip: IpAddr) -> String {
     )
 }
 
+/// Export policy for Redfish `DiagnosticData` payloads, which carry CPER.
+///
+/// Diagnostic bodies are opaque BMC state rather than the summarized health
+/// signals the other sinks carry, so the transport they leave on is a separate
+/// decision from whether they are collected at all.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DiagnosticsExport {
+    /// Omit diagnostic payloads. NICo then never attaches them, because it
+    /// derives its collectors' diagnostic gate from the configured sinks.
+    #[default]
+    Disabled,
+
+    /// Export diagnostics, requiring a TLS-protected OTLP endpoint.
+    Enabled,
+
+    /// Export diagnostics over a plaintext OTLP endpoint.
+    ///
+    /// Separate from [`Self::Enabled`] so that shipping opaque BMC payloads
+    /// unencrypted is a deliberate operator decision rather than a consequence
+    /// of the default in-cluster gateway speaking plaintext.
+    EnabledInsecureTransport,
+}
+
 #[derive(Clone, Debug)]
 pub struct NicoConfigOptions {
     pub otlp_endpoint: String,
     pub metrics_endpoint: String,
     pub metrics_prefix: String,
+    pub diagnostics: DiagnosticsExport,
 }
 
 impl Default for NicoConfigOptions {
@@ -475,8 +499,21 @@ impl Default for NicoConfigOptions {
             otlp_endpoint: "http://localhost:4317".to_string(),
             metrics_endpoint: "0.0.0.0:9009".to_string(),
             metrics_prefix: "fleetint".to_string(),
+            diagnostics: DiagnosticsExport::default(),
         }
     }
+}
+
+/// Reports whether NICo would negotiate TLS for this OTLP endpoint.
+///
+/// NICo enables TLS from the endpoint scheme when a target carries no explicit
+/// TLS profile, and this renderer never emits one, so the scheme alone decides
+/// whether diagnostic payloads leave the pod encrypted. An endpoint with no
+/// scheme is treated as plaintext.
+fn is_tls_otlp_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
 }
 
 pub fn render_nico_config(
@@ -495,6 +532,21 @@ pub fn render_nico_config(
     if metrics_prefix.is_empty() {
         return Err("NICo metrics prefix cannot be empty".into());
     }
+
+    let include_diagnostics = match options.diagnostics {
+        DiagnosticsExport::Disabled => false,
+        DiagnosticsExport::Enabled => {
+            if !is_tls_otlp_endpoint(otlp_endpoint) {
+                return Err(format!(
+                    "refusing to export Redfish diagnostic payloads to plaintext OTLP endpoint \
+                     {otlp_endpoint}: use an https:// endpoint or opt in to insecure export"
+                )
+                .into());
+            }
+            true
+        }
+        DiagnosticsExport::EnabledInsecureTransport => true,
+    };
 
     let static_bmc_endpoints = config
         .targets
@@ -539,7 +591,7 @@ pub fn render_nico_config(
                 enabled: true,
                 targets: vec![NicoOtlpTarget {
                     endpoint: otlp_endpoint,
-                    include_diagnostics: true,
+                    include_diagnostics,
                     include_alert_details: true,
                     batch_size: 512,
                     flush_interval: "2s",
@@ -655,9 +707,9 @@ struct NicoOtlpTarget<'a> {
     /// `redfish.diagnostic_data.*` attributes, leaving decoding to consumers.
     ///
     /// NICo derives its collectors' diagnostic gate from the sinks, so this flag
-    /// is what makes the log collectors attach the payload at all. It defaults
-    /// off there because bodies are large and potentially sensitive; we accept
-    /// both to get CPER off the BMC.
+    /// is what makes the log collectors attach the payload at all. Set from
+    /// [`DiagnosticsExport`], which requires a TLS endpoint or an explicit
+    /// insecure opt-in before opaque BMC state is put on the wire.
     include_diagnostics: bool,
     /// Ignored by NICo builds that predate the flag, which do not reject
     /// unknown OTLP target keys.
@@ -1278,7 +1330,7 @@ mod tests {
         );
         assert_eq!(
             rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
-            Some(true)
+            Some(false)
         );
     }
 
@@ -1392,6 +1444,123 @@ mod tests {
             rendered["sinks"]["tracing"]["enabled"].as_bool(),
             Some(true)
         );
+    }
+
+    /// Verifies diagnostic export reaches the OTLP target over TLS.
+    #[test]
+    fn rendered_nico_config_exports_diagnostics_to_tls_endpoint() {
+        let collector = diagnostics_test_collector();
+
+        for endpoint in [
+            "https://gateway.example:4317",
+            "HTTPS://gateway.example:4317",
+        ] {
+            let rendered = render_nico_config(
+                &collector,
+                &NicoConfigOptions {
+                    otlp_endpoint: endpoint.to_string(),
+                    diagnostics: DiagnosticsExport::Enabled,
+                    ..NicoConfigOptions::default()
+                },
+            )
+            .expect("NICo config");
+            let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+            assert_eq!(
+                rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
+                Some(true),
+                "{endpoint}"
+            );
+        }
+    }
+
+    /// Verifies plaintext OTLP endpoints cannot carry diagnostics unasked.
+    ///
+    /// NICo negotiates TLS from the endpoint scheme because this renderer emits
+    /// no per-target TLS profile, so a non-https endpoint puts opaque BMC
+    /// payloads on the wire in the clear.
+    #[test]
+    fn render_nico_config_rejects_diagnostics_for_plaintext_endpoint() {
+        let collector = diagnostics_test_collector();
+
+        for endpoint in [
+            "http://localhost:4317",
+            "grpc://gateway.example:4317",
+            "gateway.example:4317",
+            "https-gateway.example:4317",
+        ] {
+            let error = render_nico_config(
+                &collector,
+                &NicoConfigOptions {
+                    otlp_endpoint: endpoint.to_string(),
+                    diagnostics: DiagnosticsExport::Enabled,
+                    ..NicoConfigOptions::default()
+                },
+            )
+            .expect_err("plaintext diagnostic export should be rejected")
+            .to_string();
+
+            assert!(error.contains(endpoint), "{endpoint}: {error}");
+            assert!(
+                error.contains("opt in to insecure export"),
+                "{endpoint}: {error}"
+            );
+        }
+    }
+
+    /// Verifies the insecure opt-in is the only way onto a plaintext endpoint.
+    #[test]
+    fn rendered_nico_config_exports_diagnostics_over_plaintext_only_with_opt_in() {
+        let collector = diagnostics_test_collector();
+        let rendered = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                otlp_endpoint: "http://localhost:4317".to_string(),
+                diagnostics: DiagnosticsExport::EnabledInsecureTransport,
+                ..NicoConfigOptions::default()
+            },
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
+            Some(true)
+        );
+    }
+
+    /// Verifies the endpoint is checked after trimming, not as supplied.
+    #[test]
+    fn render_nico_config_checks_diagnostic_transport_after_trimming() {
+        let collector = diagnostics_test_collector();
+        let rendered = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                otlp_endpoint: "  https://gateway.example:4317  ".to_string(),
+                diagnostics: DiagnosticsExport::Enabled,
+                ..NicoConfigOptions::default()
+            },
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
+            Some(true)
+        );
+    }
+
+    fn diagnostics_test_collector() -> CollectorConfig {
+        parse_config(
+            r#"
+            [[machines]]
+            ip = "10.0.0.1"
+            username = "admin"
+            password = "secret"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config")
     }
 
     #[test]

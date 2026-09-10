@@ -4,7 +4,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-use bmc_inventory::config::{self, NicoConfigOptions};
+use bmc_inventory::config::{self, DiagnosticsExport, NicoConfigOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
     DEFAULT_BMC_BURST, DEFAULT_BMC_MAX_IN_FLIGHT, DEFAULT_BMC_REQUESTS_PER_SECOND,
@@ -98,6 +98,17 @@ struct RenderNicoConfigArgs {
 
     #[arg(long, default_value = "fleetint")]
     metrics_prefix: String,
+
+    /// Export Redfish diagnostic payloads, including CPER, to the OTLP target.
+    ///
+    /// Requires an https:// OTLP endpoint unless
+    /// --allow-insecure-diagnostic-export is also set.
+    #[arg(long)]
+    include_diagnostics: bool,
+
+    /// Permit diagnostic payload export over a plaintext OTLP endpoint.
+    #[arg(long, requires = "include_diagnostics")]
+    allow_insecure_diagnostic_export: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -179,6 +190,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     otlp_endpoint: args.otlp_endpoint,
                     metrics_endpoint: args.metrics_endpoint,
                     metrics_prefix: args.metrics_prefix,
+                    diagnostics: match (
+                        args.include_diagnostics,
+                        args.allow_insecure_diagnostic_export,
+                    ) {
+                        (false, _) => DiagnosticsExport::Disabled,
+                        (true, false) => DiagnosticsExport::Enabled,
+                        (true, true) => DiagnosticsExport::EnabledInsecureTransport,
+                    },
                 },
             )?;
             write_private_file(&args.output, &rendered)?;
