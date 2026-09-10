@@ -58,12 +58,6 @@ spec:
             - {{ printf "0.0.0.0:%v" .Values.nicoHardwareHealth.service.port | quote }}
             - --metrics-prefix
             - {{ required "nicoHardwareHealth.metricsPrefix is required" .Values.nicoHardwareHealth.metricsPrefix | quote }}
-            {{- if .Values.nicoHardwareHealth.diagnostics.enabled }}
-            - --include-diagnostics
-            {{- if .Values.nicoHardwareHealth.diagnostics.allowInsecureExport }}
-            - --allow-insecure-diagnostic-export
-            {{- end }}
-            {{- end }}
           volumeMounts:
             - name: collector-config
               mountPath: /etc/fleet-intelligence

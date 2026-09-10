@@ -56,16 +56,6 @@ nicoHardwareHealth:
   # External OTLP/gRPC endpoint used only when otelGateway.enabled is false.
   otlpEndpoint: ""
   metricsPrefix: fleetint
-  # Export of Redfish DiagnosticData payloads, which carry CPER records. The
-  # payloads are opaque BMC state and are larger than ordinary log records, so
-  # they are collected only when enabled here.
-  diagnostics:
-    enabled: false
-    # Diagnostic export requires an https:// OTLP endpoint. The bundled gateway
-    # is reached over plaintext OTLP/gRPC in-cluster, so exporting to it needs
-    # this acknowledgement that opaque BMC payloads cross the pod network
-    # unencrypted.
-    allowInsecureExport: false
   image:
     repository: ghcr.io/dsx-ai-factory/nico-hardware-health
     # Defaults to the chart version when empty.
