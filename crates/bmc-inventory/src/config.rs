@@ -521,9 +521,10 @@ pub fn render_nico_config(
         collectors: NicoCollectors {
             logs: NicoLogsCollector {
                 enabled: true,
-                // "auto" streams BMC log entries over Redfish SSE and downgrades
-                // to LogService polling per endpoint when /EventService is absent.
-                mode: "auto",
+                // "sse" streams BMC log entries over Redfish SSE without the
+                // LogService polling fallback "auto" applies per endpoint, so an
+                // endpoint that lacks /EventService emits no log records.
+                mode: "sse",
             },
         },
         attributes: NicoAttributes { gpu_identity: true },
@@ -538,7 +539,7 @@ pub fn render_nico_config(
                 enabled: true,
                 targets: vec![NicoOtlpTarget {
                     endpoint: otlp_endpoint,
-                    include_diagnostics: false,
+                    include_diagnostics: true,
                     include_alert_details: true,
                     batch_size: 512,
                     flush_interval: "2s",
@@ -649,6 +650,14 @@ struct NicoOtlpSink<'a> {
 #[derive(Serialize)]
 struct NicoOtlpTarget<'a> {
     endpoint: &'a str,
+    /// Carries the Redfish `DiagnosticData` payload, which is how CPER records
+    /// reach the sink: NICo keeps the body opaque (base64 for CPER) and adds the
+    /// `redfish.diagnostic_data.*` attributes, leaving decoding to consumers.
+    ///
+    /// NICo derives its collectors' diagnostic gate from the sinks, so this flag
+    /// is what makes the log collectors attach the payload at all. It defaults
+    /// off there because bodies are large and potentially sensitive; we accept
+    /// both to get CPER off the BMC.
     include_diagnostics: bool,
     /// Ignored by NICo builds that predate the flag, which do not reject
     /// unknown OTLP target keys.
@@ -1267,6 +1276,10 @@ mod tests {
             rendered["sinks"]["otlp"]["targets"][0]["include_alert_details"].as_bool(),
             Some(true)
         );
+        assert_eq!(
+            rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1337,10 +1350,7 @@ mod tests {
             rendered["collectors"]["logs"]["enabled"].as_bool(),
             Some(true)
         );
-        assert_eq!(
-            rendered["collectors"]["logs"]["mode"].as_str(),
-            Some("auto")
-        );
+        assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
     }
 
     #[test]

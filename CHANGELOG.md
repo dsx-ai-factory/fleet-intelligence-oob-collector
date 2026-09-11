@@ -19,7 +19,14 @@ release and use the sections that apply.
 
 ### Changed
 
-- Nothing yet.
+- The rendered NICo configuration sets the logs collector to `mode = "sse"`
+  instead of `"auto"`, so BMC log entries are only streamed over Redfish SSE
+  and are no longer polled from LogService when an endpoint has no
+  `/EventService`.
+- The rendered NICo OTLP target sets `include_diagnostics = true`, which exports
+  the Redfish `DiagnosticData` payload carrying CPER records along with the
+  `redfish.diagnostic_data.*` attributes. Payload bodies stay opaque; decoding is
+  left to downstream consumers.
 
 ### Fixed
 
