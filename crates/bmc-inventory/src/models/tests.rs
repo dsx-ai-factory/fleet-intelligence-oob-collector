@@ -51,9 +51,9 @@ fn node_inventory_serializes_as_backend_payload() {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
-                links: Vec::new(),
+                links: Default::default(),
             }],
-            links: Vec::new(),
+            links: Default::default(),
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -74,10 +74,12 @@ fn node_inventory_serializes_as_backend_payload() {
             status_state: Some("Enabled".to_string()),
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
-            links: vec![InventoryLink {
-                relation: "ManagerForServers".to_string(),
-                odata_id: "/redfish/v1/Systems/System".to_string(),
-            }],
+            links: std::collections::BTreeMap::from([(
+                "ManagerForServers".into(),
+                InventoryLink::Multiple(vec![InventoryLinkReference {
+                    odata_id: "/redfish/v1/Systems/System".into(),
+                }]),
+            )]),
         }],
         chassis: vec![ChassisInventory {
             id: "BMC_0".to_string(),
@@ -114,11 +116,12 @@ fn node_inventory_serializes_as_backend_payload() {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
-                links: Vec::new(),
+                links: Default::default(),
             }],
-            links: Vec::new(),
+            links: Default::default(),
         }],
         firmware: vec![FirmwareInventory {
+            related_item: None,
             service_id: "FirmwareInventory".to_string(),
             id: "BMC".to_string(),
             odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
@@ -128,7 +131,7 @@ fn node_inventory_serializes_as_backend_payload() {
             status_state: Some("StandbyOffline".to_string()),
             health: Some("Critical".to_string()),
             health_rollup: Some("Warning".to_string()),
-            links: Vec::new(),
+            links: Default::default(),
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
@@ -189,9 +192,9 @@ fn node_inventory_serializes_as_backend_payload() {
                     "statusState": "Enabled",
                     "health": "OK",
                     "healthRollup": "OK",
-                    "links": []
+                    "links": {}
                 }],
-                "links": []
+                "links": {}
             }],
             "source": {
                 "sourceType": "redfish",
@@ -212,10 +215,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "statusState": "Enabled",
                 "health": "OK",
                 "healthRollup": "OK",
-                "links": [{
-                    "relation": "ManagerForServers",
-                    "odataId": "/redfish/v1/Systems/System"
-                }]
+                "links": {"ManagerForServers": [{"@odata.id": "/redfish/v1/Systems/System"}]}
             }],
             "chassis": [{
                 "id": "BMC_0",
@@ -252,11 +252,12 @@ fn node_inventory_serializes_as_backend_payload() {
                     "statusState": "Enabled",
                     "health": "OK",
                     "healthRollup": "OK",
-                    "links": []
+                    "links": {}
                 }],
-                "links": []
+                "links": {}
             }],
             "firmware": [{
+                "relatedItem": null,
                 "serviceId": "FirmwareInventory",
                 "id": "BMC",
                 "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
@@ -266,7 +267,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "statusState": "StandbyOffline",
                 "health": "Critical",
                 "healthRollup": "Warning",
-                "links": []
+                "links": {}
             }],
             "domainErrors": [{
                 "domain": "chassis.pcieDevices",

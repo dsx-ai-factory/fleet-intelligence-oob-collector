@@ -26,7 +26,7 @@ pub struct ManagerInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +52,7 @@ pub struct SystemInventory {
     pub memory_gib: Option<f64>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +74,7 @@ pub struct ProcessorInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,7 +95,7 @@ pub struct ChassisInventory {
     pub health_rollup: Option<String>,
     pub location: Option<ChassisLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,12 +124,13 @@ pub struct PcieDeviceInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirmwareInventory {
+    pub related_item: Option<Vec<InventoryLinkReference>>,
     pub service_id: String,
     pub id: String,
     pub odata_id: Option<String>,
@@ -139,12 +140,19 @@ pub struct FirmwareInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    pub links: Vec<InventoryLink>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+/// A relationship retains the single-reference or array shape supplied by Redfish.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum InventoryLink {
+    Single(InventoryLinkReference),
+    Multiple(Vec<InventoryLinkReference>),
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InventoryLink {
-    pub relation: String,
+pub struct InventoryLinkReference {
+    #[serde(rename = "@odata.id")]
     pub odata_id: String,
 }

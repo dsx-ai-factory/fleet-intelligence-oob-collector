@@ -4,8 +4,8 @@ use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
-    InventoryLink, InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    InventoryLink, InventoryLinkReference, InventorySourceInfo, InventoryUuid, ManagerInventory,
+    NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -308,6 +308,12 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
 
 fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
     FirmwareInventory {
+        related_item: firmware.related_item.map(|items| {
+            items
+                .into_iter()
+                .map(|odata_id| InventoryLinkReference { odata_id })
+                .collect()
+        }),
         service_id: firmware.service_id,
         id: firmware.id,
         odata_id: firmware.odata_id,
@@ -321,11 +327,19 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
     }
 }
 
-fn map_link(link: crate::source::LinkData) -> InventoryLink {
-    InventoryLink {
-        relation: link.relation,
-        odata_id: link.odata_id,
-    }
+fn map_link((relation, link): (String, crate::source::LinkData)) -> (String, InventoryLink) {
+    let value = match link {
+        crate::source::LinkData::Single(odata_id) => {
+            InventoryLink::Single(InventoryLinkReference { odata_id })
+        }
+        crate::source::LinkData::Multiple(items) => InventoryLink::Multiple(
+            items
+                .into_iter()
+                .map(|odata_id| InventoryLinkReference { odata_id })
+                .collect(),
+        ),
+    };
+    (relation, value)
 }
 
 #[cfg(test)]
@@ -401,12 +415,27 @@ mod tests {
     }
 
     #[test]
+    fn maps_links_without_changing_cardinality() {
+        let (relation, single) = map_link((
+            "ContainedBy".into(),
+            LinkData::Single("/redfish/v1/Chassis/Rack".into()),
+        ));
+        assert_eq!(relation, "ContainedBy");
+        assert_eq!(
+            serde_json::to_value(single).unwrap(),
+            serde_json::json!({"@odata.id": "/redfish/v1/Chassis/Rack"})
+        );
+        let (_, empty) = map_link(("Contains".into(), LinkData::Multiple(vec![])));
+        assert_eq!(serde_json::to_value(empty).unwrap(), serde_json::json!([]));
+    }
+
+    #[test]
     fn prefers_system_with_bios() {
         let mut mapped_processor = processor("CPU1");
-        mapped_processor.links = vec![link(
+        mapped_processor.links = std::collections::BTreeMap::from([link(
             "PCIeDevice",
             "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
-        )];
+        )]);
         let mut mapped_system = system("System")
             .with_odata_id("/redfish/v1/Systems/System")
             .with_uuid("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")
@@ -420,7 +449,8 @@ mod tests {
             .with_cpu(1, 72)
             .with_memory_gib(480.0)
             .with_processor(mapped_processor);
-        mapped_system.links = vec![link("ManagedBy", "/redfish/v1/Managers/BMC_0")];
+        mapped_system.links =
+            std::collections::BTreeMap::from([link("ManagedBy", "/redfish/v1/Managers/BMC_0")]);
 
         let inventory = map(SourceRecord {
             target: target(),
@@ -503,10 +533,10 @@ mod tests {
                         health_rollup: None,
                         location: None,
                         pcie_devices: vec![pcie_device("GPU_0")],
-                        links: vec![link(
+                        links: std::collections::BTreeMap::from([link(
                             "Processors",
                             "/redfish/v1/Systems/System/Processors/GPU_0",
-                        )],
+                        )]),
                     },
                     ChassisData {
                         id: "Baseboard_0".to_string(),
@@ -524,7 +554,7 @@ mod tests {
                         health_rollup: None,
                         location: None,
                         pcie_devices: Vec::new(),
-                        links: Vec::new(),
+                        links: Default::default(),
                     },
                 ],
                 firmware: Vec::new(),
@@ -703,14 +733,15 @@ mod tests {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
-                links: vec![LinkData {
-                    relation: "ManagerForServers".to_string(),
-                    odata_id: "/redfish/v1/Systems/System".to_string(),
-                }],
+                links: std::collections::BTreeMap::from([link(
+                    "ManagerForServers",
+                    "/redfish/v1/Systems/System",
+                )]),
             }],
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: vec![FirmwareData {
+                related_item: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMCImage1".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMCImage1".to_string()),
@@ -720,7 +751,10 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
-                links: vec![link("ActiveTargets", "/redfish/v1/Managers/BMC_0")],
+                links: std::collections::BTreeMap::from([link(
+                    "ActiveTargets",
+                    "/redfish/v1/Managers/BMC_0",
+                )]),
             }],
             errors: Vec::new(),
         });
@@ -740,8 +774,11 @@ mod tests {
         assert_eq!(manager.health.as_deref(), Some("OK"));
         assert_eq!(manager.health_rollup.as_deref(), Some("OK"));
         assert_eq!(manager.links.len(), 1);
-        assert_eq!(manager.links[0].relation, "ManagerForServers");
-        assert_eq!(manager.links[0].odata_id, "/redfish/v1/Systems/System");
+        assert_link(
+            &manager.links,
+            "ManagerForServers",
+            "/redfish/v1/Systems/System",
+        );
         assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
         assert_eq!(
@@ -764,17 +801,23 @@ mod tests {
         );
     }
 
-    fn link(relation: &str, odata_id: &str) -> LinkData {
-        LinkData {
-            relation: relation.to_string(),
-            odata_id: odata_id.to_string(),
-        }
+    fn link(relation: &str, odata_id: &str) -> (String, LinkData) {
+        (
+            relation.to_string(),
+            LinkData::Multiple(vec![odata_id.to_string()]),
+        )
     }
 
-    fn assert_link(links: &[InventoryLink], relation: &str, odata_id: &str) {
+    fn assert_link(
+        links: &std::collections::BTreeMap<String, InventoryLink>,
+        relation: &str,
+        odata_id: &str,
+    ) {
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].relation, relation);
-        assert_eq!(links[0].odata_id, odata_id);
+        assert_eq!(
+            serde_json::to_value(&links[relation]).unwrap(),
+            serde_json::json!([{"@odata.id": odata_id}])
+        );
     }
 
     fn pcie_device(id: &str) -> crate::source::PcieDeviceData {
@@ -792,7 +835,7 @@ mod tests {
             status_state: None,
             health: None,
             health_rollup: None,
-            links: vec![link("Chassis", "/redfish/v1/Chassis/BMC_0")],
+            links: std::collections::BTreeMap::from([link("Chassis", "/redfish/v1/Chassis/BMC_0")]),
         }
     }
 
@@ -850,7 +893,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
-            links: Vec::new(),
+            links: Default::default(),
         }
     }
 
@@ -872,7 +915,7 @@ mod tests {
             status_state: Some("Enabled".to_string()),
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
-            links: Vec::new(),
+            links: Default::default(),
         }
     }
 

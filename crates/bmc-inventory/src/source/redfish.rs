@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -520,6 +521,7 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .map(|inventory| {
             let raw = inventory.raw();
             FirmwareData {
+                related_item: raw.related_item.as_deref().map(reference_targets),
                 service_id: "FirmwareInventory".to_string(),
                 id: inventory.id().to_string(),
                 odata_id: Some(inventory.odata_id().to_string()),
@@ -535,8 +537,8 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .collect())
 }
 
-fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
@@ -582,11 +584,13 @@ fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> Vec<Link
         "ManagerForFabrics",
         links.manager_for_fabrics.as_deref(),
     );
-    finish_links(out)
+    out
 }
 
-fn system_links(links: Option<&nv_redfish::schema::computer_system::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn system_links(
+    links: Option<&nv_redfish::schema::computer_system::Links>,
+) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
@@ -626,11 +630,11 @@ fn system_links(links: Option<&nv_redfish::schema::computer_system::Links>) -> V
         "VirtualMachines",
         links.virtual_machines.as_deref(),
     );
-    finish_links(out)
+    out
 }
 
-fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
@@ -676,11 +680,13 @@ fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> Vec<Link
         "AutomationNodes",
         links.automation_nodes.as_deref(),
     );
-    finish_links(out)
+    out
 }
 
-fn processor_links(links: Option<&nv_redfish::schema::processor::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn processor_links(
+    links: Option<&nv_redfish::schema::processor::Links>,
+) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
@@ -705,11 +711,13 @@ fn processor_links(links: Option<&nv_redfish::schema::processor::Links>) -> Vec<
         links.network_device_functions.as_deref(),
     );
     push_reference_links(&mut out, "FabricAdapters", links.fabric_adapters.as_deref());
-    finish_links(out)
+    out
 }
 
-fn pcie_device_links(links: Option<&nv_redfish::schema::pcie_device::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn pcie_device_links(
+    links: Option<&nv_redfish::schema::pcie_device::Links>,
+) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
@@ -722,64 +730,80 @@ fn pcie_device_links(links: Option<&nv_redfish::schema::pcie_device::Links>) -> 
         "ConnectedPCIePorts",
         links.connected_pcie_ports.as_deref(),
     );
-    finish_links(out)
+    out
 }
 
-fn firmware_links(links: Option<&nv_redfish::schema::software_inventory::Links>) -> Vec<LinkData> {
-    let mut out = Vec::new();
+fn firmware_links(
+    links: Option<&nv_redfish::schema::software_inventory::Links>,
+) -> BTreeMap<String, LinkData> {
+    let mut out = BTreeMap::new();
     let Some(links) = links else {
         return out;
     };
     push_reference_links(&mut out, "StagedTargets", links.staged_targets.as_deref());
     push_reference_links(&mut out, "ActiveTargets", links.active_targets.as_deref());
-    finish_links(out)
+    out
 }
 
 fn push_nav_links<T: EntityTypeRef>(
-    out: &mut Vec<LinkData>,
+    out: &mut BTreeMap<String, LinkData>,
     relation: &str,
     links: Option<&[NavProperty<T>]>,
 ) {
     if let Some(links) = links {
-        for link in links {
-            push_link(out, relation, link.id().to_string());
-        }
+        out.insert(
+            relation.to_string(),
+            LinkData::Multiple(
+                links
+                    .iter()
+                    .filter_map(|link| normalize_link_target(&link.id().to_string()))
+                    .collect(),
+            ),
+        );
     }
 }
 
 fn push_nav_link<T: EntityTypeRef>(
-    out: &mut Vec<LinkData>,
+    out: &mut BTreeMap<String, LinkData>,
     relation: &str,
     link: Option<&NavProperty<T>>,
 ) {
-    if let Some(link) = link {
-        push_link(out, relation, link.id().to_string());
+    if let Some(target) = link.and_then(|link| normalize_link_target(&link.id().to_string())) {
+        out.insert(relation.to_string(), LinkData::Single(target));
     }
 }
 
-fn push_reference_links(out: &mut Vec<LinkData>, relation: &str, links: Option<&[ReferenceLeaf]>) {
+fn reference_targets(links: &[ReferenceLeaf]) -> Vec<String> {
+    links
+        .iter()
+        .filter_map(|link| normalize_link_target(&link.odata_id.to_string()))
+        .collect()
+}
+
+fn push_reference_links(
+    out: &mut BTreeMap<String, LinkData>,
+    relation: &str,
+    links: Option<&[ReferenceLeaf]>,
+) {
     if let Some(links) = links {
-        for link in links {
-            push_link(out, relation, link.odata_id.to_string());
-        }
+        out.insert(
+            relation.to_string(),
+            LinkData::Multiple(reference_targets(links)),
+        );
     }
 }
 
-fn push_reference_link(out: &mut Vec<LinkData>, relation: &str, link: Option<&ReferenceLeaf>) {
-    if let Some(link) = link {
-        push_link(out, relation, link.odata_id.to_string());
+fn push_reference_link(
+    out: &mut BTreeMap<String, LinkData>,
+    relation: &str,
+    link: Option<&ReferenceLeaf>,
+) {
+    if let Some(target) = link.and_then(|link| normalize_link_target(&link.odata_id.to_string())) {
+        out.insert(relation.to_string(), LinkData::Single(target));
     }
 }
 
-fn push_link(out: &mut Vec<LinkData>, relation: &str, odata_id: String) {
-    if let Some(odata_id) = normalize_link_target(&odata_id) {
-        out.push(LinkData {
-            relation: relation.to_string(),
-            odata_id,
-        });
-    }
-}
-
+/// Strip authority/credentials and query parameters, but retain subobject identity.
 fn normalize_link_target(odata_id: &str) -> Option<String> {
     let value = odata_id.trim();
     if value.is_empty() {
@@ -788,22 +812,24 @@ fn normalize_link_target(odata_id: &str) -> Option<String> {
     if let Ok(url) = Url::parse(value)
         && url.has_host()
     {
-        return Some(url.path().to_string());
+        return Some(match url.fragment() {
+            Some(fragment) => format!("{}#{fragment}", url.path()),
+            None => url.path().to_string(),
+        });
     }
-    value
-        .split(['?', '#'])
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn finish_links(mut links: Vec<LinkData>) -> Vec<LinkData> {
-    links.sort_by(|left, right| {
-        (&left.relation, &left.odata_id).cmp(&(&right.relation, &right.odata_id))
-    });
-    links.dedup();
-    links
+    let (resource, fragment) = value
+        .split_once('#')
+        .map_or((value, None), |(resource, fragment)| {
+            (resource, Some(fragment))
+        });
+    let path = resource.split('?').next().unwrap_or_default();
+    if path.is_empty() && fragment.is_none() {
+        return None;
+    }
+    Some(match fragment {
+        Some(fragment) => format!("{path}#{fragment}"),
+        None => path.to_string(),
+    })
 }
 
 fn status_state(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
@@ -957,25 +983,44 @@ mod tests {
     }
 
     #[test]
-    fn link_targets_omit_origins_parameters_and_duplicates() {
+    fn link_targets_preserve_fragments_and_relationship_shape() {
+        assert_eq!(normalize_link_target("https://user:secret@bmc.example.com/redfish/v1/Systems/System?token=secret#/Processors/0").as_deref(),
+            Some("/redfish/v1/Systems/System#/Processors/0"));
         assert_eq!(
-            normalize_link_target(
-                "https://bmc.example.com/redfish/v1/Systems/System?detail=true#item"
-            )
-            .as_deref(),
-            Some("/redfish/v1/Systems/System")
+            normalize_link_target("/redfish/v1/Systems/System?token=secret#/Processors/0")
+                .as_deref(),
+            Some("/redfish/v1/Systems/System#/Processors/0")
         );
         assert_eq!(
-            normalize_link_target("/redfish/v1/Managers/BMC?detail=true").as_deref(),
-            Some("/redfish/v1/Managers/BMC")
+            normalize_link_target("#/Processors/0").as_deref(),
+            Some("#/Processors/0")
         );
         assert_eq!(normalize_link_target("  "), None);
-
-        let link = LinkData {
-            relation: "ManagedBy".to_string(),
-            odata_id: "/redfish/v1/Managers/BMC".to_string(),
-        };
-        assert_eq!(finish_links(vec![link.clone(), link.clone()]), vec![link]);
+        let raw: nv_redfish::schema::chassis::Links = serde_json::from_value(serde_json::json!({
+            "ContainedBy": {"@odata.id": "/redfish/v1/Chassis/Rack"},
+            "Contains": [
+                {"@odata.id": "/redfish/v1/Chassis/B"},
+                {"@odata.id": "/redfish/v1/Chassis/A"},
+                {"@odata.id": "/redfish/v1/Chassis/B"}
+            ],
+            "ManagedBy": []
+        }))
+        .unwrap();
+        let links = chassis_links(Some(&raw));
+        assert_eq!(
+            links["ContainedBy"],
+            LinkData::Single("/redfish/v1/Chassis/Rack".into())
+        );
+        assert_eq!(
+            links["Contains"],
+            LinkData::Multiple(vec![
+                "/redfish/v1/Chassis/B".into(),
+                "/redfish/v1/Chassis/A".into(),
+                "/redfish/v1/Chassis/B".into()
+            ])
+        );
+        assert_eq!(links["ManagedBy"], LinkData::Multiple(vec![]));
+        assert!(!links.contains_key("ComputerSystems"));
     }
 
     #[test]
@@ -1052,7 +1097,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
-            links: Vec::new(),
+            links: Default::default(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -1087,7 +1132,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
-            links: Vec::new(),
+            links: Default::default(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -1158,10 +1203,10 @@ mod tests {
         );
         assert_eq!(
             report.managers[0].links,
-            vec![LinkData {
-                relation: "ManagerForServers".to_string(),
-                odata_id: "/redfish/v1/Systems/System".to_string(),
-            }]
+            BTreeMap::from([(
+                "ManagerForServers".to_string(),
+                LinkData::Multiple(vec!["/redfish/v1/Systems/System#item".into()])
+            )])
         );
 
         assert_eq!(report.systems.len(), 1);
@@ -1215,23 +1260,23 @@ mod tests {
         assert_eq!(report.systems[0].health_rollup.as_deref(), Some("Warning"));
         assert_eq!(
             report.systems[0].links,
-            vec![
-                LinkData {
-                    relation: "Chassis".to_string(),
-                    odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
-                },
-                LinkData {
-                    relation: "ManagedBy".to_string(),
-                    odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
-                },
-            ]
+            BTreeMap::from([
+                (
+                    "Chassis".into(),
+                    LinkData::Multiple(vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()])
+                ),
+                (
+                    "ManagedBy".into(),
+                    LinkData::Multiple(vec!["/redfish/v1/Managers/BMC_0".into()])
+                )
+            ])
         );
         assert_eq!(
             processor.links,
-            vec![LinkData {
-                relation: "Chassis".to_string(),
-                odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
-            }]
+            BTreeMap::from([(
+                "Chassis".to_string(),
+                LinkData::Single("/redfish/v1/Chassis/HGX_GPU_SXM_0".into())
+            )])
         );
 
         assert_eq!(report.chassis.len(), 1);
@@ -1275,6 +1320,10 @@ mod tests {
         assert_eq!(report.firmware[0].health.as_deref(), Some("Critical"));
         assert_eq!(report.firmware[0].health_rollup.as_deref(), Some("Warning"));
         assert_eq!(report.firmware[0].links.len(), 1);
+        assert_eq!(
+            report.firmware[0].related_item,
+            Some(vec!["/redfish/v1/Managers/BMC_0#/Firmware".into()])
+        );
     }
 
     #[tokio::test]
@@ -1739,6 +1788,7 @@ mod tests {
         "@odata.type": "#SoftwareInventory.v1_8_0.SoftwareInventory",
         "Id": "BMC",
         "Name": "BMC",
+        "RelatedItem": [{"@odata.id": "/redfish/v1/Managers/BMC_0#/Firmware"}],
         "Version": "3.19.00",
         "ReleaseDate": "2026-01-01T00:00:00Z",
         "Links": {

@@ -779,16 +779,22 @@ fn push_link_detail_rows(
     rows: &mut Vec<[String; 4]>,
     resource_type: &str,
     source: &str,
-    links: &[InventoryLink],
+    links: &std::collections::BTreeMap<String, InventoryLink>,
 ) {
-    rows.extend(links.iter().map(|link| {
-        [
-            resource_type.to_string(),
-            source.to_string(),
-            link.relation.clone(),
-            link.odata_id.clone(),
-        ]
-    }));
+    for (relation, link) in links {
+        let targets = match link {
+            InventoryLink::Single(target) => std::slice::from_ref(target),
+            InventoryLink::Multiple(targets) => targets.as_slice(),
+        };
+        rows.extend(targets.iter().map(|target| {
+            [
+                resource_type.to_string(),
+                source.to_string(),
+                relation.clone(),
+                target.odata_id.clone(),
+            ]
+        }));
+    }
 }
 
 fn format_cpu(system: &SystemInventory) -> String {
@@ -1060,9 +1066,9 @@ mod tests {
                     status_state: Some("Enabled".to_string()),
                     health: Some("OK".to_string()),
                     health_rollup: Some("OK".to_string()),
-                    links: Vec::new(),
+                    links: Default::default(),
                 }],
-                links: Vec::new(),
+                links: Default::default(),
             }],
             managers: vec![ManagerInventory {
                 id: "BMC_0".to_string(),
@@ -1074,10 +1080,12 @@ mod tests {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
-                links: vec![InventoryLink {
-                    relation: "ManagerForServers".to_string(),
-                    odata_id: "/redfish/v1/Systems/System".to_string(),
-                }],
+                links: std::collections::BTreeMap::from([(
+                    "ManagerForServers".into(),
+                    InventoryLink::Multiple(vec![crate::models::InventoryLinkReference {
+                        odata_id: "/redfish/v1/Systems/System".into(),
+                    }]),
+                )]),
             }],
             chassis: vec![ChassisInventory {
                 id: "BMC_0".to_string(),
@@ -1108,11 +1116,12 @@ mod tests {
                     status_state: Some("Enabled".to_string()),
                     health: Some("OK".to_string()),
                     health_rollup: Some("OK".to_string()),
-                    links: Vec::new(),
+                    links: Default::default(),
                 }],
-                links: Vec::new(),
+                links: Default::default(),
             }],
             firmware: vec![FirmwareInventory {
+                related_item: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMC".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
@@ -1122,7 +1131,7 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
-                links: Vec::new(),
+                links: Default::default(),
             }],
             domain_errors: Vec::new(),
             target_error: None,
@@ -1151,7 +1160,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
-            links: Vec::new(),
+            links: Default::default(),
         }
     }
 }
