@@ -3,8 +3,8 @@ use std::fmt;
 
 use super::InventorySink;
 use crate::models::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, ManagerInventory, NodeInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryLink, ManagerInventory,
+    NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -714,6 +714,81 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         ],
         firmware_rows,
     ));
+
+    out.push_str("Links\n");
+    out.push_str(&render_table(
+        &["Resource Type", "Source", "Relation", "Target"],
+        link_detail_rows(inventory),
+    ));
+}
+
+fn link_detail_rows(inventory: &NodeInventory) -> Vec<[String; 4]> {
+    let mut rows = Vec::new();
+    for manager in &inventory.managers {
+        push_link_detail_rows(
+            &mut rows,
+            "manager",
+            manager.odata_id.as_deref().unwrap_or(&manager.id),
+            &manager.links,
+        );
+    }
+    for system in &inventory.systems {
+        push_link_detail_rows(
+            &mut rows,
+            "system",
+            system.odata_id.as_deref().unwrap_or(&system.id),
+            &system.links,
+        );
+        for processor in &system.processors {
+            push_link_detail_rows(
+                &mut rows,
+                "processor",
+                processor.odata_id.as_deref().unwrap_or(&processor.id),
+                &processor.links,
+            );
+        }
+    }
+    for chassis in &inventory.chassis {
+        push_link_detail_rows(
+            &mut rows,
+            "chassis",
+            chassis.odata_id.as_deref().unwrap_or(&chassis.id),
+            &chassis.links,
+        );
+        for device in &chassis.pcie_devices {
+            push_link_detail_rows(
+                &mut rows,
+                "pcie_device",
+                device.odata_id.as_deref().unwrap_or(&device.id),
+                &device.links,
+            );
+        }
+    }
+    for firmware in &inventory.firmware {
+        push_link_detail_rows(
+            &mut rows,
+            "firmware",
+            firmware.odata_id.as_deref().unwrap_or(&firmware.id),
+            &firmware.links,
+        );
+    }
+    rows
+}
+
+fn push_link_detail_rows(
+    rows: &mut Vec<[String; 4]>,
+    resource_type: &str,
+    source: &str,
+    links: &[InventoryLink],
+) {
+    rows.extend(links.iter().map(|link| {
+        [
+            resource_type.to_string(),
+            source.to_string(),
+            link.relation.clone(),
+            link.odata_id.clone(),
+        ]
+    }));
 }
 
 fn format_cpu(system: &SystemInventory) -> String {
@@ -892,6 +967,9 @@ mod tests {
         assert!(rendered.contains("| FirmwareInventory | BMC"));
         assert!(rendered.contains("StandbyOffline"));
         assert!(rendered.contains("Critical"));
+        assert!(rendered.contains("Links\n"));
+        assert!(rendered.contains("managerForServers"));
+        assert!(rendered.contains("/redfish/v1/Systems/System"));
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
@@ -900,12 +978,14 @@ mod tests {
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
+        let links = rendered.find("Links\n").expect("links");
         assert!(source < manager);
         assert!(manager < system);
         assert!(system < processor);
         assert!(processor < chassis);
         assert!(chassis < pcie);
         assert!(pcie < firmware);
+        assert!(firmware < links);
     }
 
     #[test]
@@ -980,7 +1060,9 @@ mod tests {
                     status_state: Some("Enabled".to_string()),
                     health: Some("OK".to_string()),
                     health_rollup: Some("OK".to_string()),
+                    links: Vec::new(),
                 }],
+                links: Vec::new(),
             }],
             managers: vec![ManagerInventory {
                 id: "BMC_0".to_string(),
@@ -992,6 +1074,10 @@ mod tests {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
+                links: vec![InventoryLink {
+                    relation: "managerForServers".to_string(),
+                    odata_id: "/redfish/v1/Systems/System".to_string(),
+                }],
             }],
             chassis: vec![ChassisInventory {
                 id: "BMC_0".to_string(),
@@ -1022,7 +1108,9 @@ mod tests {
                     status_state: Some("Enabled".to_string()),
                     health: Some("OK".to_string()),
                     health_rollup: Some("OK".to_string()),
+                    links: Vec::new(),
                 }],
+                links: Vec::new(),
             }],
             firmware: vec![FirmwareInventory {
                 service_id: "FirmwareInventory".to_string(),
@@ -1034,6 +1122,7 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
+                links: Vec::new(),
             }],
             domain_errors: Vec::new(),
             target_error: None,
@@ -1062,6 +1151,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Vec::new(),
         }
     }
 }

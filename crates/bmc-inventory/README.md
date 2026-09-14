@@ -111,6 +111,14 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 ## Output Conventions
 
 - API JSON fields are camelCase.
+- Standard Redfish `Links` relationships on managers, systems, processors,
+  chassis, PCIe devices, and firmware are emitted as normalized
+  `links[]` entries containing `relation` and `odataId`. The collector does not
+  fetch linked resources solely to populate these entries.
+- Link targets retain the resource path but omit an absolute origin, query, and
+  fragment so BMC addressing or URL parameters are not copied into inventory.
+- Link entries are sorted and deduplicated. Resources with no relationships
+  omit `links` for compatibility with older inventory documents.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.
 - `domainErrors` describes recoverable domain-level collection failures.

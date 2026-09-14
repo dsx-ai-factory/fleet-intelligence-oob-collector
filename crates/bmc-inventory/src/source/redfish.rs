@@ -5,14 +5,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
-use nv_redfish::core::ToSnakeCase;
+use nv_redfish::core::{EntityTypeRef, NavProperty, ReferenceLeaf, ToSnakeCase};
 use nv_redfish::{Bmc, Resource, ServiceRoot};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::{
-    ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource,
+    ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource, LinkData,
     ManagerData, PcieDeviceData, ProcessorData, RedfishReport, ServiceRootData, SourceRecord,
     SystemData, inventory_domain,
 };
@@ -175,6 +175,7 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
             health_rollup: status_health_rollup(raw.status.as_ref()),
+            links: manager_links(raw.links.as_ref()),
         });
     }
     Ok(out)
@@ -240,6 +241,7 @@ async fn collect_systems<B: Bmc>(
                 .flatten(),
             secure_boot_enabled: collect_secure_boot_enabled(&system, &system_id, errors).await,
             processors: collect_processors(&system, &system_id, errors).await,
+            links: system_links(raw.links.as_ref()),
         });
     }
     Ok(out)
@@ -294,6 +296,7 @@ async fn collect_chassis<B: Bmc>(
             } else {
                 Vec::new()
             },
+            links: chassis_links(raw.links.as_ref()),
         });
     }
     Ok(out)
@@ -437,6 +440,7 @@ async fn collect_processors<B: Bmc>(
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
             health_rollup: status_health_rollup(raw.status.as_ref()),
+            links: processor_links(raw.links.as_ref()),
         });
     }
     out
@@ -491,6 +495,7 @@ async fn collect_pcie_devices<B: Bmc>(
             status_state: status_state(raw.status.as_ref()),
             health: status_health(raw.status.as_ref()),
             health_rollup: status_health_rollup(raw.status.as_ref()),
+            links: pcie_device_links(raw.links.as_ref()),
         });
     }
     out
@@ -524,9 +529,281 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
                 status_state: status_state(raw.status.as_ref()),
                 health: status_health(raw.status.as_ref()),
                 health_rollup: status_health_rollup(raw.status.as_ref()),
+                links: firmware_links(raw.links.as_ref()),
             }
         })
         .collect())
+}
+
+fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_nav_links(
+        &mut out,
+        "managerForServers",
+        links.manager_for_servers.as_deref(),
+    );
+    push_nav_links(
+        &mut out,
+        "managerForChassis",
+        links.manager_for_chassis.as_deref(),
+    );
+    push_nav_link(
+        &mut out,
+        "managerInChassis",
+        links.manager_in_chassis.as_ref(),
+    );
+    push_reference_links(
+        &mut out,
+        "managerForSwitches",
+        links.manager_for_switches.as_deref(),
+    );
+    push_nav_link(
+        &mut out,
+        "activeSoftwareImage",
+        links.active_software_image.as_ref(),
+    );
+    push_nav_links(&mut out, "softwareImages", links.software_images.as_deref());
+    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
+    push_nav_links(
+        &mut out,
+        "managerForManagers",
+        links.manager_for_managers.as_deref(),
+    );
+    push_nav_link(
+        &mut out,
+        "selectedNetworkPort",
+        links.selected_network_port.as_ref(),
+    );
+    push_reference_links(
+        &mut out,
+        "managerForFabrics",
+        links.manager_for_fabrics.as_deref(),
+    );
+    finish_links(out)
+}
+
+fn system_links(links: Option<&nv_redfish::schema::computer_system::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_nav_links(&mut out, "chassis", links.chassis.as_deref());
+    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
+    push_reference_links(&mut out, "poweredBy", links.powered_by.as_deref());
+    push_reference_links(&mut out, "cooledBy", links.cooled_by.as_deref());
+    push_reference_links(&mut out, "endpoints", links.endpoints.as_deref());
+    push_reference_links(&mut out, "resourceBlocks", links.resource_blocks.as_deref());
+    push_nav_links(
+        &mut out,
+        "consumingComputerSystems",
+        links.consuming_computer_systems.as_deref(),
+    );
+    push_nav_links(
+        &mut out,
+        "supplyingComputerSystems",
+        links.supplying_computer_systems.as_deref(),
+    );
+    push_nav_links(
+        &mut out,
+        "offloadedNetworkDeviceFunctions",
+        links.offloaded_network_device_functions.as_deref(),
+    );
+    push_reference_links(
+        &mut out,
+        "trustedComponents",
+        links.trusted_components.as_deref(),
+    );
+    push_nav_link(
+        &mut out,
+        "hostingComputerSystem",
+        links.hosting_computer_system.as_ref(),
+    );
+    push_nav_links(
+        &mut out,
+        "virtualMachines",
+        links.virtual_machines.as_deref(),
+    );
+    finish_links(out)
+}
+
+fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_nav_links(
+        &mut out,
+        "computerSystems",
+        links.computer_systems.as_deref(),
+    );
+    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
+    push_nav_link(&mut out, "containedBy", links.contained_by.as_ref());
+    push_nav_links(&mut out, "contains", links.contains.as_deref());
+    push_reference_links(&mut out, "poweredBy", links.powered_by.as_deref());
+    push_reference_links(&mut out, "cooledBy", links.cooled_by.as_deref());
+    push_nav_links(
+        &mut out,
+        "managersInChassis",
+        links.managers_in_chassis.as_deref(),
+    );
+    push_nav_links(&mut out, "drives", links.drives.as_deref());
+    push_nav_links(&mut out, "storage", links.storage.as_deref());
+    push_nav_links(&mut out, "pcieDevices", links.pcie_devices.as_deref());
+    push_reference_links(&mut out, "resourceBlocks", links.resource_blocks.as_deref());
+    push_reference_links(&mut out, "switches", links.switches.as_deref());
+    push_nav_links(&mut out, "processors", links.processors.as_deref());
+    push_reference_link(&mut out, "facility", links.facility.as_ref());
+    push_reference_links(&mut out, "cables", links.cables.as_deref());
+    push_reference_links(&mut out, "powerOutlets", links.power_outlets.as_deref());
+    push_nav_links(&mut out, "powerSupplies", links.power_supplies.as_deref());
+    push_nav_links(&mut out, "fans", links.fans.as_deref());
+    push_nav_link(
+        &mut out,
+        "powerDistribution",
+        links.power_distribution.as_ref(),
+    );
+    push_reference_links(&mut out, "coolingUnits", links.cooling_units.as_deref());
+    push_reference_links(
+        &mut out,
+        "connectedCoolingLoops",
+        links.connected_cooling_loops.as_deref(),
+    );
+    push_reference_links(
+        &mut out,
+        "automationNodes",
+        links.automation_nodes.as_deref(),
+    );
+    finish_links(out)
+}
+
+fn processor_links(links: Option<&nv_redfish::schema::processor::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_nav_link(&mut out, "chassis", links.chassis.as_ref());
+    push_reference_links(&mut out, "endpoints", links.endpoints.as_deref());
+    push_nav_links(
+        &mut out,
+        "connectedProcessors",
+        links.connected_processors.as_deref(),
+    );
+    push_nav_link(&mut out, "pcieDevice", links.pcie_device.as_ref());
+    push_reference_links(&mut out, "pcieFunctions", links.pcie_functions.as_deref());
+    push_nav_links(&mut out, "memory", links.memory.as_deref());
+    push_reference_link(
+        &mut out,
+        "graphicsController",
+        links.graphics_controller.as_ref(),
+    );
+    push_nav_links(
+        &mut out,
+        "networkDeviceFunctions",
+        links.network_device_functions.as_deref(),
+    );
+    push_reference_links(&mut out, "fabricAdapters", links.fabric_adapters.as_deref());
+    finish_links(out)
+}
+
+fn pcie_device_links(links: Option<&nv_redfish::schema::pcie_device::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_nav_links(&mut out, "chassis", links.chassis.as_deref());
+    push_reference_links(&mut out, "pcieFunctions", links.pcie_functions.as_deref());
+    push_reference_link(&mut out, "switch", links.switch.as_ref());
+    push_nav_links(&mut out, "processors", links.processors.as_deref());
+    push_nav_links(
+        &mut out,
+        "connectedPciePorts",
+        links.connected_pcie_ports.as_deref(),
+    );
+    finish_links(out)
+}
+
+fn firmware_links(links: Option<&nv_redfish::schema::software_inventory::Links>) -> Vec<LinkData> {
+    let mut out = Vec::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_reference_links(&mut out, "stagedTargets", links.staged_targets.as_deref());
+    push_reference_links(&mut out, "activeTargets", links.active_targets.as_deref());
+    finish_links(out)
+}
+
+fn push_nav_links<T: EntityTypeRef>(
+    out: &mut Vec<LinkData>,
+    relation: &str,
+    links: Option<&[NavProperty<T>]>,
+) {
+    if let Some(links) = links {
+        for link in links {
+            push_link(out, relation, link.id().to_string());
+        }
+    }
+}
+
+fn push_nav_link<T: EntityTypeRef>(
+    out: &mut Vec<LinkData>,
+    relation: &str,
+    link: Option<&NavProperty<T>>,
+) {
+    if let Some(link) = link {
+        push_link(out, relation, link.id().to_string());
+    }
+}
+
+fn push_reference_links(out: &mut Vec<LinkData>, relation: &str, links: Option<&[ReferenceLeaf]>) {
+    if let Some(links) = links {
+        for link in links {
+            push_link(out, relation, link.odata_id.to_string());
+        }
+    }
+}
+
+fn push_reference_link(out: &mut Vec<LinkData>, relation: &str, link: Option<&ReferenceLeaf>) {
+    if let Some(link) = link {
+        push_link(out, relation, link.odata_id.to_string());
+    }
+}
+
+fn push_link(out: &mut Vec<LinkData>, relation: &str, odata_id: String) {
+    if let Some(odata_id) = normalize_link_target(&odata_id) {
+        out.push(LinkData {
+            relation: relation.to_string(),
+            odata_id,
+        });
+    }
+}
+
+fn normalize_link_target(odata_id: &str) -> Option<String> {
+    let value = odata_id.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(url) = Url::parse(value)
+        && url.has_host()
+    {
+        return Some(url.path().to_string());
+    }
+    value
+        .split(['?', '#'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn finish_links(mut links: Vec<LinkData>) -> Vec<LinkData> {
+    links.sort_by(|left, right| {
+        (&left.relation, &left.odata_id).cmp(&(&right.relation, &right.odata_id))
+    });
+    links.dedup();
+    links
 }
 
 fn status_state(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
@@ -680,6 +957,28 @@ mod tests {
     }
 
     #[test]
+    fn link_targets_omit_origins_parameters_and_duplicates() {
+        assert_eq!(
+            normalize_link_target(
+                "https://bmc.example.com/redfish/v1/Systems/System?detail=true#item"
+            )
+            .as_deref(),
+            Some("/redfish/v1/Systems/System")
+        );
+        assert_eq!(
+            normalize_link_target("/redfish/v1/Managers/BMC?detail=true").as_deref(),
+            Some("/redfish/v1/Managers/BMC")
+        );
+        assert_eq!(normalize_link_target("  "), None);
+
+        let link = LinkData {
+            relation: "managedBy".to_string(),
+            odata_id: "/redfish/v1/Managers/BMC".to_string(),
+        };
+        assert_eq!(finish_links(vec![link.clone(), link.clone()]), vec![link]);
+    }
+
+    #[test]
     fn pcie_traversal_policy_controls_selected_chassis() {
         assert!(should_collect_pcie_devices_for_chassis(
             &PcieTraversalPolicy::All,
@@ -753,6 +1052,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Vec::new(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -787,6 +1087,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Vec::new(),
         }];
 
         let policy = pcie_traversal_policy(&service_root, &systems);
@@ -855,6 +1156,13 @@ mod tests {
             report.managers[0].firmware_version.as_deref(),
             Some("3.19.00")
         );
+        assert_eq!(
+            report.managers[0].links,
+            vec![LinkData {
+                relation: "managerForServers".to_string(),
+                odata_id: "/redfish/v1/Systems/System".to_string(),
+            }]
+        );
 
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.systems[0].id, "DGX");
@@ -905,6 +1213,26 @@ mod tests {
         assert_eq!(report.systems[0].status_state.as_deref(), Some("Enabled"));
         assert_eq!(report.systems[0].health.as_deref(), Some("OK"));
         assert_eq!(report.systems[0].health_rollup.as_deref(), Some("Warning"));
+        assert_eq!(
+            report.systems[0].links,
+            vec![
+                LinkData {
+                    relation: "chassis".to_string(),
+                    odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
+                },
+                LinkData {
+                    relation: "managedBy".to_string(),
+                    odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            processor.links,
+            vec![LinkData {
+                relation: "chassis".to_string(),
+                odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
+            }]
+        );
 
         assert_eq!(report.chassis.len(), 1);
         assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
@@ -921,6 +1249,7 @@ mod tests {
         assert_eq!(location.rack.as_deref(), Some("R12"));
         assert_eq!(location.row.as_deref(), Some("A"));
         assert_eq!(location.rack_offset, Some(7));
+        assert_eq!(report.chassis[0].links.len(), 2);
 
         assert_eq!(report.chassis[0].pcie_devices.len(), 1);
         assert_eq!(report.chassis[0].pcie_devices[0].id, "GPU1");
@@ -928,6 +1257,7 @@ mod tests {
             report.chassis[0].pcie_devices[0].serial_number.as_deref(),
             Some("GPU-SN456")
         );
+        assert_eq!(report.chassis[0].pcie_devices[0].links.len(), 1);
 
         assert_eq!(report.firmware.len(), 1);
         assert_eq!(report.firmware[0].service_id, "FirmwareInventory");
@@ -944,6 +1274,7 @@ mod tests {
         );
         assert_eq!(report.firmware[0].health.as_deref(), Some("Critical"));
         assert_eq!(report.firmware[0].health_rollup.as_deref(), Some("Warning"));
+        assert_eq!(report.firmware[0].links.len(), 1);
     }
 
     #[tokio::test]
@@ -1177,7 +1508,12 @@ mod tests {
         "ManagerType": "BMC",
         "UUID": "11111111-2222-3333-4444-555555555555",
         "Model": "OpenBMC",
-        "FirmwareVersion": "3.19.00"
+        "FirmwareVersion": "3.19.00",
+        "Links": {
+            "ManagerForServers": [
+                {"@odata.id": "https://bmc.example.com/redfish/v1/Systems/System?view=detail#item"}
+            ]
+        }
     }"##;
 
     const MALFORMED_MANAGER: &str = r##"{
@@ -1246,6 +1582,10 @@ mod tests {
             "Model": "Grace"
         },
         "Processors": {"@odata.id": "/redfish/v1/Systems/System/Processors"},
+        "Links": {
+            "Chassis": [{"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0"}],
+            "ManagedBy": [{"@odata.id": "/redfish/v1/Managers/BMC_0"}]
+        },
         "MemorySummary": {
             "TotalSystemMemoryGiB": 480
         },
@@ -1281,6 +1621,9 @@ mod tests {
         "MaxSpeedMHz": 3600,
         "TotalCores": 72,
         "TotalThreads": 72,
+        "Links": {
+            "Chassis": {"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0"}
+        },
         "Status": {
             "State": "Enabled",
             "Health": "OK",
@@ -1325,6 +1668,10 @@ mod tests {
         "SerialNumber": "CH123",
         "PartNumber": "PN123",
         "PCIeDevices": {"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices"},
+        "Links": {
+            "ComputerSystems": [{"@odata.id": "/redfish/v1/Systems/System"}],
+            "ManagedBy": [{"@odata.id": "/redfish/v1/Managers/BMC_0"}]
+        },
         "Location": {
             "PartLocation": {"ServiceLabel": "Bay 1"},
             "Placement": {"Rack": "R12", "Row": "A", "RackOffset": 7}
@@ -1361,6 +1708,9 @@ mod tests {
         "PartNumber": "GPU-PN456",
         "DeviceType": "SingleFunction",
         "FirmwareVersion": "96.00.5E.00.02",
+        "Links": {
+            "Chassis": [{"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0"}]
+        },
         "Status": {
             "State": "Enabled",
             "Health": "OK"
@@ -1391,6 +1741,9 @@ mod tests {
         "Name": "BMC",
         "Version": "3.19.00",
         "ReleaseDate": "2026-01-01T00:00:00Z",
+        "Links": {
+            "ActiveTargets": [{"@odata.id": "/redfish/v1/Managers/BMC_0"}]
+        },
         "Status": {
             "State": "StandbyOffline",
             "Health": "Critical",

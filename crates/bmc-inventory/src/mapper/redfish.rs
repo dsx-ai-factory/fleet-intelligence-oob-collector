@@ -4,8 +4,8 @@ use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
-    InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory, PcieDeviceInventory,
-    ProcessorInventory, SystemInventory,
+    InventoryLink, InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory,
+    PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -204,6 +204,7 @@ fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
         status_state: manager.status_state,
         health: manager.health,
         health_rollup: manager.health_rollup,
+        links: manager.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -229,6 +230,7 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         memory_gib: system.memory_gib,
         secure_boot_enabled: system.secure_boot_enabled,
         processors: system.processors.into_iter().map(map_processor).collect(),
+        links: system.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -250,6 +252,7 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         status_state: processor.status_state,
         health: processor.health,
         health_rollup: processor.health_rollup,
+        links: processor.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -280,6 +283,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
             .into_iter()
             .map(map_pcie_device)
             .collect(),
+        links: chassis.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -298,6 +302,7 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
         status_state: device.status_state,
         health: device.health,
         health_rollup: device.health_rollup,
+        links: device.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -312,6 +317,14 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         status_state: firmware.status_state,
         health: firmware.health,
         health_rollup: firmware.health_rollup,
+        links: firmware.links.into_iter().map(map_link).collect(),
+    }
+}
+
+fn map_link(link: crate::source::LinkData) -> InventoryLink {
+    InventoryLink {
+        relation: link.relation,
+        odata_id: link.odata_id,
     }
 }
 
@@ -320,8 +333,8 @@ mod tests {
     use super::*;
     use crate::config::{Target, TargetKind};
     use crate::source::{
-        ChassisData, FirmwareData, ManagerData, ProcessorData, RedfishReport, ServiceRootData,
-        SourceRecord, SystemData,
+        ChassisData, FirmwareData, LinkData, ManagerData, ProcessorData, RedfishReport,
+        ServiceRootData, SourceRecord, SystemData,
     };
 
     #[test]
@@ -479,6 +492,7 @@ mod tests {
                         health_rollup: None,
                         location: None,
                         pcie_devices: Vec::new(),
+                        links: Vec::new(),
                     },
                     ChassisData {
                         id: "Baseboard_0".to_string(),
@@ -496,6 +510,7 @@ mod tests {
                         health_rollup: None,
                         location: None,
                         pcie_devices: Vec::new(),
+                        links: Vec::new(),
                     },
                 ],
                 firmware: Vec::new(),
@@ -664,6 +679,10 @@ mod tests {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
+                links: vec![LinkData {
+                    relation: "managerForServers".to_string(),
+                    odata_id: "/redfish/v1/Systems/System".to_string(),
+                }],
             }],
             systems: Vec::new(),
             chassis: Vec::new(),
@@ -677,6 +696,7 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
+                links: Vec::new(),
             }],
             errors: Vec::new(),
         });
@@ -695,6 +715,9 @@ mod tests {
         assert_eq!(manager.status_state.as_deref(), Some("Enabled"));
         assert_eq!(manager.health.as_deref(), Some("OK"));
         assert_eq!(manager.health_rollup.as_deref(), Some("OK"));
+        assert_eq!(manager.links.len(), 1);
+        assert_eq!(manager.links[0].relation, "managerForServers");
+        assert_eq!(manager.links[0].odata_id, "/redfish/v1/Systems/System");
         assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
         assert_eq!(
@@ -766,6 +789,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -787,6 +811,7 @@ mod tests {
             status_state: Some("Enabled".to_string()),
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
+            links: Vec::new(),
         }
     }
 

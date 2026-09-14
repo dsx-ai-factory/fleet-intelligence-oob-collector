@@ -51,7 +51,9 @@ fn node_inventory_serializes_as_backend_payload() {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
+                links: Vec::new(),
             }],
+            links: Vec::new(),
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -72,6 +74,10 @@ fn node_inventory_serializes_as_backend_payload() {
             status_state: Some("Enabled".to_string()),
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
+            links: vec![InventoryLink {
+                relation: "managerForServers".to_string(),
+                odata_id: "/redfish/v1/Systems/System".to_string(),
+            }],
         }],
         chassis: vec![ChassisInventory {
             id: "BMC_0".to_string(),
@@ -108,7 +114,9 @@ fn node_inventory_serializes_as_backend_payload() {
                 status_state: Some("Enabled".to_string()),
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
+                links: Vec::new(),
             }],
+            links: Vec::new(),
         }],
         firmware: vec![FirmwareInventory {
             service_id: "FirmwareInventory".to_string(),
@@ -120,6 +128,7 @@ fn node_inventory_serializes_as_backend_payload() {
             status_state: Some("StandbyOffline".to_string()),
             health: Some("Critical".to_string()),
             health_rollup: Some("Warning".to_string()),
+            links: Vec::new(),
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
@@ -200,7 +209,11 @@ fn node_inventory_serializes_as_backend_payload() {
                 "firmwareVersion": "3.19.00",
                 "statusState": "Enabled",
                 "health": "OK",
-                "healthRollup": "OK"
+                "healthRollup": "OK",
+                "links": [{
+                    "relation": "managerForServers",
+                    "odataId": "/redfish/v1/Systems/System"
+                }]
             }],
             "chassis": [{
                 "id": "BMC_0",
