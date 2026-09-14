@@ -195,6 +195,8 @@ fn normalized_service_uuid(service_uuid: Option<&str>) -> Option<String> {
 
 fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
     ManagerInventory {
+        name: manager.name,
+        description: manager.description,
         id: manager.id,
         odata_id: manager.odata_id,
         uuid: manager.uuid,
@@ -209,6 +211,8 @@ fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
 
 fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventory {
     SystemInventory {
+        name: system.name,
+        description: system.description,
         id: system.id,
         odata_id: system.odata_id,
         uuid,
@@ -234,6 +238,8 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
 
 fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory {
     ProcessorInventory {
+        name: processor.name,
+        description: processor.description,
         id: processor.id,
         odata_id: processor.odata_id,
         uuid: processor.uuid,
@@ -255,6 +261,8 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
 
 fn map_chassis(chassis: ChassisData) -> ChassisInventory {
     ChassisInventory {
+        name: chassis.name,
+        description: chassis.description,
         id: chassis.id,
         odata_id: chassis.odata_id,
         chassis_type: chassis.chassis_type,
@@ -285,6 +293,8 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
 
 fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory {
     PcieDeviceInventory {
+        name: device.name,
+        description: device.description,
         id: device.id,
         odata_id: device.odata_id,
         uuid: device.uuid,
@@ -303,6 +313,7 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
 
 fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
     FirmwareInventory {
+        description: firmware.description,
         service_id: firmware.service_id,
         id: firmware.id,
         odata_id: firmware.odata_id,
@@ -464,6 +475,8 @@ mod tests {
                 systems: Vec::new(),
                 chassis: vec![
                     ChassisData {
+                        name: "Chassis".into(),
+                        description: None,
                         id: "BMC_0".to_string(),
                         odata_id: None,
                         chassis_type: Some("module".to_string()),
@@ -481,6 +494,8 @@ mod tests {
                         pcie_devices: Vec::new(),
                     },
                     ChassisData {
+                        name: "Chassis".into(),
+                        description: None,
                         id: "Baseboard_0".to_string(),
                         odata_id: None,
                         chassis_type: Some("board".to_string()),
@@ -655,6 +670,8 @@ mod tests {
                 product: Some("NVIDIA BMC".to_string()),
             },
             managers: vec![ManagerData {
+                name: "Manager".into(),
+                description: Some("  Controller  ".into()),
                 id: "BMC_0".to_string(),
                 odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
                 uuid: Some("manager-uuid".to_string()),
@@ -668,6 +685,7 @@ mod tests {
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: vec![FirmwareData {
+                description: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMCImage1".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMCImage1".to_string()),
@@ -687,6 +705,7 @@ mod tests {
         assert_eq!(inventory.managers.len(), 1);
         let manager = inventory.managers.first().expect("manager");
         assert_eq!(manager.id, "BMC_0");
+        assert_eq!(manager.description.as_deref(), Some("  Controller  "));
         assert_eq!(
             manager.odata_id.as_deref(),
             Some("/redfish/v1/Managers/BMC_0")
@@ -746,6 +765,8 @@ mod tests {
 
     fn system(id: &str) -> SystemData {
         SystemData {
+            name: "System".into(),
+            description: None,
             id: id.to_string(),
             odata_id: None,
             uuid: None,
@@ -771,6 +792,8 @@ mod tests {
 
     fn processor(id: &str) -> ProcessorData {
         ProcessorData {
+            name: "Processor".into(),
+            description: None,
             id: id.to_string(),
             odata_id: Some(format!("/redfish/v1/Systems/System/Processors/{id}")),
             uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),

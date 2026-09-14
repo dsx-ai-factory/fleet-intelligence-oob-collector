@@ -17,7 +17,10 @@ pub struct InventorySourceInfo {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagerInventory {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub manager_type: Option<String>,
@@ -31,7 +34,10 @@ pub struct ManagerInventory {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemInventory {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<InventoryUuid>,
     pub manufacturer: Option<String>,
@@ -56,7 +62,10 @@ pub struct SystemInventory {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessorInventory {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub socket: Option<String>,
@@ -77,7 +86,10 @@ pub struct ProcessorInventory {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChassisInventory {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub chassis_type: Option<String>,
     pub manufacturer: Option<String>,
@@ -107,7 +119,10 @@ pub struct ChassisLocation {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PcieDeviceInventory {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub device_type: Option<String>,
@@ -125,8 +140,10 @@ pub struct PcieDeviceInventory {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirmwareInventory {
+    pub description: Option<String>,
     pub service_id: String,
     pub id: String,
+    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub name: String,
     pub version: Option<String>,

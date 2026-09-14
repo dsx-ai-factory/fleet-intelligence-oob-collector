@@ -15,6 +15,8 @@ fn node_inventory_serializes_as_backend_payload() {
         uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
         primary_system_id: Some("System".to_string()),
         systems: vec![SystemInventory {
+            name: "System".into(),
+            description: None,
             id: "System".to_string(),
             odata_id: Some("/redfish/v1/Systems/System".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
@@ -35,6 +37,8 @@ fn node_inventory_serializes_as_backend_payload() {
             memory_gib: Some(480.0),
             secure_boot_enabled: Some(true),
             processors: vec![ProcessorInventory {
+                name: "Processor".into(),
+                description: None,
                 id: "CPU1".to_string(),
                 odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
                 uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
@@ -63,6 +67,8 @@ fn node_inventory_serializes_as_backend_payload() {
             vendor: Some("NVIDIA".to_string()),
         },
         managers: vec![ManagerInventory {
+            name: "Manager".into(),
+            description: None,
             id: "BMC_0".to_string(),
             odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
             uuid: Some("11111111-2222-3333-4444-555555555555".to_string()),
@@ -74,6 +80,8 @@ fn node_inventory_serializes_as_backend_payload() {
             health_rollup: Some("OK".to_string()),
         }],
         chassis: vec![ChassisInventory {
+            name: "Chassis".into(),
+            description: None,
             id: "BMC_0".to_string(),
             odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
             chassis_type: Some("module".to_string()),
@@ -95,6 +103,8 @@ fn node_inventory_serializes_as_backend_payload() {
                 rack_offset: Some(7),
             }),
             pcie_devices: vec![PcieDeviceInventory {
+                name: "PcieDevice".into(),
+                description: None,
                 id: "GPU1".to_string(),
                 odata_id: Some("/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1".to_string()),
                 uuid: None,
@@ -111,6 +121,7 @@ fn node_inventory_serializes_as_backend_payload() {
             }],
         }],
         firmware: vec![FirmwareInventory {
+            description: None,
             service_id: "FirmwareInventory".to_string(),
             id: "BMC".to_string(),
             odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
@@ -144,8 +155,10 @@ fn node_inventory_serializes_as_backend_payload() {
             "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
             "primarySystemId": "System",
             "systems": [{
+                "name": "System",
+                "description": null,
                 "id": "System",
-                "odataId": "/redfish/v1/Systems/System",
+                "@odata.id": "/redfish/v1/Systems/System",
                 "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
                 "manufacturer": "NVIDIA",
                 "model": "GB200",
@@ -164,8 +177,10 @@ fn node_inventory_serializes_as_backend_payload() {
                 "memoryGib": 480.0,
                 "secureBootEnabled": true,
                 "processors": [{
+                "name": "Processor",
+                "description": null,
                     "id": "CPU1",
-                    "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
+                    "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
                     "uuid": "22222222-3333-4444-5555-666666666666",
                     "socket": "CPU Socket 1",
                     "processorType": "cpu",
@@ -192,8 +207,10 @@ fn node_inventory_serializes_as_backend_payload() {
                 "vendor": "NVIDIA"
             },
             "managers": [{
+                "name": "Manager",
+                "description": null,
                 "id": "BMC_0",
-                "odataId": "/redfish/v1/Managers/BMC_0",
+                "@odata.id": "/redfish/v1/Managers/BMC_0",
                 "uuid": "11111111-2222-3333-4444-555555555555",
                 "managerType": "bmc",
                 "model": "OpenBMC",
@@ -203,8 +220,10 @@ fn node_inventory_serializes_as_backend_payload() {
                 "healthRollup": "OK"
             }],
             "chassis": [{
+                "name": "Chassis",
+                "description": null,
                 "id": "BMC_0",
-                "odataId": "/redfish/v1/Chassis/BMC_0",
+                "@odata.id": "/redfish/v1/Chassis/BMC_0",
                 "chassisType": "module",
                 "manufacturer": "NVIDIA",
                 "model": "BMC",
@@ -224,8 +243,10 @@ fn node_inventory_serializes_as_backend_payload() {
                     "rackOffset": 7
                 },
                 "pcieDevices": [{
+                "name": "PcieDevice",
+                "description": null,
                     "id": "GPU1",
-                    "odataId": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+                    "@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
                     "uuid": null,
                     "deviceType": "single_function",
                     "manufacturer": "NVIDIA",
@@ -240,9 +261,11 @@ fn node_inventory_serializes_as_backend_payload() {
                 }]
             }],
             "firmware": [{
+
+                "description": null,
                 "serviceId": "FirmwareInventory",
                 "id": "BMC",
-                "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+                "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
                 "name": "BMC",
                 "version": "3.19.00",
                 "releaseDate": "2026-01-01T00:00:00Z",

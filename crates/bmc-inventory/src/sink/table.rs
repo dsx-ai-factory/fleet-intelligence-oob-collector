@@ -944,6 +944,8 @@ mod tests {
             },
             primary_system_id: Some("System".to_string()),
             systems: vec![SystemInventory {
+                name: "System".into(),
+                description: None,
                 id: "System".to_string(),
                 odata_id: Some("/redfish/v1/Systems/System".to_string()),
                 uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
@@ -964,6 +966,8 @@ mod tests {
                 memory_gib: Some(480.0),
                 secure_boot_enabled: Some(true),
                 processors: vec![ProcessorInventory {
+                    name: "Processor".into(),
+                    description: None,
                     id: "CPU1".to_string(),
                     odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
                     uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
@@ -983,6 +987,8 @@ mod tests {
                 }],
             }],
             managers: vec![ManagerInventory {
+                name: "Manager".into(),
+                description: None,
                 id: "BMC_0".to_string(),
                 odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
                 uuid: Some("manager-uuid".to_string()),
@@ -994,6 +1000,8 @@ mod tests {
                 health_rollup: Some("OK".to_string()),
             }],
             chassis: vec![ChassisInventory {
+                name: "Chassis".into(),
+                description: None,
                 id: "BMC_0".to_string(),
                 odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
                 chassis_type: Some("module".to_string()),
@@ -1009,6 +1017,8 @@ mod tests {
                 health_rollup: Some("OK".to_string()),
                 location: None,
                 pcie_devices: vec![PcieDeviceInventory {
+                    name: "PcieDevice".into(),
+                    description: None,
                     id: "GPU1".to_string(),
                     odata_id: Some("/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1".to_string()),
                     uuid: None,
@@ -1025,6 +1035,7 @@ mod tests {
                 }],
             }],
             firmware: vec![FirmwareInventory {
+                description: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMC".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
@@ -1042,6 +1053,8 @@ mod tests {
 
     fn system(cpu_count: Option<i64>, cpu_core_count: Option<i64>) -> SystemInventory {
         SystemInventory {
+            name: "System".into(),
+            description: None,
             id: "System".to_string(),
             odata_id: None,
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
