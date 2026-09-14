@@ -4,8 +4,8 @@ use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
-    InventorySourceInfo, InventoryUuid, ManagerInventory, NodeInventory, PcieDeviceInventory,
-    ProcessorInventory, SystemInventory,
+    InventoryCondition, InventoryReference, InventorySourceInfo, InventoryStatus, InventoryUuid,
+    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -201,9 +201,7 @@ fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
         manager_type: manager.manager_type,
         model: manager.model,
         firmware_version: manager.firmware_version,
-        status_state: manager.status_state,
-        health: manager.health,
-        health_rollup: manager.health_rollup,
+        status: manager.status.map(map_status),
     }
 }
 
@@ -220,9 +218,7 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         host_name: system.host_name,
         asset_tag: system.asset_tag,
         power_state: system.power_state,
-        status_state: system.status_state,
-        health: system.health,
-        health_rollup: system.health_rollup,
+        status: system.status.map(map_status),
         cpu_count: system.cpu_count,
         cpu_core_count: system.cpu_core_count,
         cpu_model: system.cpu_model,
@@ -247,9 +243,7 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         max_speed_mhz: processor.max_speed_mhz,
         total_cores: processor.total_cores,
         total_threads: processor.total_threads,
-        status_state: processor.status_state,
-        health: processor.health,
-        health_rollup: processor.health_rollup,
+        status: processor.status.map(map_status),
     }
 }
 
@@ -265,9 +259,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         part_number: chassis.part_number,
         asset_tag: chassis.asset_tag,
         power_state: chassis.power_state,
-        status_state: chassis.status_state,
-        health: chassis.health,
-        health_rollup: chassis.health_rollup,
+        status: chassis.status.map(map_status),
         location: chassis.location.map(|loc| ChassisLocation {
             service_label: loc.service_label,
             rack: loc.rack,
@@ -295,9 +287,7 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
         serial_number: device.serial_number,
         part_number: device.part_number,
         firmware_version: device.firmware_version,
-        status_state: device.status_state,
-        health: device.health,
-        health_rollup: device.health_rollup,
+        status: device.status.map(map_status),
     }
 }
 
@@ -309,9 +299,33 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         name: firmware.name,
         version: firmware.version,
         release_date: firmware.release_date,
-        status_state: firmware.status_state,
-        health: firmware.health,
-        health_rollup: firmware.health_rollup,
+        status: firmware.status.map(map_status),
+    }
+}
+
+fn map_status(status: crate::source::StatusData) -> InventoryStatus {
+    InventoryStatus {
+        conditions: status
+            .conditions
+            .map(|conditions| conditions.into_iter().map(map_condition).collect()),
+        health: status.health,
+        health_rollup: status.health_rollup,
+        state: status.state,
+    }
+}
+
+fn map_condition(condition: crate::source::ConditionData) -> InventoryCondition {
+    InventoryCondition {
+        timestamp: condition.timestamp,
+        message_id: condition.message_id,
+        message_args: condition.message_args,
+        message: condition.message,
+        severity: condition.severity,
+        resolution: condition.resolution,
+        condition_type: condition.condition_type,
+        origin_of_condition: condition
+            .origin_of_condition
+            .map(|odata_id| InventoryReference { odata_id }),
     }
 }
 
@@ -321,8 +335,70 @@ mod tests {
     use crate::config::{Target, TargetKind};
     use crate::source::{
         ChassisData, FirmwareData, ManagerData, ProcessorData, RedfishReport, ServiceRootData,
-        SourceRecord, SystemData,
+        SourceRecord, StatusData, SystemData,
     };
+
+    #[test]
+    fn maps_populated_status_conditions_and_origin_reference() {
+        let mapped = map_status(StatusData {
+            conditions: Some(vec![crate::source::ConditionData {
+                timestamp: Some("2026-08-25T20:51:47Z".to_string()),
+                message_id: "ResourceEvent.1.0.ResourceErrorsDetected".to_string(),
+                message_args: Some(vec![
+                    "CPU_1 Firmware".to_string(),
+                    "EC_STRAP_MISMATCH".to_string(),
+                ]),
+                message: Some("CPU_1 Firmware detected EC_STRAP_MISMATCH.".to_string()),
+                severity: Some("Critical".to_string()),
+                resolution: Some("Reset the component and collect logs.".to_string()),
+                condition_type: Some("Alert".to_string()),
+                origin_of_condition: Some("/redfish/v1/Chassis/HGX_CPU_1".to_string()),
+            }]),
+            health: Some("Warning".to_string()),
+            health_rollup: Some("Critical".to_string()),
+            state: Some("Enabled".to_string()),
+        });
+
+        assert_eq!(mapped.health.as_deref(), Some("Warning"));
+        assert_eq!(mapped.health_rollup.as_deref(), Some("Critical"));
+        assert_eq!(mapped.state.as_deref(), Some("Enabled"));
+        let conditions = mapped.conditions.expect("mapped conditions");
+        assert_eq!(conditions.len(), 1);
+        let condition = &conditions[0];
+        assert_eq!(condition.timestamp.as_deref(), Some("2026-08-25T20:51:47Z"));
+        assert_eq!(
+            condition.message_id,
+            "ResourceEvent.1.0.ResourceErrorsDetected"
+        );
+        assert_eq!(
+            condition.message_args.as_deref(),
+            Some(
+                [
+                    "CPU_1 Firmware".to_string(),
+                    "EC_STRAP_MISMATCH".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            condition.message.as_deref(),
+            Some("CPU_1 Firmware detected EC_STRAP_MISMATCH.")
+        );
+        assert_eq!(condition.severity.as_deref(), Some("Critical"));
+        assert_eq!(
+            condition.resolution.as_deref(),
+            Some("Reset the component and collect logs.")
+        );
+        assert_eq!(condition.condition_type.as_deref(), Some("Alert"));
+        assert_eq!(
+            condition
+                .origin_of_condition
+                .as_ref()
+                .expect("origin reference")
+                .odata_id,
+            "/redfish/v1/Chassis/HGX_CPU_1"
+        );
+    }
 
     #[test]
     fn maps_resolved_bmc_hostname_to_source_info() {
@@ -434,7 +510,13 @@ mod tests {
             system.odata_id.as_deref(),
             Some("/redfish/v1/Systems/System")
         );
-        assert_eq!(system.status_state.as_deref(), Some("Enabled"));
+        assert_eq!(
+            system
+                .status
+                .as_ref()
+                .and_then(|status| status.state.as_deref()),
+            Some("Enabled")
+        );
         assert_eq!(
             system.uuid.as_ref().expect("uuid").to_string(),
             "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
@@ -474,9 +556,7 @@ mod tests {
                         part_number: None,
                         asset_tag: None,
                         power_state: None,
-                        status_state: None,
-                        health: None,
-                        health_rollup: None,
+                        status: None,
                         location: None,
                         pcie_devices: Vec::new(),
                     },
@@ -491,9 +571,7 @@ mod tests {
                         part_number: None,
                         asset_tag: None,
                         power_state: None,
-                        status_state: None,
-                        health: None,
-                        health_rollup: None,
+                        status: None,
                         location: None,
                         pcie_devices: Vec::new(),
                     },
@@ -661,9 +739,7 @@ mod tests {
                 manager_type: Some("bmc".to_string()),
                 model: Some("OpenBMC".to_string()),
                 firmware_version: Some("3.19.00".to_string()),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("OK".to_string()),
+                status: Some(status("Enabled", "OK", "OK")),
             }],
             systems: Vec::new(),
             chassis: Vec::new(),
@@ -674,9 +750,7 @@ mod tests {
                 name: "BMCImage1".to_string(),
                 version: Some("3.19.00".to_string()),
                 release_date: None,
-                status_state: Some("StandbyOffline".to_string()),
-                health: Some("Critical".to_string()),
-                health_rollup: Some("Warning".to_string()),
+                status: Some(status("StandbyOffline", "Critical", "Warning")),
             }],
             errors: Vec::new(),
         });
@@ -692,24 +766,23 @@ mod tests {
             Some("/redfish/v1/Managers/BMC_0")
         );
         assert_eq!(manager.manager_type.as_deref(), Some("bmc"));
-        assert_eq!(manager.status_state.as_deref(), Some("Enabled"));
-        assert_eq!(manager.health.as_deref(), Some("OK"));
-        assert_eq!(manager.health_rollup.as_deref(), Some("OK"));
+        let manager_status = manager.status.as_ref().expect("manager status");
+        assert_eq!(manager_status.state.as_deref(), Some("Enabled"));
+        assert_eq!(manager_status.health.as_deref(), Some("OK"));
+        assert_eq!(manager_status.health_rollup.as_deref(), Some("OK"));
         assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
         assert_eq!(
             inventory.firmware[0].odata_id.as_deref(),
             Some("/redfish/v1/UpdateService/FirmwareInventory/BMCImage1")
         );
-        assert_eq!(
-            inventory.firmware[0].status_state.as_deref(),
-            Some("StandbyOffline")
-        );
-        assert_eq!(inventory.firmware[0].health.as_deref(), Some("Critical"));
-        assert_eq!(
-            inventory.firmware[0].health_rollup.as_deref(),
-            Some("Warning")
-        );
+        let firmware_status = inventory.firmware[0]
+            .status
+            .as_ref()
+            .expect("firmware status");
+        assert_eq!(firmware_status.state.as_deref(), Some("StandbyOffline"));
+        assert_eq!(firmware_status.health.as_deref(), Some("Critical"));
+        assert_eq!(firmware_status.health_rollup.as_deref(), Some("Warning"));
     }
 
     fn map_report(report: RedfishReport) -> NodeInventory {
@@ -757,9 +830,7 @@ mod tests {
             host_name: None,
             asset_tag: None,
             power_state: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
+            status: None,
             cpu_count: None,
             cpu_core_count: None,
             cpu_model: None,
@@ -784,9 +855,7 @@ mod tests {
             max_speed_mhz: Some(3600),
             total_cores: Some(72),
             total_threads: Some(72),
-            status_state: Some("Enabled".to_string()),
-            health: Some("OK".to_string()),
-            health_rollup: Some("OK".to_string()),
+            status: Some(status("Enabled", "OK", "OK")),
         }
     }
 
@@ -842,12 +911,12 @@ mod tests {
         }
 
         fn with_status_state(mut self, status_state: &str) -> Self {
-            self.status_state = Some(status_state.to_string());
+            self.status.get_or_insert_with(empty_status).state = Some(status_state.to_string());
             self
         }
 
         fn with_health(mut self, health: &str) -> Self {
-            self.health = Some(health.to_string());
+            self.status.get_or_insert_with(empty_status).health = Some(health.to_string());
             self
         }
 
@@ -865,6 +934,24 @@ mod tests {
         fn with_processor(mut self, processor: ProcessorData) -> Self {
             self.processors.push(processor);
             self
+        }
+    }
+
+    fn empty_status() -> StatusData {
+        StatusData {
+            conditions: None,
+            health: None,
+            health_rollup: None,
+            state: None,
+        }
+    }
+
+    fn status(state: &str, health: &str, health_rollup: &str) -> StatusData {
+        StatusData {
+            conditions: Some(Vec::new()),
+            health: Some(health.to_string()),
+            health_rollup: Some(health_rollup.to_string()),
+            state: Some(state.to_string()),
         }
     }
 }
