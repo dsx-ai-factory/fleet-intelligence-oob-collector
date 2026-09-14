@@ -402,28 +402,33 @@ mod tests {
 
     #[test]
     fn prefers_system_with_bios() {
+        let mut mapped_processor = processor("CPU1");
+        mapped_processor.links = vec![link(
+            "pcieDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        )];
+        let mut mapped_system = system("System")
+            .with_odata_id("/redfish/v1/Systems/System")
+            .with_uuid("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")
+            .with_manufacturer("NVIDIA")
+            .with_model("GB200")
+            .with_serial("SN123")
+            .with_bios("1.0")
+            .with_power_state("on")
+            .with_status_state("Enabled")
+            .with_health("OK")
+            .with_cpu(1, 72)
+            .with_memory_gib(480.0)
+            .with_processor(mapped_processor);
+        mapped_system.links = vec![link("managedBy", "/redfish/v1/Managers/BMC_0")];
+
         let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Ok(RedfishReport {
                 service_root: ServiceRootData::default(),
                 managers: Vec::new(),
-                systems: vec![
-                    system("BMC"),
-                    system("System")
-                        .with_odata_id("/redfish/v1/Systems/System")
-                        .with_uuid("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")
-                        .with_manufacturer("NVIDIA")
-                        .with_model("GB200")
-                        .with_serial("SN123")
-                        .with_bios("1.0")
-                        .with_power_state("on")
-                        .with_status_state("Enabled")
-                        .with_health("OK")
-                        .with_cpu(1, 72)
-                        .with_memory_gib(480.0)
-                        .with_processor(processor("CPU1")),
-                ],
+                systems: vec![system("BMC"), mapped_system],
                 chassis: Vec::new(),
                 firmware: Vec::new(),
                 errors: Vec::new(),
@@ -464,6 +469,12 @@ mod tests {
             Some("CPU-SN123")
         );
         assert_eq!(system.processors[0].total_cores, Some(72));
+        assert_link(&system.links, "managedBy", "/redfish/v1/Managers/BMC_0");
+        assert_link(
+            &system.processors[0].links,
+            "pcieDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        );
     }
 
     #[test]
@@ -491,8 +502,11 @@ mod tests {
                         health: None,
                         health_rollup: None,
                         location: None,
-                        pcie_devices: Vec::new(),
-                        links: Vec::new(),
+                        pcie_devices: vec![pcie_device("GPU_0")],
+                        links: vec![link(
+                            "processors",
+                            "/redfish/v1/Systems/System/Processors/GPU_0",
+                        )],
                     },
                     ChassisData {
                         id: "Baseboard_0".to_string(),
@@ -525,6 +539,16 @@ mod tests {
                 .expect("serial")
                 .to_string(),
             "  QTWS7G0241600218  "
+        );
+        assert_link(
+            &inventory.chassis[0].links,
+            "processors",
+            "/redfish/v1/Systems/System/Processors/GPU_0",
+        );
+        assert_link(
+            &inventory.chassis[0].pcie_devices[0].links,
+            "chassis",
+            "/redfish/v1/Chassis/BMC_0",
         );
         assert_eq!(inventory.chassis[1].serial_number.as_deref(), Some(" "));
     }
@@ -696,7 +720,7 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
-                links: Vec::new(),
+                links: vec![link("activeTargets", "/redfish/v1/Managers/BMC_0")],
             }],
             errors: Vec::new(),
         });
@@ -733,100 +757,10 @@ mod tests {
             inventory.firmware[0].health_rollup.as_deref(),
             Some("Warning")
         );
-    }
-
-    #[test]
-    fn maps_links_for_all_non_manager_resources() {
-        let mut source_processor = processor("GPU_0");
-        source_processor.links = vec![link(
-            "pcieDevice",
-            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
-        )];
-
-        let mut source_system = system("System");
-        source_system.processors = vec![source_processor];
-        source_system.links = vec![link("managedBy", "/redfish/v1/Managers/BMC_0")];
-        let mapped_system = map_system(source_system, None);
-
         assert_link(
-            &mapped_system.links,
-            "managedBy",
-            "/redfish/v1/Managers/BMC_0",
-        );
-        assert_link(
-            &mapped_system.processors[0].links,
-            "pcieDevice",
-            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
-        );
-
-        let source_device = crate::source::PcieDeviceData {
-            id: "GPU_0".to_string(),
-            odata_id: None,
-            uuid: None,
-            device_type: None,
-            manufacturer: None,
-            model: None,
-            sku: None,
-            serial_number: None,
-            part_number: None,
-            firmware_version: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
-            links: vec![link("chassis", "/redfish/v1/Chassis/HGX_GPU_0")],
-        };
-        let mapped_chassis = map_chassis(ChassisData {
-            id: "HGX_GPU_0".to_string(),
-            odata_id: None,
-            chassis_type: None,
-            manufacturer: None,
-            model: None,
-            sku: None,
-            serial_number: None,
-            part_number: None,
-            asset_tag: None,
-            power_state: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
-            location: None,
-            pcie_devices: vec![source_device],
-            links: vec![link(
-                "processors",
-                "/redfish/v1/Systems/System/Processors/GPU_0",
-            )],
-        });
-
-        assert_link(
-            &mapped_chassis.links,
-            "processors",
-            "/redfish/v1/Systems/System/Processors/GPU_0",
-        );
-        assert_link(
-            &mapped_chassis.pcie_devices[0].links,
-            "chassis",
-            "/redfish/v1/Chassis/HGX_GPU_0",
-        );
-
-        let mapped_firmware = map_firmware(FirmwareData {
-            service_id: "FirmwareInventory".to_string(),
-            id: "GPU_0".to_string(),
-            odata_id: None,
-            name: "GPU_0".to_string(),
-            version: None,
-            release_date: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
-            links: vec![link(
-                "activeTargets",
-                "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
-            )],
-        });
-        assert_link(
-            &mapped_firmware.links,
+            &inventory.firmware[0].links,
             "activeTargets",
-            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+            "/redfish/v1/Managers/BMC_0",
         );
     }
 
@@ -841,6 +775,25 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].relation, relation);
         assert_eq!(links[0].odata_id, odata_id);
+    }
+
+    fn pcie_device(id: &str) -> crate::source::PcieDeviceData {
+        crate::source::PcieDeviceData {
+            id: id.to_string(),
+            odata_id: None,
+            uuid: None,
+            device_type: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            part_number: None,
+            firmware_version: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            links: vec![link("chassis", "/redfish/v1/Chassis/BMC_0")],
+        }
     }
 
     fn map_report(report: RedfishReport) -> NodeInventory {
