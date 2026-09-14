@@ -735,6 +735,114 @@ mod tests {
         );
     }
 
+    #[test]
+    fn maps_links_for_all_non_manager_resources() {
+        let mut source_processor = processor("GPU_0");
+        source_processor.links = vec![link(
+            "pcieDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        )];
+
+        let mut source_system = system("System");
+        source_system.processors = vec![source_processor];
+        source_system.links = vec![link("managedBy", "/redfish/v1/Managers/BMC_0")];
+        let mapped_system = map_system(source_system, None);
+
+        assert_link(
+            &mapped_system.links,
+            "managedBy",
+            "/redfish/v1/Managers/BMC_0",
+        );
+        assert_link(
+            &mapped_system.processors[0].links,
+            "pcieDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        );
+
+        let source_device = crate::source::PcieDeviceData {
+            id: "GPU_0".to_string(),
+            odata_id: None,
+            uuid: None,
+            device_type: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            part_number: None,
+            firmware_version: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            links: vec![link("chassis", "/redfish/v1/Chassis/HGX_GPU_0")],
+        };
+        let mapped_chassis = map_chassis(ChassisData {
+            id: "HGX_GPU_0".to_string(),
+            odata_id: None,
+            chassis_type: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            part_number: None,
+            asset_tag: None,
+            power_state: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            location: None,
+            pcie_devices: vec![source_device],
+            links: vec![link(
+                "processors",
+                "/redfish/v1/Systems/System/Processors/GPU_0",
+            )],
+        });
+
+        assert_link(
+            &mapped_chassis.links,
+            "processors",
+            "/redfish/v1/Systems/System/Processors/GPU_0",
+        );
+        assert_link(
+            &mapped_chassis.pcie_devices[0].links,
+            "chassis",
+            "/redfish/v1/Chassis/HGX_GPU_0",
+        );
+
+        let mapped_firmware = map_firmware(FirmwareData {
+            service_id: "FirmwareInventory".to_string(),
+            id: "GPU_0".to_string(),
+            odata_id: None,
+            name: "GPU_0".to_string(),
+            version: None,
+            release_date: None,
+            status_state: None,
+            health: None,
+            health_rollup: None,
+            links: vec![link(
+                "activeTargets",
+                "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+            )],
+        });
+        assert_link(
+            &mapped_firmware.links,
+            "activeTargets",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        );
+    }
+
+    fn link(relation: &str, odata_id: &str) -> LinkData {
+        LinkData {
+            relation: relation.to_string(),
+            odata_id: odata_id.to_string(),
+        }
+    }
+
+    fn assert_link(links: &[InventoryLink], relation: &str, odata_id: &str) {
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].relation, relation);
+        assert_eq!(links[0].odata_id, odata_id);
+    }
+
     fn map_report(report: RedfishReport) -> NodeInventory {
         map(SourceRecord {
             target: target(),
