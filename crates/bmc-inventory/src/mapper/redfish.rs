@@ -404,7 +404,7 @@ mod tests {
     fn prefers_system_with_bios() {
         let mut mapped_processor = processor("CPU1");
         mapped_processor.links = vec![link(
-            "pcieDevice",
+            "PCIeDevice",
             "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
         )];
         let mut mapped_system = system("System")
@@ -420,7 +420,7 @@ mod tests {
             .with_cpu(1, 72)
             .with_memory_gib(480.0)
             .with_processor(mapped_processor);
-        mapped_system.links = vec![link("managedBy", "/redfish/v1/Managers/BMC_0")];
+        mapped_system.links = vec![link("ManagedBy", "/redfish/v1/Managers/BMC_0")];
 
         let inventory = map(SourceRecord {
             target: target(),
@@ -469,10 +469,10 @@ mod tests {
             Some("CPU-SN123")
         );
         assert_eq!(system.processors[0].total_cores, Some(72));
-        assert_link(&system.links, "managedBy", "/redfish/v1/Managers/BMC_0");
+        assert_link(&system.links, "ManagedBy", "/redfish/v1/Managers/BMC_0");
         assert_link(
             &system.processors[0].links,
-            "pcieDevice",
+            "PCIeDevice",
             "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
         );
     }
@@ -504,7 +504,7 @@ mod tests {
                         location: None,
                         pcie_devices: vec![pcie_device("GPU_0")],
                         links: vec![link(
-                            "processors",
+                            "Processors",
                             "/redfish/v1/Systems/System/Processors/GPU_0",
                         )],
                     },
@@ -542,12 +542,12 @@ mod tests {
         );
         assert_link(
             &inventory.chassis[0].links,
-            "processors",
+            "Processors",
             "/redfish/v1/Systems/System/Processors/GPU_0",
         );
         assert_link(
             &inventory.chassis[0].pcie_devices[0].links,
-            "chassis",
+            "Chassis",
             "/redfish/v1/Chassis/BMC_0",
         );
         assert_eq!(inventory.chassis[1].serial_number.as_deref(), Some(" "));
@@ -704,7 +704,7 @@ mod tests {
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
                 links: vec![LinkData {
-                    relation: "managerForServers".to_string(),
+                    relation: "ManagerForServers".to_string(),
                     odata_id: "/redfish/v1/Systems/System".to_string(),
                 }],
             }],
@@ -720,7 +720,7 @@ mod tests {
                 status_state: Some("StandbyOffline".to_string()),
                 health: Some("Critical".to_string()),
                 health_rollup: Some("Warning".to_string()),
-                links: vec![link("activeTargets", "/redfish/v1/Managers/BMC_0")],
+                links: vec![link("ActiveTargets", "/redfish/v1/Managers/BMC_0")],
             }],
             errors: Vec::new(),
         });
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(manager.health.as_deref(), Some("OK"));
         assert_eq!(manager.health_rollup.as_deref(), Some("OK"));
         assert_eq!(manager.links.len(), 1);
-        assert_eq!(manager.links[0].relation, "managerForServers");
+        assert_eq!(manager.links[0].relation, "ManagerForServers");
         assert_eq!(manager.links[0].odata_id, "/redfish/v1/Systems/System");
         assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
@@ -759,7 +759,7 @@ mod tests {
         );
         assert_link(
             &inventory.firmware[0].links,
-            "activeTargets",
+            "ActiveTargets",
             "/redfish/v1/Managers/BMC_0",
         );
     }
@@ -792,7 +792,7 @@ mod tests {
             status_state: None,
             health: None,
             health_rollup: None,
-            links: vec![link("chassis", "/redfish/v1/Chassis/BMC_0")],
+            links: vec![link("Chassis", "/redfish/v1/Chassis/BMC_0")],
         }
     }
 

@@ -542,44 +542,44 @@ fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> Vec<Link
     };
     push_nav_links(
         &mut out,
-        "managerForServers",
+        "ManagerForServers",
         links.manager_for_servers.as_deref(),
     );
     push_nav_links(
         &mut out,
-        "managerForChassis",
+        "ManagerForChassis",
         links.manager_for_chassis.as_deref(),
     );
     push_nav_link(
         &mut out,
-        "managerInChassis",
+        "ManagerInChassis",
         links.manager_in_chassis.as_ref(),
     );
     push_reference_links(
         &mut out,
-        "managerForSwitches",
+        "ManagerForSwitches",
         links.manager_for_switches.as_deref(),
     );
     push_nav_link(
         &mut out,
-        "activeSoftwareImage",
+        "ActiveSoftwareImage",
         links.active_software_image.as_ref(),
     );
-    push_nav_links(&mut out, "softwareImages", links.software_images.as_deref());
-    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
+    push_nav_links(&mut out, "SoftwareImages", links.software_images.as_deref());
+    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
     push_nav_links(
         &mut out,
-        "managerForManagers",
+        "ManagerForManagers",
         links.manager_for_managers.as_deref(),
     );
     push_nav_link(
         &mut out,
-        "selectedNetworkPort",
+        "SelectedNetworkPort",
         links.selected_network_port.as_ref(),
     );
     push_reference_links(
         &mut out,
-        "managerForFabrics",
+        "ManagerForFabrics",
         links.manager_for_fabrics.as_deref(),
     );
     finish_links(out)
@@ -590,40 +590,40 @@ fn system_links(links: Option<&nv_redfish::schema::computer_system::Links>) -> V
     let Some(links) = links else {
         return out;
     };
-    push_nav_links(&mut out, "chassis", links.chassis.as_deref());
-    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
-    push_reference_links(&mut out, "poweredBy", links.powered_by.as_deref());
-    push_reference_links(&mut out, "cooledBy", links.cooled_by.as_deref());
-    push_reference_links(&mut out, "endpoints", links.endpoints.as_deref());
-    push_reference_links(&mut out, "resourceBlocks", links.resource_blocks.as_deref());
+    push_nav_links(&mut out, "Chassis", links.chassis.as_deref());
+    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
+    push_reference_links(&mut out, "PoweredBy", links.powered_by.as_deref());
+    push_reference_links(&mut out, "CooledBy", links.cooled_by.as_deref());
+    push_reference_links(&mut out, "Endpoints", links.endpoints.as_deref());
+    push_reference_links(&mut out, "ResourceBlocks", links.resource_blocks.as_deref());
     push_nav_links(
         &mut out,
-        "consumingComputerSystems",
+        "ConsumingComputerSystems",
         links.consuming_computer_systems.as_deref(),
     );
     push_nav_links(
         &mut out,
-        "supplyingComputerSystems",
+        "SupplyingComputerSystems",
         links.supplying_computer_systems.as_deref(),
     );
     push_nav_links(
         &mut out,
-        "offloadedNetworkDeviceFunctions",
+        "OffloadedNetworkDeviceFunctions",
         links.offloaded_network_device_functions.as_deref(),
     );
     push_reference_links(
         &mut out,
-        "trustedComponents",
+        "TrustedComponents",
         links.trusted_components.as_deref(),
     );
     push_nav_link(
         &mut out,
-        "hostingComputerSystem",
+        "HostingComputerSystem",
         links.hosting_computer_system.as_ref(),
     );
     push_nav_links(
         &mut out,
-        "virtualMachines",
+        "VirtualMachines",
         links.virtual_machines.as_deref(),
     );
     finish_links(out)
@@ -636,44 +636,44 @@ fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> Vec<Link
     };
     push_nav_links(
         &mut out,
-        "computerSystems",
+        "ComputerSystems",
         links.computer_systems.as_deref(),
     );
-    push_nav_links(&mut out, "managedBy", links.managed_by.as_deref());
-    push_nav_link(&mut out, "containedBy", links.contained_by.as_ref());
-    push_nav_links(&mut out, "contains", links.contains.as_deref());
-    push_reference_links(&mut out, "poweredBy", links.powered_by.as_deref());
-    push_reference_links(&mut out, "cooledBy", links.cooled_by.as_deref());
+    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
+    push_nav_link(&mut out, "ContainedBy", links.contained_by.as_ref());
+    push_nav_links(&mut out, "Contains", links.contains.as_deref());
+    push_reference_links(&mut out, "PoweredBy", links.powered_by.as_deref());
+    push_reference_links(&mut out, "CooledBy", links.cooled_by.as_deref());
     push_nav_links(
         &mut out,
-        "managersInChassis",
+        "ManagersInChassis",
         links.managers_in_chassis.as_deref(),
     );
-    push_nav_links(&mut out, "drives", links.drives.as_deref());
-    push_nav_links(&mut out, "storage", links.storage.as_deref());
-    push_nav_links(&mut out, "pcieDevices", links.pcie_devices.as_deref());
-    push_reference_links(&mut out, "resourceBlocks", links.resource_blocks.as_deref());
-    push_reference_links(&mut out, "switches", links.switches.as_deref());
-    push_nav_links(&mut out, "processors", links.processors.as_deref());
-    push_reference_link(&mut out, "facility", links.facility.as_ref());
-    push_reference_links(&mut out, "cables", links.cables.as_deref());
-    push_reference_links(&mut out, "powerOutlets", links.power_outlets.as_deref());
-    push_nav_links(&mut out, "powerSupplies", links.power_supplies.as_deref());
-    push_nav_links(&mut out, "fans", links.fans.as_deref());
+    push_nav_links(&mut out, "Drives", links.drives.as_deref());
+    push_nav_links(&mut out, "Storage", links.storage.as_deref());
+    push_nav_links(&mut out, "PCIeDevices", links.pcie_devices.as_deref());
+    push_reference_links(&mut out, "ResourceBlocks", links.resource_blocks.as_deref());
+    push_reference_links(&mut out, "Switches", links.switches.as_deref());
+    push_nav_links(&mut out, "Processors", links.processors.as_deref());
+    push_reference_link(&mut out, "Facility", links.facility.as_ref());
+    push_reference_links(&mut out, "Cables", links.cables.as_deref());
+    push_reference_links(&mut out, "PowerOutlets", links.power_outlets.as_deref());
+    push_nav_links(&mut out, "PowerSupplies", links.power_supplies.as_deref());
+    push_nav_links(&mut out, "Fans", links.fans.as_deref());
     push_nav_link(
         &mut out,
-        "powerDistribution",
+        "PowerDistribution",
         links.power_distribution.as_ref(),
     );
-    push_reference_links(&mut out, "coolingUnits", links.cooling_units.as_deref());
+    push_reference_links(&mut out, "CoolingUnits", links.cooling_units.as_deref());
     push_reference_links(
         &mut out,
-        "connectedCoolingLoops",
+        "ConnectedCoolingLoops",
         links.connected_cooling_loops.as_deref(),
     );
     push_reference_links(
         &mut out,
-        "automationNodes",
+        "AutomationNodes",
         links.automation_nodes.as_deref(),
     );
     finish_links(out)
@@ -684,27 +684,27 @@ fn processor_links(links: Option<&nv_redfish::schema::processor::Links>) -> Vec<
     let Some(links) = links else {
         return out;
     };
-    push_nav_link(&mut out, "chassis", links.chassis.as_ref());
-    push_reference_links(&mut out, "endpoints", links.endpoints.as_deref());
+    push_nav_link(&mut out, "Chassis", links.chassis.as_ref());
+    push_reference_links(&mut out, "Endpoints", links.endpoints.as_deref());
     push_nav_links(
         &mut out,
-        "connectedProcessors",
+        "ConnectedProcessors",
         links.connected_processors.as_deref(),
     );
-    push_nav_link(&mut out, "pcieDevice", links.pcie_device.as_ref());
-    push_reference_links(&mut out, "pcieFunctions", links.pcie_functions.as_deref());
-    push_nav_links(&mut out, "memory", links.memory.as_deref());
+    push_nav_link(&mut out, "PCIeDevice", links.pcie_device.as_ref());
+    push_reference_links(&mut out, "PCIeFunctions", links.pcie_functions.as_deref());
+    push_nav_links(&mut out, "Memory", links.memory.as_deref());
     push_reference_link(
         &mut out,
-        "graphicsController",
+        "GraphicsController",
         links.graphics_controller.as_ref(),
     );
     push_nav_links(
         &mut out,
-        "networkDeviceFunctions",
+        "NetworkDeviceFunctions",
         links.network_device_functions.as_deref(),
     );
-    push_reference_links(&mut out, "fabricAdapters", links.fabric_adapters.as_deref());
+    push_reference_links(&mut out, "FabricAdapters", links.fabric_adapters.as_deref());
     finish_links(out)
 }
 
@@ -713,13 +713,13 @@ fn pcie_device_links(links: Option<&nv_redfish::schema::pcie_device::Links>) -> 
     let Some(links) = links else {
         return out;
     };
-    push_nav_links(&mut out, "chassis", links.chassis.as_deref());
-    push_reference_links(&mut out, "pcieFunctions", links.pcie_functions.as_deref());
-    push_reference_link(&mut out, "switch", links.switch.as_ref());
-    push_nav_links(&mut out, "processors", links.processors.as_deref());
+    push_nav_links(&mut out, "Chassis", links.chassis.as_deref());
+    push_reference_links(&mut out, "PCIeFunctions", links.pcie_functions.as_deref());
+    push_reference_link(&mut out, "Switch", links.switch.as_ref());
+    push_nav_links(&mut out, "Processors", links.processors.as_deref());
     push_nav_links(
         &mut out,
-        "connectedPciePorts",
+        "ConnectedPCIePorts",
         links.connected_pcie_ports.as_deref(),
     );
     finish_links(out)
@@ -730,8 +730,8 @@ fn firmware_links(links: Option<&nv_redfish::schema::software_inventory::Links>)
     let Some(links) = links else {
         return out;
     };
-    push_reference_links(&mut out, "stagedTargets", links.staged_targets.as_deref());
-    push_reference_links(&mut out, "activeTargets", links.active_targets.as_deref());
+    push_reference_links(&mut out, "StagedTargets", links.staged_targets.as_deref());
+    push_reference_links(&mut out, "ActiveTargets", links.active_targets.as_deref());
     finish_links(out)
 }
 
@@ -972,7 +972,7 @@ mod tests {
         assert_eq!(normalize_link_target("  "), None);
 
         let link = LinkData {
-            relation: "managedBy".to_string(),
+            relation: "ManagedBy".to_string(),
             odata_id: "/redfish/v1/Managers/BMC".to_string(),
         };
         assert_eq!(finish_links(vec![link.clone(), link.clone()]), vec![link]);
@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(
             report.managers[0].links,
             vec![LinkData {
-                relation: "managerForServers".to_string(),
+                relation: "ManagerForServers".to_string(),
                 odata_id: "/redfish/v1/Systems/System".to_string(),
             }]
         );
@@ -1217,11 +1217,11 @@ mod tests {
             report.systems[0].links,
             vec![
                 LinkData {
-                    relation: "chassis".to_string(),
+                    relation: "Chassis".to_string(),
                     odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
                 },
                 LinkData {
-                    relation: "managedBy".to_string(),
+                    relation: "ManagedBy".to_string(),
                     odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                 },
             ]
@@ -1229,7 +1229,7 @@ mod tests {
         assert_eq!(
             processor.links,
             vec![LinkData {
-                relation: "chassis".to_string(),
+                relation: "Chassis".to_string(),
                 odata_id: "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string(),
             }]
         );

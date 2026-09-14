@@ -75,7 +75,7 @@ fn node_inventory_serializes_as_backend_payload() {
             health: Some("OK".to_string()),
             health_rollup: Some("OK".to_string()),
             links: vec![InventoryLink {
-                relation: "managerForServers".to_string(),
+                relation: "ManagerForServers".to_string(),
                 odata_id: "/redfish/v1/Systems/System".to_string(),
             }],
         }],
@@ -213,7 +213,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "health": "OK",
                 "healthRollup": "OK",
                 "links": [{
-                    "relation": "managerForServers",
+                    "relation": "ManagerForServers",
                     "odataId": "/redfish/v1/Systems/System"
                 }]
             }],

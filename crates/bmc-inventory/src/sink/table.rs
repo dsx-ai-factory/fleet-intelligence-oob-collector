@@ -968,7 +968,7 @@ mod tests {
         assert!(rendered.contains("StandbyOffline"));
         assert!(rendered.contains("Critical"));
         assert!(rendered.contains("Links\n"));
-        assert!(rendered.contains("managerForServers"));
+        assert!(rendered.contains("ManagerForServers"));
         assert!(rendered.contains("/redfish/v1/Systems/System"));
 
         let source = rendered.find("Source Information\n").expect("source");
@@ -1075,7 +1075,7 @@ mod tests {
                 health: Some("OK".to_string()),
                 health_rollup: Some("OK".to_string()),
                 links: vec![InventoryLink {
-                    relation: "managerForServers".to_string(),
+                    relation: "ManagerForServers".to_string(),
                     odata_id: "/redfish/v1/Systems/System".to_string(),
                 }],
             }],

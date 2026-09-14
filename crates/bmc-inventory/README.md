@@ -112,9 +112,10 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 
 - API JSON fields are camelCase.
 - Standard Redfish `Links` relationships on managers, systems, processors,
-  chassis, PCIe devices, and firmware are emitted as normalized
-  `links[]` entries containing `relation` and `odataId`. The collector does not
-  fetch linked resources solely to populate these entries.
+  chassis, PCIe devices, and firmware are flattened into `links[]` entries
+  containing `relation` and `odataId`. `relation` retains the canonical DMTF
+  property spelling, such as `ManagedBy` or `PCIeDevice`. The collector does
+  not fetch linked resources solely to populate these entries.
 - Link targets retain the resource path but omit an absolute origin, query, and
   fragment so BMC addressing or URL parameters are not copied into inventory.
 - Link entries are sorted and deduplicated. Resources with no relationships
