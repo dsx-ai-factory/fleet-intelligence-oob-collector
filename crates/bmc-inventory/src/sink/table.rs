@@ -412,22 +412,32 @@ impl ChassisDetailRow {
 
 fn format_location(location: &ChassisLocation) -> String {
     let mut parts = Vec::new();
-    if let Some(label) = &location.service_label {
+    if let Some(label) = location
+        .part_location
+        .as_ref()
+        .and_then(|part| part.service_label.as_ref())
+    {
         parts.push(label.clone());
     }
-    if let Some(rack) = &location.rack {
-        match location.rack_offset {
-            Some(offset) => parts.push(format!("rack {rack} U{offset}")),
-            None => parts.push(format!("rack {rack}")),
+    if let Some(context) = &location.part_location_context {
+        parts.push(context.clone());
+    }
+    if let Some(placement) = &location.placement {
+        if let Some(rack) = &placement.rack {
+            parts.push(format!("rack {rack}"));
         }
-    } else if let Some(offset) = location.rack_offset {
-        parts.push(format!("U{offset}"));
-    }
-    if let Some(row) = &location.row {
-        parts.push(format!("row {row}"));
-    }
-    if let Some(room) = &location.room {
-        parts.push(format!("room {room}"));
+        if let Some(offset) = placement.rack_offset {
+            parts.push(match placement.rack_offset_units.as_deref() {
+                Some(units) => format!("offset {offset} {units}"),
+                None => format!("offset {offset}"),
+            });
+        }
+        if let Some(row) = &placement.row {
+            parts.push(format!("row {row}"));
+        }
+        if let Some(room) = &placement.room {
+            parts.push(format!("room {room}"));
+        }
     }
     parts.join(", ")
 }
@@ -794,6 +804,20 @@ mod tests {
                 "+------------+---------+\n",
             )
         );
+    }
+
+    #[test]
+    fn location_display_uses_reported_units() {
+        let location = ChassisLocation {
+            part_location: None,
+            part_location_context: None,
+            placement: Some(crate::models::Placement {
+                rack_offset: Some(3),
+                rack_offset_units: Some("OpenU".into()),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(format_location(&location), "offset 3 OpenU");
     }
 
     #[test]

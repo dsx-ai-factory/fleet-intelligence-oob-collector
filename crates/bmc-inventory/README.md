@@ -110,6 +110,16 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 
 ## Output Conventions
 
+- Chassis location preserves nested `partLocation`, `placement`, and
+  `partLocationContext` rather than flattening selected fields together.
+  Location type, ordinal, orientation/reference, rack-offset units, facility name,
+  and additional placement information are retained when supplied.
+- Empty location subobjects remain present. Table output uses reported rack-offset
+  units and does not assume EIA rack units when the BMC omits units.
+- This change covers hardware placement, not geographic/postal/contact fields.
+  Backend reconciliation owns compatibility with the former flat location;
+  the inventory schema version remains unchanged.
+
 - API JSON fields are camelCase.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.

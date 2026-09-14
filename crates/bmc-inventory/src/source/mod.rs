@@ -123,11 +123,9 @@ pub struct ChassisData {
 
 #[derive(Clone, Debug, Default)]
 pub struct ChassisLocationData {
-    pub service_label: Option<String>,
-    pub rack: Option<String>,
-    pub row: Option<String>,
-    pub room: Option<String>,
-    pub rack_offset: Option<i64>,
+    pub part_location: Option<PartLocationData>,
+    pub placement: Option<PlacementData>,
+    pub part_location_context: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -165,4 +163,24 @@ pub struct InventoryErrorData {
     pub domain: String,
     pub resource: Option<String>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PartLocationData {
+    pub service_label: Option<String>,
+    pub location_type: Option<String>,
+    pub location_ordinal_value: Option<i64>,
+    pub reference: Option<String>,
+    pub orientation: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PlacementData {
+    pub rack: Option<String>,
+    pub row: Option<String>,
+    pub room: Option<String>,
+    pub rack_offset: Option<i64>,
+    pub rack_offset_units: Option<String>,
+    pub additional_info: Option<String>,
+    pub facility_name: Option<String>,
 }

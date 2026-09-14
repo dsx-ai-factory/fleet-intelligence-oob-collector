@@ -3,7 +3,7 @@ mod node;
 
 pub use inventory::{
     ChassisInventory, ChassisLocation, FirmwareInventory, InventorySourceInfo, ManagerInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    PartLocation, PcieDeviceInventory, Placement, ProcessorInventory, SystemInventory,
 };
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 
