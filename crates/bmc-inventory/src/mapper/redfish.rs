@@ -339,6 +339,68 @@ mod tests {
     };
 
     #[test]
+    fn maps_populated_status_conditions_and_origin_reference() {
+        let mapped = map_status(StatusData {
+            conditions: Some(vec![crate::source::ConditionData {
+                timestamp: Some("2026-08-25T20:51:47Z".to_string()),
+                message_id: "ResourceEvent.1.0.ResourceErrorsDetected".to_string(),
+                message_args: Some(vec![
+                    "CPU_1 Firmware".to_string(),
+                    "EC_STRAP_MISMATCH".to_string(),
+                ]),
+                message: Some("CPU_1 Firmware detected EC_STRAP_MISMATCH.".to_string()),
+                severity: Some("Critical".to_string()),
+                resolution: Some("Reset the component and collect logs.".to_string()),
+                condition_type: Some("Alert".to_string()),
+                origin_of_condition: Some("/redfish/v1/Chassis/HGX_CPU_1".to_string()),
+            }]),
+            health: Some("Warning".to_string()),
+            health_rollup: Some("Critical".to_string()),
+            state: Some("Enabled".to_string()),
+        });
+
+        assert_eq!(mapped.health.as_deref(), Some("Warning"));
+        assert_eq!(mapped.health_rollup.as_deref(), Some("Critical"));
+        assert_eq!(mapped.state.as_deref(), Some("Enabled"));
+        let conditions = mapped.conditions.expect("mapped conditions");
+        assert_eq!(conditions.len(), 1);
+        let condition = &conditions[0];
+        assert_eq!(condition.timestamp.as_deref(), Some("2026-08-25T20:51:47Z"));
+        assert_eq!(
+            condition.message_id,
+            "ResourceEvent.1.0.ResourceErrorsDetected"
+        );
+        assert_eq!(
+            condition.message_args.as_deref(),
+            Some(
+                [
+                    "CPU_1 Firmware".to_string(),
+                    "EC_STRAP_MISMATCH".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            condition.message.as_deref(),
+            Some("CPU_1 Firmware detected EC_STRAP_MISMATCH.")
+        );
+        assert_eq!(condition.severity.as_deref(), Some("Critical"));
+        assert_eq!(
+            condition.resolution.as_deref(),
+            Some("Reset the component and collect logs.")
+        );
+        assert_eq!(condition.condition_type.as_deref(), Some("Alert"));
+        assert_eq!(
+            condition
+                .origin_of_condition
+                .as_ref()
+                .expect("origin reference")
+                .odata_id,
+            "/redfish/v1/Chassis/HGX_CPU_1"
+        );
+    }
+
+    #[test]
     fn maps_resolved_bmc_hostname_to_source_info() {
         let inventory = map_record(
             SourceRecord {
