@@ -118,7 +118,7 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 - Link targets retain the resource path but omit an absolute origin, query, and
   fragment so BMC addressing or URL parameters are not copied into inventory.
 - Link entries are sorted and deduplicated. Resources with no relationships
-  omit `links` for compatibility with older inventory documents.
+  emit `links: []` to keep the resource shape consistent.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.
 - `domainErrors` describes recoverable domain-level collection failures.

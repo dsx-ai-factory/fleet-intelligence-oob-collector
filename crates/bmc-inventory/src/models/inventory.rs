@@ -26,7 +26,6 @@ pub struct ManagerInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 
@@ -53,7 +52,6 @@ pub struct SystemInventory {
     pub memory_gib: Option<f64>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 
@@ -76,7 +74,6 @@ pub struct ProcessorInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 
@@ -98,7 +95,6 @@ pub struct ChassisInventory {
     pub health_rollup: Option<String>,
     pub location: Option<ChassisLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 
@@ -128,7 +124,6 @@ pub struct PcieDeviceInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 
@@ -144,7 +139,6 @@ pub struct FirmwareInventory {
     pub status_state: Option<String>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<InventoryLink>,
 }
 

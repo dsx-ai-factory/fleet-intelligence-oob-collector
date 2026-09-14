@@ -188,8 +188,10 @@ fn node_inventory_serializes_as_backend_payload() {
                     "totalThreads": 72,
                     "statusState": "Enabled",
                     "health": "OK",
-                    "healthRollup": "OK"
-                }]
+                    "healthRollup": "OK",
+                    "links": []
+                }],
+                "links": []
             }],
             "source": {
                 "sourceType": "redfish",
@@ -249,8 +251,10 @@ fn node_inventory_serializes_as_backend_payload() {
                     "firmwareVersion": "96.00.5E.00.02",
                     "statusState": "Enabled",
                     "health": "OK",
-                    "healthRollup": "OK"
-                }]
+                    "healthRollup": "OK",
+                    "links": []
+                }],
+                "links": []
             }],
             "firmware": [{
                 "serviceId": "FirmwareInventory",
@@ -261,7 +265,8 @@ fn node_inventory_serializes_as_backend_payload() {
                 "releaseDate": "2026-01-01T00:00:00Z",
                 "statusState": "StandbyOffline",
                 "health": "Critical",
-                "healthRollup": "Warning"
+                "healthRollup": "Warning",
+                "links": []
             }],
             "domainErrors": [{
                 "domain": "chassis.pcieDevices",
