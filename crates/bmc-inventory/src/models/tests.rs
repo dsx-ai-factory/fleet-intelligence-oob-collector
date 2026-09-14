@@ -71,10 +71,16 @@ fn node_inventory_serializes_as_backend_payload() {
             asset_tag: Some("rack-12-tray-3".to_string()),
             power_state: Some("on".to_string()),
             status: Some(status("Enabled", "OK", "Warning")),
-            cpu_count: Some(1),
-            cpu_core_count: Some(72),
-            cpu_model: Some("Grace".to_string()),
-            memory_gib: Some(480.0),
+            processor_summary: Some(crate::models::ProcessorSummary {
+                count: Some(1),
+                core_count: Some(72),
+                model: Some("Grace".into()),
+                ..Default::default()
+            }),
+            memory_summary: Some(crate::models::MemorySummary {
+                total_system_memory_gib: Some(480.0),
+                ..Default::default()
+            }),
             secure_boot_enabled: Some(true),
             processors: vec![ProcessorInventory {
                 id: "CPU1".to_string(),
@@ -193,10 +199,8 @@ fn node_inventory_serializes_as_backend_payload() {
                     "healthRollup": "Warning",
                     "state": "Enabled"
                 },
-                "cpuCount": 1,
-                "cpuCoreCount": 72,
-                "cpuModel": "Grace",
-                "memoryGib": 480.0,
+                "processorSummary": {"count": 1, "coreCount": 72, "model": "Grace", "logicalProcessorCount": null, "threadingEnabled": null, "status": null},
+                "memorySummary": {"totalSystemMemoryGiB": 480.0, "totalSystemPersistentMemoryGiB": null, "memoryMirroring": null, "status": null},
                 "secureBootEnabled": true,
                 "processors": [{
                     "id": "CPU1",

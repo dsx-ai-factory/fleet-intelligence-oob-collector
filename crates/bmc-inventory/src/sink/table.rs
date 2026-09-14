@@ -345,9 +345,15 @@ impl SystemDetailRow {
             health: status_health(system.status.as_ref()),
             health_rollup: status_health_rollup(system.status.as_ref()),
             cpu: format_cpu(system),
-            cpu_model: system.cpu_model.clone().unwrap_or_default(),
+            cpu_model: system
+                .processor_summary
+                .as_ref()
+                .and_then(|summary| summary.model.clone())
+                .unwrap_or_default(),
             memory_gib: system
-                .memory_gib
+                .memory_summary
+                .as_ref()
+                .and_then(|summary| summary.total_system_memory_gib)
                 .map(|memory| memory.to_string())
                 .unwrap_or_default(),
             secure_boot_enabled: system
@@ -735,7 +741,16 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
 }
 
 fn format_cpu(system: &SystemInventory) -> String {
-    match (system.cpu_count, system.cpu_core_count) {
+    match (
+        system
+            .processor_summary
+            .as_ref()
+            .and_then(|summary| summary.count),
+        system
+            .processor_summary
+            .as_ref()
+            .and_then(|summary| summary.core_count),
+    ) {
         (Some(count), Some(cores)) => format!("{count}/{cores}"),
         (Some(count), None) => count.to_string(),
         (None, Some(cores)) => format!("?/{cores}"),
@@ -983,10 +998,16 @@ mod tests {
                 asset_tag: Some("rack-12-tray-3".to_string()),
                 power_state: Some("on".to_string()),
                 status: Some(inventory_status("Enabled", "OK", "Warning")),
-                cpu_count: Some(1),
-                cpu_core_count: Some(72),
-                cpu_model: Some("Grace CPU".to_string()),
-                memory_gib: Some(480.0),
+                processor_summary: Some(crate::models::ProcessorSummary {
+                    count: Some(1),
+                    core_count: Some(72),
+                    model: Some("Grace CPU".into()),
+                    ..Default::default()
+                }),
+                memory_summary: Some(crate::models::MemorySummary {
+                    total_system_memory_gib: Some(480.0),
+                    ..Default::default()
+                }),
                 secure_boot_enabled: Some(true),
                 processors: vec![ProcessorInventory {
                     id: "CPU1".to_string(),
@@ -1069,10 +1090,12 @@ mod tests {
             asset_tag: None,
             power_state: None,
             status: None,
-            cpu_count,
-            cpu_core_count,
-            cpu_model: None,
-            memory_gib: None,
+            processor_summary: Some(crate::models::ProcessorSummary {
+                count: cpu_count,
+                core_count: cpu_core_count,
+                ..Default::default()
+            }),
+            memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
         }

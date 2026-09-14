@@ -110,6 +110,16 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 
 ## Output Conventions
 
+- System `processorSummary` and `memorySummary` retain nested counts, capacity,
+  processor model/threading, memory mirroring, and their own `status`/conditions.
+  They replace `cpuCount`, `cpuCoreCount`, `cpuModel`, and `memoryGib` in JSON;
+  table columns remain available. Backend reconciliation owns legacy fields.
+- Summary status is preserved when supplied, never synthesized. DMTF deprecated
+  it in ComputerSystem v1.16 in favor of root status conditions, but older BMCs
+  can still provide diagnostic information there.
+- Summary metrics links are outside this change; no new resource fetches, OEM
+  collection, or inventory schema-version bump are introduced.
+
 - API JSON fields are camelCase.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.

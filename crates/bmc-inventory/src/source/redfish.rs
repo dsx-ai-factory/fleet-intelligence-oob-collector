@@ -214,26 +214,8 @@ async fn collect_systems<B: Bmc>(
                 .flatten()
                 .map(|power_state| power_state.to_snake_case().to_string()),
             status: status_data(raw.status.as_ref()),
-            cpu_count: raw
-                .processor_summary
-                .as_ref()
-                .and_then(|summary| summary.count)
-                .flatten(),
-            cpu_core_count: raw
-                .processor_summary
-                .as_ref()
-                .and_then(|summary| summary.core_count)
-                .flatten(),
-            cpu_model: raw
-                .processor_summary
-                .as_ref()
-                .and_then(|summary| summary.model.clone())
-                .flatten(),
-            memory_gib: raw
-                .memory_summary
-                .as_ref()
-                .and_then(|summary| summary.total_system_memory_gi_b)
-                .flatten(),
+            processor_summary: raw.processor_summary.as_ref().map(processor_summary_data),
+            memory_summary: raw.memory_summary.as_ref().map(memory_summary_data),
             secure_boot_enabled: collect_secure_boot_enabled(&system, &system_id, errors).await,
             processors: collect_processors(&system, &system_id, errors).await,
         });
@@ -517,6 +499,35 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .collect())
 }
 
+fn processor_summary_data(
+    summary: &nv_redfish::schema::computer_system::ProcessorSummary,
+) -> super::ProcessorSummaryData {
+    super::ProcessorSummaryData {
+        count: summary.count.flatten(),
+        core_count: summary.core_count.flatten(),
+        model: summary.model.clone().flatten(),
+        logical_processor_count: summary.logical_processor_count.flatten(),
+        threading_enabled: summary.threading_enabled,
+        status: status_data(summary.status.as_ref()),
+    }
+}
+
+fn memory_summary_data(
+    summary: &nv_redfish::schema::computer_system::MemorySummary,
+) -> super::MemorySummaryData {
+    super::MemorySummaryData {
+        total_system_memory_gib: summary.total_system_memory_gi_b.flatten(),
+        total_system_persistent_memory_gib: summary.total_system_persistent_memory_gi_b.flatten(),
+        memory_mirroring: summary.memory_mirroring.flatten().and_then(|value| {
+            match serde_json::to_value(value).ok()? {
+                serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
+                _ => None,
+            }
+        }),
+        status: status_data(summary.status.as_ref()),
+    }
+}
+
 fn status_data(status: Option<&nv_redfish::schema::resource::Status>) -> Option<StatusData> {
     status.map(|status| StatusData {
         conditions: status
@@ -668,6 +679,55 @@ mod tests {
     }
 
     #[test]
+    fn summaries_preserve_status_conditions_and_partial_fields() {
+        let processor = serde_json::from_value(serde_json::json!({
+            "Count": 2, "CoreCount": 144, "LogicalProcessorCount": 288, "ThreadingEnabled": true,
+            "Status": {"Health": "Critical", "Conditions": [{"MessageId": "ResourceEvent.1.0.ResourceErrorsDetected", "Severity": "Critical"}]}
+        })).unwrap();
+        let mapped = processor_summary_data(&processor);
+        assert_eq!(mapped.count, Some(2));
+        assert_eq!(mapped.logical_processor_count, Some(288));
+        assert_eq!(mapped.threading_enabled, Some(true));
+        assert_eq!(
+            mapped.status.as_ref().unwrap().health.as_deref(),
+            Some("Critical")
+        );
+        assert_eq!(
+            mapped
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        let memory = serde_json::from_value(serde_json::json!({
+            "TotalSystemMemoryGiB": 480, "TotalSystemPersistentMemoryGiB": 32, "MemoryMirroring": "DIMM",
+            "Status": {"Health": "Warning", "Conditions": []}
+        })).unwrap();
+        let mapped = memory_summary_data(&memory);
+        assert_eq!(mapped.total_system_persistent_memory_gib, Some(32.0));
+        assert_eq!(mapped.memory_mirroring.as_deref(), Some("DIMM"));
+        assert_eq!(
+            mapped
+                .status
+                .as_ref()
+                .unwrap()
+                .conditions
+                .as_ref()
+                .unwrap()
+                .len(),
+            0
+        );
+        let empty = serde_json::from_value(serde_json::json!({})).unwrap();
+        let mapped = processor_summary_data(&empty);
+        assert_eq!(mapped.count, None);
+        assert!(mapped.status.is_none());
+    }
+
+    #[test]
     fn bmc_url_adds_https_to_bare_address() {
         let url = bmc_url("10.0.0.1").expect("url");
 
@@ -763,10 +823,8 @@ mod tests {
             asset_tag: None,
             power_state: None,
             status: None,
-            cpu_count: None,
-            cpu_core_count: None,
-            cpu_model: None,
-            memory_gib: None,
+            processor_summary: None,
+            memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
         }];
@@ -795,10 +853,8 @@ mod tests {
             asset_tag: None,
             power_state: None,
             status: None,
-            cpu_count: None,
-            cpu_core_count: None,
-            cpu_model: None,
-            memory_gib: None,
+            processor_summary: None,
+            memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
         }];
@@ -887,10 +943,35 @@ mod tests {
             Some("rack-12-tray-3")
         );
         assert_eq!(report.systems[0].power_state.as_deref(), Some("on"));
-        assert_eq!(report.systems[0].cpu_count, Some(1));
-        assert_eq!(report.systems[0].cpu_core_count, Some(72));
-        assert_eq!(report.systems[0].cpu_model.as_deref(), Some("Grace"));
-        assert_eq!(report.systems[0].memory_gib, Some(480.0));
+        assert_eq!(
+            report.systems[0].processor_summary.as_ref().unwrap().count,
+            Some(1)
+        );
+        assert_eq!(
+            report.systems[0]
+                .processor_summary
+                .as_ref()
+                .unwrap()
+                .core_count,
+            Some(72)
+        );
+        assert_eq!(
+            report.systems[0]
+                .processor_summary
+                .as_ref()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("Grace")
+        );
+        assert_eq!(
+            report.systems[0]
+                .memory_summary
+                .as_ref()
+                .unwrap()
+                .total_system_memory_gib,
+            Some(480.0)
+        );
         assert_eq!(report.systems[0].secure_boot_enabled, None);
         assert_eq!(report.systems[0].processors.len(), 1);
         let processor = &report.systems[0].processors[0];
