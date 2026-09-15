@@ -116,21 +116,18 @@ Add fixture-backed tests before adding another narrowed traversal policy.
   and additional placement information are retained when supplied.
 - Empty location subobjects remain present. Table output uses reported rack-offset
   units and does not assume EIA rack units when the BMC omits units.
-- This change covers hardware placement, not geographic/postal/contact fields.
-  Backend reconciliation owns compatibility with the former flat location;
-  the inventory schema version remains unchanged.
+- Location covers hardware placement, not geographic/postal/contact fields.
 - Collected resources preserve their Redfish `Name` and optional `Description`
   as `name` and `description`. Resource references use `@odata.id` rather than
   the former `odataId` key. Resource IDs and names are not synthesized or normalized.
 - Individual-resource `@odata.type` is not exposed by nv-redfish 0.15.1. Recovering
   the original type/version requires dependency support or a separately designed
   raw-response capture path; the collector does not fabricate a schema version.
-- Other field casing, null behavior, and `inventory.v1alpha1` remain unchanged.
-  Backend reconciliation owns compatibility with legacy field names.
+- The inventory schema remains `inventory.v1alpha1`; legacy aliases are not populated.
 - System `processorSummary` and `memorySummary` retain nested counts, capacity,
   processor model/threading, memory mirroring, and their own `status`/conditions.
   They replace `cpuCount`, `cpuCoreCount`, `cpuModel`, and `memoryGib` in JSON;
-  table columns remain available. Backend reconciliation owns legacy fields.
+  table columns remain available.
 - Summary status is preserved when supplied, never synthesized. DMTF deprecated
   it in ComputerSystem v1.16 in favor of root status conditions, but older BMCs
   can still provide diagnostic information there.
@@ -150,8 +147,8 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 - Link targets omit URL authority (including credentials) and query parameters;
   fragments are preserved because they can identify subobjects. Linked resources
   are not fetched solely to populate references.
-- The collector handles acquisition and safe transport; backend reconciliation
-  owns relationship flattening, normalization, and product-specific interpretation.
+- The collector handles acquisition and safe transport; the backend owns
+  reconciliation and product-specific interpretation.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.
 - `domainErrors` describes recoverable domain-level collection failures.
