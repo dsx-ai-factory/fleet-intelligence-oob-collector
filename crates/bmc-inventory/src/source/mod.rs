@@ -54,6 +54,7 @@ pub struct ManagerData {
     pub model: Option<String>,
     pub firmware_version: Option<String>,
     pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +75,7 @@ pub struct SystemData {
     pub memory_summary: Option<MemorySummaryData>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +94,7 @@ pub struct ProcessorData {
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
     pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +112,7 @@ pub struct ChassisData {
     pub status: Option<StatusData>,
     pub location: Option<ChassisLocationData>,
     pub pcie_devices: Vec<PcieDeviceData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -133,10 +137,12 @@ pub struct PcieDeviceData {
     pub part_number: Option<String>,
     pub firmware_version: Option<String>,
     pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FirmwareData {
+    pub related_item: Option<Vec<String>>,
     pub service_id: String,
     pub id: String,
     pub odata_id: Option<String>,
@@ -144,6 +150,7 @@ pub struct FirmwareData {
     pub version: Option<String>,
     pub release_date: Option<String>,
     pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +171,12 @@ pub struct ConditionData {
     pub resolution: Option<String>,
     pub condition_type: Option<String>,
     pub origin_of_condition: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkData {
+    Single(String),
+    Multiple(Vec<String>),
 }
 
 #[derive(Clone, Debug)]

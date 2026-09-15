@@ -119,8 +119,22 @@ Add fixture-backed tests before adding another narrowed traversal policy.
   can still provide diagnostic information there.
 - Summary metrics links are outside this change; no new resource fetches, OEM
   collection, or inventory schema-version bump are introduced.
+- Redfish enum values retain their canonical spelling (for example `BMC`, `On`,
+  `CPU`, and `SingleFunction`), rather than being converted to snake_case.
+  Unknown values discarded by the dependency parser remain unavailable and are
+  represented as null, not a synthetic `UnsupportedValue` string.
 
 - API JSON fields are camelCase.
+- Standard Redfish relationships retain their nested shape in `links`: canonical
+  relationship names map to an `{"@odata.id": "..."}` reference or an array of
+  references, matching the source cardinality. Array order, duplicates, and empty
+  arrays are preserved. Resources with no relationships emit `links: {}`.
+- Firmware `relatedItem` is retained separately from `links`.
+- Link targets omit URL authority (including credentials) and query parameters;
+  fragments are preserved because they can identify subobjects. Linked resources
+  are not fetched solely to populate references.
+- The collector handles acquisition and safe transport; backend reconciliation
+  owns relationship flattening, normalization, and product-specific interpretation.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.
 - `domainErrors` describes recoverable domain-level collection failures.
