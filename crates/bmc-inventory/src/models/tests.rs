@@ -3,6 +3,50 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn inventory_condition_serializes_diagnostic_fields() {
+    let condition = InventoryCondition {
+        timestamp: Some("2026-08-25T20:51:47Z".to_string()),
+        message_id: "ResourceEvent.1.0.ResourceErrorsDetected".to_string(),
+        message_args: Some(vec![
+            "CPU_1 Firmware".to_string(),
+            "EC_STRAP_MISMATCH".to_string(),
+        ]),
+        message: Some("The resource property CPU_1 Firmware has detected errors.".to_string()),
+        severity: Some("Critical".to_string()),
+        resolution: Some("Reset the component and collect logs.".to_string()),
+        condition_type: Some("Alert".to_string()),
+        origin_of_condition: Some(InventoryReference {
+            odata_id: "/redfish/v1/Chassis/HGX_CPU_1".to_string(),
+        }),
+    };
+
+    assert_eq!(
+        serde_json::to_value(condition).expect("condition json"),
+        json!({
+            "timestamp": "2026-08-25T20:51:47Z",
+            "messageId": "ResourceEvent.1.0.ResourceErrorsDetected",
+            "messageArgs": ["CPU_1 Firmware", "EC_STRAP_MISMATCH"],
+            "message": "The resource property CPU_1 Firmware has detected errors.",
+            "severity": "Critical",
+            "resolution": "Reset the component and collect logs.",
+            "conditionType": "Alert",
+            "originOfCondition": {
+                "@odata.id": "/redfish/v1/Chassis/HGX_CPU_1"
+            }
+        })
+    );
+}
+
+fn status(state: &str, health: &str, health_rollup: &str) -> InventoryStatus {
+    InventoryStatus {
+        conditions: Some(Vec::new()),
+        health: Some(health.to_string()),
+        health_rollup: Some(health_rollup.to_string()),
+        state: Some(state.to_string()),
+    }
+}
+
+#[test]
 fn node_inventory_serializes_as_backend_payload() {
     let inventory = NodeInventory {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
@@ -26,9 +70,7 @@ fn node_inventory_serializes_as_backend_payload() {
             host_name: Some("node-a.example.com".to_string()),
             asset_tag: Some("rack-12-tray-3".to_string()),
             power_state: Some("on".to_string()),
-            status_state: Some("Enabled".to_string()),
-            health: Some("OK".to_string()),
-            health_rollup: Some("Warning".to_string()),
+            status: Some(status("Enabled", "OK", "Warning")),
             cpu_count: Some(1),
             cpu_core_count: Some(72),
             cpu_model: Some("Grace".to_string()),
@@ -48,10 +90,10 @@ fn node_inventory_serializes_as_backend_payload() {
                 max_speed_mhz: Some(3600),
                 total_cores: Some(72),
                 total_threads: Some(72),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("OK".to_string()),
+                status: Some(status("Enabled", "OK", "OK")),
+                links: Default::default(),
             }],
+            links: Default::default(),
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -69,9 +111,13 @@ fn node_inventory_serializes_as_backend_payload() {
             manager_type: Some("bmc".to_string()),
             model: Some("OpenBMC".to_string()),
             firmware_version: Some("3.19.00".to_string()),
-            status_state: Some("Enabled".to_string()),
-            health: Some("OK".to_string()),
-            health_rollup: Some("OK".to_string()),
+            status: Some(status("Enabled", "OK", "OK")),
+            links: std::collections::BTreeMap::from([(
+                "ManagerForServers".into(),
+                InventoryLink::Multiple(vec![InventoryLinkReference {
+                    odata_id: "/redfish/v1/Systems/System".into(),
+                }]),
+            )]),
         }],
         chassis: vec![ChassisInventory {
             id: "BMC_0".to_string(),
@@ -84,9 +130,7 @@ fn node_inventory_serializes_as_backend_payload() {
             part_number: Some("PN123".to_string()),
             asset_tag: Some("rack-12".to_string()),
             power_state: Some("on".to_string()),
-            status_state: Some("Enabled".to_string()),
-            health: Some("OK".to_string()),
-            health_rollup: Some("OK".to_string()),
+            status: Some(status("Enabled", "OK", "OK")),
             location: Some(ChassisLocation {
                 service_label: Some("Bay 1".to_string()),
                 rack: Some("R12".to_string()),
@@ -105,21 +149,21 @@ fn node_inventory_serializes_as_backend_payload() {
                 serial_number: Some("GPU-SN456".to_string()),
                 part_number: Some("GPU-PN456".to_string()),
                 firmware_version: Some("96.00.5E.00.02".to_string()),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("OK".to_string()),
+                status: Some(status("Enabled", "OK", "OK")),
+                links: Default::default(),
             }],
+            links: Default::default(),
         }],
         firmware: vec![FirmwareInventory {
+            related_item: None,
             service_id: "FirmwareInventory".to_string(),
             id: "BMC".to_string(),
             odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
             name: "BMC".to_string(),
             version: Some("3.19.00".to_string()),
             release_date: Some("2026-01-01T00:00:00Z".to_string()),
-            status_state: Some("StandbyOffline".to_string()),
-            health: Some("Critical".to_string()),
-            health_rollup: Some("Warning".to_string()),
+            status: Some(status("StandbyOffline", "Critical", "Warning")),
+            links: Default::default(),
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
@@ -155,9 +199,12 @@ fn node_inventory_serializes_as_backend_payload() {
                 "hostName": "node-a.example.com",
                 "assetTag": "rack-12-tray-3",
                 "powerState": "on",
-                "statusState": "Enabled",
-                "health": "OK",
-                "healthRollup": "Warning",
+                "status": {
+                    "conditions": [],
+                    "health": "OK",
+                    "healthRollup": "Warning",
+                    "state": "Enabled"
+                },
                 "cpuCount": 1,
                 "cpuCoreCount": 72,
                 "cpuModel": "Grace",
@@ -177,10 +224,15 @@ fn node_inventory_serializes_as_backend_payload() {
                     "maxSpeedMhz": 3600,
                     "totalCores": 72,
                     "totalThreads": 72,
-                    "statusState": "Enabled",
-                    "health": "OK",
-                    "healthRollup": "OK"
-                }]
+                    "status": {
+                        "conditions": [],
+                        "health": "OK",
+                        "healthRollup": "OK",
+                        "state": "Enabled"
+                    },
+                    "links": {}
+                }],
+                "links": {}
             }],
             "source": {
                 "sourceType": "redfish",
@@ -198,9 +250,13 @@ fn node_inventory_serializes_as_backend_payload() {
                 "managerType": "bmc",
                 "model": "OpenBMC",
                 "firmwareVersion": "3.19.00",
-                "statusState": "Enabled",
-                "health": "OK",
-                "healthRollup": "OK"
+                "status": {
+                    "conditions": [],
+                    "health": "OK",
+                    "healthRollup": "OK",
+                    "state": "Enabled"
+                },
+                "links": {"ManagerForServers": [{"@odata.id": "/redfish/v1/Systems/System"}]}
             }],
             "chassis": [{
                 "id": "BMC_0",
@@ -213,9 +269,12 @@ fn node_inventory_serializes_as_backend_payload() {
                 "partNumber": "PN123",
                 "assetTag": "rack-12",
                 "powerState": "on",
-                "statusState": "Enabled",
-                "health": "OK",
-                "healthRollup": "OK",
+                "status": {
+                    "conditions": [],
+                    "health": "OK",
+                    "healthRollup": "OK",
+                    "state": "Enabled"
+                },
                 "location": {
                     "serviceLabel": "Bay 1",
                     "rack": "R12",
@@ -234,21 +293,31 @@ fn node_inventory_serializes_as_backend_payload() {
                     "serialNumber": "GPU-SN456",
                     "partNumber": "GPU-PN456",
                     "firmwareVersion": "96.00.5E.00.02",
-                    "statusState": "Enabled",
-                    "health": "OK",
-                    "healthRollup": "OK"
-                }]
+                    "status": {
+                        "conditions": [],
+                        "health": "OK",
+                        "healthRollup": "OK",
+                        "state": "Enabled"
+                    },
+                    "links": {}
+                }],
+                "links": {}
             }],
             "firmware": [{
+                "relatedItem": null,
                 "serviceId": "FirmwareInventory",
                 "id": "BMC",
                 "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
                 "name": "BMC",
                 "version": "3.19.00",
                 "releaseDate": "2026-01-01T00:00:00Z",
-                "statusState": "StandbyOffline",
-                "health": "Critical",
-                "healthRollup": "Warning"
+                "status": {
+                    "conditions": [],
+                    "health": "Critical",
+                    "healthRollup": "Warning",
+                    "state": "StandbyOffline"
+                },
+                "links": {}
             }],
             "domainErrors": [{
                 "domain": "chassis.pcieDevices",

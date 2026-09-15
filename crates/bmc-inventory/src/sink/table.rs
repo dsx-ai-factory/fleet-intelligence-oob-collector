@@ -3,8 +3,8 @@ use std::fmt;
 
 use super::InventorySink;
 use crate::models::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, ManagerInventory, NodeInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryLink, InventoryStatus,
+    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -158,6 +158,24 @@ impl InventorySink for TableSink {
     }
 }
 
+fn status_state(status: Option<&InventoryStatus>) -> String {
+    status
+        .and_then(|status| status.state.clone())
+        .unwrap_or_default()
+}
+
+fn status_health(status: Option<&InventoryStatus>) -> String {
+    status
+        .and_then(|status| status.health.clone())
+        .unwrap_or_default()
+}
+
+fn status_health_rollup(status: Option<&InventoryStatus>) -> String {
+    status
+        .and_then(|status| status.health_rollup.clone())
+        .unwrap_or_default()
+}
+
 fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> String {
     let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
     let mut out = render_table(
@@ -283,9 +301,9 @@ impl From<&ManagerInventory> for ManagerDetailRow {
             manager_model: manager.model.clone().unwrap_or_default(),
             manager_type: manager.manager_type.clone().unwrap_or_default(),
             manager_firmware: manager.firmware_version.clone().unwrap_or_default(),
-            manager_status: manager.status_state.clone().unwrap_or_default(),
-            manager_health: manager.health.clone().unwrap_or_default(),
-            manager_health_rollup: manager.health_rollup.clone().unwrap_or_default(),
+            manager_status: status_state(manager.status.as_ref()),
+            manager_health: status_health(manager.status.as_ref()),
+            manager_health_rollup: status_health_rollup(manager.status.as_ref()),
         }
     }
 }
@@ -323,9 +341,9 @@ impl SystemDetailRow {
             host_name: system.host_name.clone().unwrap_or_default(),
             asset_tag: system.asset_tag.clone().unwrap_or_default(),
             power: system.power_state.clone().unwrap_or_default(),
-            status: system.status_state.clone().unwrap_or_default(),
-            health: system.health.clone().unwrap_or_default(),
-            health_rollup: system.health_rollup.clone().unwrap_or_default(),
+            status: status_state(system.status.as_ref()),
+            health: status_health(system.status.as_ref()),
+            health_rollup: status_health_rollup(system.status.as_ref()),
             cpu: format_cpu(system),
             cpu_model: system.cpu_model.clone().unwrap_or_default(),
             memory_gib: system
@@ -378,9 +396,9 @@ impl From<&ChassisInventory> for ChassisDetailRow {
             part: chassis.part_number.clone().unwrap_or_default(),
             asset_tag: chassis.asset_tag.clone().unwrap_or_default(),
             power: chassis.power_state.clone().unwrap_or_default(),
-            status: chassis.status_state.clone().unwrap_or_default(),
-            health: chassis.health.clone().unwrap_or_default(),
-            health_rollup: chassis.health_rollup.clone().unwrap_or_default(),
+            status: status_state(chassis.status.as_ref()),
+            health: status_health(chassis.status.as_ref()),
+            health_rollup: status_health_rollup(chassis.status.as_ref()),
             location: chassis
                 .location
                 .as_ref()
@@ -445,9 +463,9 @@ impl DeviceDetailRow {
             serial: device.serial_number.clone().unwrap_or_default(),
             part: device.part_number.clone().unwrap_or_default(),
             firmware: device.firmware_version.clone().unwrap_or_default(),
-            status: device.status_state.clone().unwrap_or_default(),
-            health: device.health.clone().unwrap_or_default(),
-            health_rollup: device.health_rollup.clone().unwrap_or_default(),
+            status: status_state(device.status.as_ref()),
+            health: status_health(device.status.as_ref()),
+            health_rollup: status_health_rollup(device.status.as_ref()),
         }
     }
 
@@ -495,9 +513,9 @@ impl ProcessorDetailRow {
                 .total_threads
                 .map(|threads| threads.to_string())
                 .unwrap_or_default(),
-            status: processor.status_state.clone().unwrap_or_default(),
-            health: processor.health.clone().unwrap_or_default(),
-            health_rollup: processor.health_rollup.clone().unwrap_or_default(),
+            status: status_state(processor.status.as_ref()),
+            health: status_health(processor.status.as_ref()),
+            health_rollup: status_health_rollup(processor.status.as_ref()),
         }
     }
 
@@ -531,9 +549,9 @@ impl From<&FirmwareInventory> for FirmwareDetailRow {
             name: firmware.name.clone(),
             version: firmware.version.clone().unwrap_or_default(),
             release_date: firmware.release_date.clone().unwrap_or_default(),
-            status: firmware.status_state.clone().unwrap_or_default(),
-            health: firmware.health.clone().unwrap_or_default(),
-            health_rollup: firmware.health_rollup.clone().unwrap_or_default(),
+            status: status_state(firmware.status.as_ref()),
+            health: status_health(firmware.status.as_ref()),
+            health_rollup: status_health_rollup(firmware.status.as_ref()),
         }
     }
 }
@@ -714,6 +732,87 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         ],
         firmware_rows,
     ));
+
+    out.push_str("Links\n");
+    out.push_str(&render_table(
+        &["Resource Type", "Source", "Relation", "Target"],
+        link_detail_rows(inventory),
+    ));
+}
+
+fn link_detail_rows(inventory: &NodeInventory) -> Vec<[String; 4]> {
+    let mut rows = Vec::new();
+    for manager in &inventory.managers {
+        push_link_detail_rows(
+            &mut rows,
+            "manager",
+            manager.odata_id.as_deref().unwrap_or(&manager.id),
+            &manager.links,
+        );
+    }
+    for system in &inventory.systems {
+        push_link_detail_rows(
+            &mut rows,
+            "system",
+            system.odata_id.as_deref().unwrap_or(&system.id),
+            &system.links,
+        );
+        for processor in &system.processors {
+            push_link_detail_rows(
+                &mut rows,
+                "processor",
+                processor.odata_id.as_deref().unwrap_or(&processor.id),
+                &processor.links,
+            );
+        }
+    }
+    for chassis in &inventory.chassis {
+        push_link_detail_rows(
+            &mut rows,
+            "chassis",
+            chassis.odata_id.as_deref().unwrap_or(&chassis.id),
+            &chassis.links,
+        );
+        for device in &chassis.pcie_devices {
+            push_link_detail_rows(
+                &mut rows,
+                "pcie_device",
+                device.odata_id.as_deref().unwrap_or(&device.id),
+                &device.links,
+            );
+        }
+    }
+    for firmware in &inventory.firmware {
+        push_link_detail_rows(
+            &mut rows,
+            "firmware",
+            firmware.odata_id.as_deref().unwrap_or(&firmware.id),
+            &firmware.links,
+        );
+    }
+    rows
+}
+
+fn push_link_detail_rows(
+    rows: &mut Vec<[String; 4]>,
+    resource_type: &str,
+    source: &str,
+    links: &std::collections::BTreeMap<String, InventoryLink>,
+) {
+    for (relation, link) in links {
+        let targets = match link {
+            InventoryLink::Single(target) => std::slice::from_ref(target),
+            InventoryLink::Multiple(targets) => targets.as_slice(),
+        };
+        rows.extend(targets.iter().map(|target| {
+            [
+                resource_type.to_string(),
+                source.to_string(),
+                relation.clone(),
+                target.odata_id.clone(),
+            ]
+        }));
+    }
 }
 
 fn format_cpu(system: &SystemInventory) -> String {
@@ -892,6 +991,9 @@ mod tests {
         assert!(rendered.contains("| FirmwareInventory | BMC"));
         assert!(rendered.contains("StandbyOffline"));
         assert!(rendered.contains("Critical"));
+        assert!(rendered.contains("Links\n"));
+        assert!(rendered.contains("ManagerForServers"));
+        assert!(rendered.contains("/redfish/v1/Systems/System"));
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
@@ -900,12 +1002,14 @@ mod tests {
         let chassis = rendered.find("Chassis\n").expect("chassis");
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
+        let links = rendered.find("Links\n").expect("links");
         assert!(source < manager);
         assert!(manager < system);
         assert!(system < processor);
         assert!(processor < chassis);
         assert!(chassis < pcie);
         assert!(pcie < firmware);
+        assert!(firmware < links);
     }
 
     #[test]
@@ -921,6 +1025,15 @@ mod tests {
         assert_eq!(format_cpu(&system(Some(1), None)), "1");
         assert_eq!(format_cpu(&system(None, Some(72))), "?/72");
         assert_eq!(format_cpu(&system(None, None)), "");
+    }
+
+    fn inventory_status(state: &str, health: &str, health_rollup: &str) -> InventoryStatus {
+        InventoryStatus {
+            conditions: Some(Vec::new()),
+            health: Some(health.to_string()),
+            health_rollup: Some(health_rollup.to_string()),
+            state: Some(state.to_string()),
+        }
     }
 
     fn full_inventory() -> NodeInventory {
@@ -955,9 +1068,7 @@ mod tests {
                 host_name: Some("node-a.example.com".to_string()),
                 asset_tag: Some("rack-12-tray-3".to_string()),
                 power_state: Some("on".to_string()),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("Warning".to_string()),
+                status: Some(inventory_status("Enabled", "OK", "Warning")),
                 cpu_count: Some(1),
                 cpu_core_count: Some(72),
                 cpu_model: Some("Grace CPU".to_string()),
@@ -977,10 +1088,10 @@ mod tests {
                     max_speed_mhz: Some(3600),
                     total_cores: Some(72),
                     total_threads: Some(72),
-                    status_state: Some("Enabled".to_string()),
-                    health: Some("OK".to_string()),
-                    health_rollup: Some("OK".to_string()),
+                    status: Some(inventory_status("Enabled", "OK", "OK")),
+                    links: Default::default(),
                 }],
+                links: Default::default(),
             }],
             managers: vec![ManagerInventory {
                 id: "BMC_0".to_string(),
@@ -989,9 +1100,13 @@ mod tests {
                 manager_type: Some("bmc".to_string()),
                 model: Some("OpenBMC".to_string()),
                 firmware_version: Some("3.19.00".to_string()),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("OK".to_string()),
+                status: Some(inventory_status("Enabled", "OK", "OK")),
+                links: std::collections::BTreeMap::from([(
+                    "ManagerForServers".into(),
+                    InventoryLink::Multiple(vec![crate::models::InventoryLinkReference {
+                        odata_id: "/redfish/v1/Systems/System".into(),
+                    }]),
+                )]),
             }],
             chassis: vec![ChassisInventory {
                 id: "BMC_0".to_string(),
@@ -1004,9 +1119,7 @@ mod tests {
                 part_number: Some("PN123".to_string()),
                 asset_tag: Some("rack-12".to_string()),
                 power_state: Some("on".to_string()),
-                status_state: Some("Enabled".to_string()),
-                health: Some("OK".to_string()),
-                health_rollup: Some("OK".to_string()),
+                status: Some(inventory_status("Enabled", "OK", "OK")),
                 location: None,
                 pcie_devices: vec![PcieDeviceInventory {
                     id: "GPU1".to_string(),
@@ -1019,21 +1132,21 @@ mod tests {
                     serial_number: Some("GPU-SN456".to_string()),
                     part_number: Some("GPU-PN456".to_string()),
                     firmware_version: Some("96.00.5E.00.02".to_string()),
-                    status_state: Some("Enabled".to_string()),
-                    health: Some("OK".to_string()),
-                    health_rollup: Some("OK".to_string()),
+                    status: Some(inventory_status("Enabled", "OK", "OK")),
+                    links: Default::default(),
                 }],
+                links: Default::default(),
             }],
             firmware: vec![FirmwareInventory {
+                related_item: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMC".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
                 name: "BMC".to_string(),
                 version: Some("3.19.00".to_string()),
                 release_date: Some("2026-01-01T00:00:00Z".to_string()),
-                status_state: Some("StandbyOffline".to_string()),
-                health: Some("Critical".to_string()),
-                health_rollup: Some("Warning".to_string()),
+                status: Some(inventory_status("StandbyOffline", "Critical", "Warning")),
+                links: Default::default(),
             }],
             domain_errors: Vec::new(),
             target_error: None,
@@ -1053,15 +1166,14 @@ mod tests {
             host_name: None,
             asset_tag: None,
             power_state: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
+            status: None,
             cpu_count,
             cpu_core_count,
             cpu_model: None,
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Default::default(),
         }
     }
 }
