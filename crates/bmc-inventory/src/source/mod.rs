@@ -47,19 +47,22 @@ pub struct ServiceRootData {
 
 #[derive(Clone, Debug)]
 pub struct ManagerData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub manager_type: Option<String>,
     pub model: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SystemData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -71,19 +74,18 @@ pub struct SystemData {
     pub host_name: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-    pub cpu_count: Option<i64>,
-    pub cpu_core_count: Option<i64>,
-    pub cpu_model: Option<String>,
-    pub memory_gib: Option<f64>,
+    pub status: Option<StatusData>,
+    pub processor_summary: Option<ProcessorSummaryData>,
+    pub memory_summary: Option<MemorySummaryData>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ProcessorData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -97,13 +99,14 @@ pub struct ProcessorData {
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ChassisData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub chassis_type: Option<String>,
@@ -114,11 +117,10 @@ pub struct ChassisData {
     pub part_number: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<StatusData>,
     pub location: Option<ChassisLocationData>,
     pub pcie_devices: Vec<PcieDeviceData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -130,6 +132,8 @@ pub struct ChassisLocationData {
 
 #[derive(Clone, Debug)]
 pub struct PcieDeviceData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -140,22 +144,48 @@ pub struct PcieDeviceData {
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FirmwareData {
+    pub description: Option<String>,
+    pub related_item: Option<Vec<String>>,
     pub service_id: String,
     pub id: String,
     pub odata_id: Option<String>,
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
-    pub status_state: Option<String>,
+    pub status: Option<StatusData>,
+    pub links: std::collections::BTreeMap<String, LinkData>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusData {
+    pub conditions: Option<Vec<ConditionData>>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
+    pub state: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionData {
+    pub timestamp: Option<String>,
+    pub message_id: String,
+    pub message_args: Option<Vec<String>>,
+    pub message: Option<String>,
+    pub severity: Option<String>,
+    pub resolution: Option<String>,
+    pub condition_type: Option<String>,
+    pub origin_of_condition: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkData {
+    Single(String),
+    Multiple(Vec<String>),
 }
 
 #[derive(Clone, Debug)]
@@ -183,4 +213,22 @@ pub struct PlacementData {
     pub rack_offset_units: Option<String>,
     pub additional_info: Option<String>,
     pub facility_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProcessorSummaryData {
+    pub count: Option<i64>,
+    pub core_count: Option<i64>,
+    pub model: Option<String>,
+    pub logical_processor_count: Option<i64>,
+    pub threading_enabled: Option<bool>,
+    pub status: Option<StatusData>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MemorySummaryData {
+    pub total_system_memory_gib: Option<f64>,
+    pub total_system_persistent_memory_gib: Option<f64>,
+    pub memory_mirroring: Option<String>,
+    pub status: Option<StatusData>,
 }

@@ -119,8 +119,39 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 - This change covers hardware placement, not geographic/postal/contact fields.
   Backend reconciliation owns compatibility with the former flat location;
   the inventory schema version remains unchanged.
+- Collected resources preserve their Redfish `Name` and optional `Description`
+  as `name` and `description`. Resource references use `@odata.id` rather than
+  the former `odataId` key. Resource IDs and names are not synthesized or normalized.
+- Individual-resource `@odata.type` is not exposed by nv-redfish 0.15.1. Recovering
+  the original type/version requires dependency support or a separately designed
+  raw-response capture path; the collector does not fabricate a schema version.
+- Other field casing, null behavior, and `inventory.v1alpha1` remain unchanged.
+  Backend reconciliation owns compatibility with legacy field names.
+- System `processorSummary` and `memorySummary` retain nested counts, capacity,
+  processor model/threading, memory mirroring, and their own `status`/conditions.
+  They replace `cpuCount`, `cpuCoreCount`, `cpuModel`, and `memoryGib` in JSON;
+  table columns remain available. Backend reconciliation owns legacy fields.
+- Summary status is preserved when supplied, never synthesized. DMTF deprecated
+  it in ComputerSystem v1.16 in favor of root status conditions, but older BMCs
+  can still provide diagnostic information there.
+- Summary metrics links are outside this change; no new resource fetches, OEM
+  collection, or inventory schema-version bump are introduced.
+- Redfish enum values retain their canonical spelling (for example `BMC`, `On`,
+  `CPU`, and `SingleFunction`), rather than being converted to snake_case.
+  Unknown values discarded by the dependency parser remain unavailable and are
+  represented as null, not a synthetic `UnsupportedValue` string.
 
 - API JSON fields are camelCase.
+- Standard Redfish relationships retain their nested shape in `links`: canonical
+  relationship names map to an `{"@odata.id": "..."}` reference or an array of
+  references, matching the source cardinality. Array order, duplicates, and empty
+  arrays are preserved. Resources with no relationships emit `links: {}`.
+- Firmware `relatedItem` is retained separately from `links`.
+- Link targets omit URL authority (including credentials) and query parameters;
+  fragments are preserved because they can identify subobjects. Linked resources
+  are not fetched solely to populate references.
+- The collector handles acquisition and safe transport; backend reconciliation
+  owns relationship flattening, normalization, and product-specific interpretation.
 - Optional Redfish fields stay optional in the inventory model rather than being
   filled with synthetic values.
 - `domainErrors` describes recoverable domain-level collection failures.
