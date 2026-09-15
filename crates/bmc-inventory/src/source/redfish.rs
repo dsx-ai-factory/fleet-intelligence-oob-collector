@@ -13,9 +13,9 @@ use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::{
-    ChassisData, ChassisLocationData, FirmwareData, InventoryErrorData, InventorySource, LinkData,
-    ManagerData, PcieDeviceData, ProcessorData, RedfishReport, ServiceRootData, SourceRecord,
-    SystemData, inventory_domain,
+    ChassisData, ChassisLocationData, ConditionData, FirmwareData, InventoryErrorData,
+    InventorySource, LinkData, ManagerData, PcieDeviceData, ProcessorData, RedfishReport,
+    ServiceRootData, SourceRecord, StatusData, SystemData, inventory_domain,
 };
 use crate::config::Target;
 
@@ -173,9 +173,7 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
                 .map(|manager_type| manager_type.to_snake_case().to_string()),
             model: raw.model.clone().flatten(),
             firmware_version: raw.firmware_version.clone().flatten(),
-            status_state: status_state(raw.status.as_ref()),
-            health: status_health(raw.status.as_ref()),
-            health_rollup: status_health_rollup(raw.status.as_ref()),
+            status: status_data(raw.status.as_ref()),
             links: manager_links(raw.links.as_ref()),
         });
     }
@@ -217,9 +215,7 @@ async fn collect_systems<B: Bmc>(
                 .power_state
                 .flatten()
                 .map(|power_state| power_state.to_snake_case().to_string()),
-            status_state: status_state(raw.status.as_ref()),
-            health: status_health(raw.status.as_ref()),
-            health_rollup: status_health_rollup(raw.status.as_ref()),
+            status: status_data(raw.status.as_ref()),
             cpu_count: raw
                 .processor_summary
                 .as_ref()
@@ -285,9 +281,7 @@ async fn collect_chassis<B: Bmc>(
                 .power_state
                 .flatten()
                 .map(|power_state| power_state.to_snake_case().to_string()),
-            status_state: status_state(raw.status.as_ref()),
-            health: status_health(raw.status.as_ref()),
-            health_rollup: status_health_rollup(raw.status.as_ref()),
+            status: status_data(raw.status.as_ref()),
             location: chassis_location(raw.location.as_ref()),
             pcie_devices: if should_collect_pcie_devices_for_chassis(
                 &pcie_traversal_policy,
@@ -438,9 +432,7 @@ async fn collect_processors<B: Bmc>(
             max_speed_mhz: raw.max_speed_mhz.flatten(),
             total_cores: raw.total_cores.flatten(),
             total_threads: raw.total_threads.flatten(),
-            status_state: status_state(raw.status.as_ref()),
-            health: status_health(raw.status.as_ref()),
-            health_rollup: status_health_rollup(raw.status.as_ref()),
+            status: status_data(raw.status.as_ref()),
             links: processor_links(raw.links.as_ref()),
         });
     }
@@ -493,9 +485,7 @@ async fn collect_pcie_devices<B: Bmc>(
             serial_number: raw.serial_number.clone().flatten(),
             part_number: raw.part_number.clone().flatten(),
             firmware_version: raw.firmware_version.clone().flatten(),
-            status_state: status_state(raw.status.as_ref()),
-            health: status_health(raw.status.as_ref()),
-            health_rollup: status_health_rollup(raw.status.as_ref()),
+            status: status_data(raw.status.as_ref()),
             links: pcie_device_links(raw.links.as_ref()),
         });
     }
@@ -528,9 +518,7 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
                 name: raw.base.name.clone(),
                 version: raw.version.clone().flatten(),
                 release_date: raw.release_date.flatten().map(|date| date.to_string()),
-                status_state: status_state(raw.status.as_ref()),
-                health: status_health(raw.status.as_ref()),
-                health_rollup: status_health_rollup(raw.status.as_ref()),
+                status: status_data(raw.status.as_ref()),
                 links: firmware_links(raw.links.as_ref()),
             }
         })
@@ -832,22 +820,52 @@ fn normalize_link_target(odata_id: &str) -> Option<String> {
     })
 }
 
-fn status_state(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
-    status
-        .and_then(|status| status.state.flatten())
-        .and_then(redfish_state_string)
+fn status_data(status: Option<&nv_redfish::schema::resource::Status>) -> Option<StatusData> {
+    status.map(|status| StatusData {
+        conditions: status
+            .conditions
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(|conditions| conditions.iter().map(map_condition).collect()),
+        health: status.health.flatten().and_then(redfish_health_string),
+        health_rollup: status
+            .health_rollup
+            .flatten()
+            .and_then(redfish_health_string),
+        state: status.state.flatten().and_then(redfish_state_string),
+    })
 }
 
-fn status_health(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
-    status
-        .and_then(|status| status.health.flatten())
-        .and_then(redfish_health_string)
+fn map_condition(condition: &nv_redfish::schema::resource::Condition) -> ConditionData {
+    ConditionData {
+        timestamp: condition.timestamp.map(|timestamp| timestamp.to_string()),
+        message_id: condition.message_id.clone(),
+        message_args: condition.message_args.clone(),
+        message: condition.message.clone(),
+        severity: condition.severity.and_then(redfish_health_string),
+        resolution: condition.resolution.clone(),
+        condition_type: condition
+            .condition_type
+            .flatten()
+            .and_then(redfish_condition_type_string),
+        origin_of_condition: condition
+            .origin_of_condition
+            .as_ref()
+            .map(|origin| origin.odata_id.to_string()),
+    }
 }
 
-fn status_health_rollup(status: Option<&nv_redfish::schema::resource::Status>) -> Option<String> {
-    status
-        .and_then(|status| status.health_rollup.flatten())
-        .and_then(redfish_health_string)
+fn redfish_condition_type_string(
+    condition_type: nv_redfish::schema::resource::ConditionType,
+) -> Option<String> {
+    match condition_type {
+        nv_redfish::schema::resource::ConditionType::Alert => Some("Alert".to_string()),
+        nv_redfish::schema::resource::ConditionType::Informational => {
+            Some("Informational".to_string())
+        }
+        nv_redfish::schema::resource::ConditionType::Subsystem => Some("Subsystem".to_string()),
+        nv_redfish::schema::resource::ConditionType::UnsupportedValue => None,
+    }
 }
 
 fn redfish_health_string(health: nv_redfish::schema::resource::Health) -> Option<String> {
@@ -1088,9 +1106,7 @@ mod tests {
             host_name: None,
             asset_tag: None,
             power_state: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
+            status: None,
             cpu_count: None,
             cpu_core_count: None,
             cpu_model: None,
@@ -1123,9 +1139,7 @@ mod tests {
             host_name: None,
             asset_tag: None,
             power_state: None,
-            status_state: None,
-            health: None,
-            health_rollup: None,
+            status: None,
             cpu_count: None,
             cpu_core_count: None,
             cpu_model: None,
@@ -1252,12 +1266,14 @@ mod tests {
         assert_eq!(processor.max_speed_mhz, Some(3600));
         assert_eq!(processor.total_cores, Some(72));
         assert_eq!(processor.total_threads, Some(72));
-        assert_eq!(processor.status_state.as_deref(), Some("Enabled"));
-        assert_eq!(processor.health.as_deref(), Some("OK"));
-        assert_eq!(processor.health_rollup.as_deref(), Some("OK"));
-        assert_eq!(report.systems[0].status_state.as_deref(), Some("Enabled"));
-        assert_eq!(report.systems[0].health.as_deref(), Some("OK"));
-        assert_eq!(report.systems[0].health_rollup.as_deref(), Some("Warning"));
+        let processor_status = processor.status.as_ref().expect("processor status");
+        assert_eq!(processor_status.state.as_deref(), Some("Enabled"));
+        assert_eq!(processor_status.health.as_deref(), Some("OK"));
+        assert_eq!(processor_status.health_rollup.as_deref(), Some("OK"));
+        let system_status = report.systems[0].status.as_ref().expect("system status");
+        assert_eq!(system_status.state.as_deref(), Some("Enabled"));
+        assert_eq!(system_status.health.as_deref(), Some("OK"));
+        assert_eq!(system_status.health_rollup.as_deref(), Some("Warning"));
         assert_eq!(
             report.systems[0].links,
             BTreeMap::from([
@@ -1286,6 +1302,44 @@ mod tests {
         assert_eq!(report.chassis[0].model.as_deref(), Some("BMC"));
         assert_eq!(report.chassis[0].serial_number.as_deref(), Some("CH123"));
         assert_eq!(report.chassis[0].part_number.as_deref(), Some("PN123"));
+        let chassis_status = report.chassis[0].status.as_ref().expect("chassis status");
+        assert_eq!(chassis_status.health.as_deref(), Some("Critical"));
+        let conditions = chassis_status
+            .conditions
+            .as_ref()
+            .expect("chassis conditions");
+        assert_eq!(conditions.len(), 1);
+        let condition = &conditions[0];
+        assert_eq!(
+            condition.message_id,
+            "ResourceEvent.1.0.ResourceErrorsDetected"
+        );
+        assert_eq!(
+            condition.message_args.as_deref(),
+            Some(
+                [
+                    "CPU_1 Firmware".to_string(),
+                    "EC_STRAP_MISMATCH".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            condition.message.as_deref(),
+            Some(
+                "The resource property CPU_1 Firmware has detected errors of type 'EC_STRAP_MISMATCH'."
+            )
+        );
+        assert_eq!(condition.severity.as_deref(), Some("Critical"));
+        assert_eq!(
+            condition.resolution.as_deref(),
+            Some("Reset the component; collect logs and reflash if the problem remains.")
+        );
+        assert_eq!(condition.timestamp.as_deref(), Some("2026-08-25T20:51:47Z"));
+        assert_eq!(
+            condition.origin_of_condition.as_deref(),
+            Some("/redfish/v1/Chassis/HGX_CPU_1")
+        );
         let location = report.chassis[0]
             .location
             .as_ref()
@@ -1302,6 +1356,14 @@ mod tests {
             report.chassis[0].pcie_devices[0].serial_number.as_deref(),
             Some("GPU-SN456")
         );
+        assert_eq!(
+            report.chassis[0].pcie_devices[0]
+                .status
+                .as_ref()
+                .and_then(|status| status.conditions.as_ref())
+                .map(Vec::len),
+            Some(0)
+        );
         assert_eq!(report.chassis[0].pcie_devices[0].links.len(), 1);
 
         assert_eq!(report.firmware.len(), 1);
@@ -1313,12 +1375,10 @@ mod tests {
             report.firmware[0].release_date.as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
-        assert_eq!(
-            report.firmware[0].status_state.as_deref(),
-            Some("StandbyOffline")
-        );
-        assert_eq!(report.firmware[0].health.as_deref(), Some("Critical"));
-        assert_eq!(report.firmware[0].health_rollup.as_deref(), Some("Warning"));
+        let firmware_status = report.firmware[0].status.as_ref().expect("firmware status");
+        assert_eq!(firmware_status.state.as_deref(), Some("StandbyOffline"));
+        assert_eq!(firmware_status.health.as_deref(), Some("Critical"));
+        assert_eq!(firmware_status.health_rollup.as_deref(), Some("Warning"));
         assert_eq!(report.firmware[0].links.len(), 1);
         assert_eq!(
             report.firmware[0].related_item,
@@ -1716,6 +1776,27 @@ mod tests {
         "Model": "BMC",
         "SerialNumber": "CH123",
         "PartNumber": "PN123",
+        "Status": {
+            "State": "Enabled",
+            "Health": "Critical",
+            "HealthRollup": "Critical",
+            "Conditions": [{
+                "Message": "The resource property CPU_1 Firmware has detected errors of type 'EC_STRAP_MISMATCH'.",
+                "MessageArgs": ["CPU_1 Firmware", "EC_STRAP_MISMATCH"],
+                "MessageId": "ResourceEvent.1.0.ResourceErrorsDetected",
+                "Oem": {
+                    "Nvidia": {
+                        "@odata.type": "#NvidiaLogEntry.v1_1_0.NvidiaLogEntry",
+                        "Device": "CPU_1",
+                        "ErrorId": "CPU_EC_STRAP_MISMATCH"
+                    }
+                },
+                "OriginOfCondition": {"@odata.id": "/redfish/v1/Chassis/HGX_CPU_1"},
+                "Resolution": "Reset the component; collect logs and reflash if the problem remains.",
+                "Severity": "Critical",
+                "Timestamp": "2026-08-25T20:51:47Z"
+            }]
+        },
         "PCIeDevices": {"@odata.id": "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices"},
         "Links": {
             "ComputerSystems": [{"@odata.id": "/redfish/v1/Systems/System"}],
@@ -1762,7 +1843,8 @@ mod tests {
         },
         "Status": {
             "State": "Enabled",
-            "Health": "OK"
+            "Health": "OK",
+            "Conditions": []
         }
     }"##;
 

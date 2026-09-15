@@ -23,9 +23,7 @@ pub struct ManagerInventory {
     pub manager_type: Option<String>,
     pub model: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
@@ -43,9 +41,7 @@ pub struct SystemInventory {
     pub host_name: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub cpu_count: Option<i64>,
     pub cpu_core_count: Option<i64>,
     pub cpu_model: Option<String>,
@@ -71,9 +67,7 @@ pub struct ProcessorInventory {
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
@@ -90,9 +84,7 @@ pub struct ChassisInventory {
     pub part_number: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub location: Option<ChassisLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
@@ -121,9 +113,7 @@ pub struct PcieDeviceInventory {
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
@@ -137,10 +127,36 @@ pub struct FirmwareInventory {
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
-    pub status_state: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryStatus {
+    pub conditions: Option<Vec<InventoryCondition>>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
-    pub links: std::collections::BTreeMap<String, InventoryLink>,
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryCondition {
+    pub timestamp: Option<String>,
+    pub message_id: String,
+    pub message_args: Option<Vec<String>>,
+    pub message: Option<String>,
+    pub severity: Option<String>,
+    pub resolution: Option<String>,
+    pub condition_type: Option<String>,
+    pub origin_of_condition: Option<InventoryReference>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InventoryReference {
+    #[serde(rename = "@odata.id")]
+    pub odata_id: String,
 }
 
 /// A relationship retains the single-reference or array shape supplied by Redfish.

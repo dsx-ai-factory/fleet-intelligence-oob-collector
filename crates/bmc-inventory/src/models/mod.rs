@@ -2,9 +2,9 @@ mod inventory;
 mod node;
 
 pub use inventory::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryLink, InventoryLinkReference,
-    InventorySourceInfo, ManagerInventory, PcieDeviceInventory, ProcessorInventory,
-    SystemInventory,
+    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryCondition, InventoryLink,
+    InventoryLinkReference, InventoryReference, InventorySourceInfo, InventoryStatus,
+    ManagerInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 
