@@ -26,9 +26,8 @@ pub struct ManagerInventory {
     pub manager_type: Option<String>,
     pub model: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,15 +47,12 @@ pub struct SystemInventory {
     pub host_name: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-    pub cpu_count: Option<i64>,
-    pub cpu_core_count: Option<i64>,
-    pub cpu_model: Option<String>,
-    pub memory_gib: Option<f64>,
+    pub status: Option<InventoryStatus>,
+    pub processor_summary: Option<ProcessorSummary>,
+    pub memory_summary: Option<MemorySummary>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,9 +74,8 @@ pub struct ProcessorInventory {
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,11 +94,10 @@ pub struct ChassisInventory {
     pub part_number: Option<String>,
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
     pub location: Option<ChassisLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,15 +126,15 @@ pub struct PcieDeviceInventory {
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
     pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirmwareInventory {
     pub description: Option<String>,
+    pub related_item: Option<Vec<InventoryLinkReference>>,
     pub service_id: String,
     pub id: String,
     #[serde(rename = "@odata.id")]
@@ -148,7 +142,70 @@ pub struct FirmwareInventory {
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
-    pub status_state: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryStatus {
+    pub conditions: Option<Vec<InventoryCondition>>,
     pub health: Option<String>,
     pub health_rollup: Option<String>,
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryCondition {
+    pub timestamp: Option<String>,
+    pub message_id: String,
+    pub message_args: Option<Vec<String>>,
+    pub message: Option<String>,
+    pub severity: Option<String>,
+    pub resolution: Option<String>,
+    pub condition_type: Option<String>,
+    pub origin_of_condition: Option<InventoryReference>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InventoryReference {
+    #[serde(rename = "@odata.id")]
+    pub odata_id: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorSummary {
+    pub count: Option<i64>,
+    pub core_count: Option<i64>,
+    pub model: Option<String>,
+    pub logical_processor_count: Option<i64>,
+    pub threading_enabled: Option<bool>,
+    pub status: Option<InventoryStatus>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySummary {
+    #[serde(rename = "totalSystemMemoryGiB")]
+    pub total_system_memory_gib: Option<f64>,
+    #[serde(rename = "totalSystemPersistentMemoryGiB")]
+    pub total_system_persistent_memory_gib: Option<f64>,
+    pub memory_mirroring: Option<String>,
+    pub status: Option<InventoryStatus>,
+}
+
+/// A relationship retains the single-reference or array shape supplied by Redfish.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum InventoryLink {
+    Single(InventoryLinkReference),
+    Multiple(Vec<InventoryLinkReference>),
+}
+
+#[derive(Debug, Serialize)]
+pub struct InventoryLinkReference {
+    #[serde(rename = "@odata.id")]
+    pub odata_id: String,
 }
