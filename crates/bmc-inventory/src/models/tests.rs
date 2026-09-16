@@ -91,7 +91,9 @@ fn node_inventory_serializes_as_backend_payload() {
                 total_cores: Some(72),
                 total_threads: Some(72),
                 status: Some(status("Enabled", "OK", "OK")),
+                links: Default::default(),
             }],
+            links: Default::default(),
         }],
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
@@ -110,6 +112,12 @@ fn node_inventory_serializes_as_backend_payload() {
             model: Some("OpenBMC".to_string()),
             firmware_version: Some("3.19.00".to_string()),
             status: Some(status("Enabled", "OK", "OK")),
+            links: std::collections::BTreeMap::from([(
+                "ManagerForServers".into(),
+                InventoryLink::Multiple(vec![InventoryLinkReference {
+                    odata_id: "/redfish/v1/Systems/System".into(),
+                }]),
+            )]),
         }],
         chassis: vec![ChassisInventory {
             id: "BMC_0".to_string(),
@@ -142,9 +150,12 @@ fn node_inventory_serializes_as_backend_payload() {
                 part_number: Some("GPU-PN456".to_string()),
                 firmware_version: Some("96.00.5E.00.02".to_string()),
                 status: Some(status("Enabled", "OK", "OK")),
+                links: Default::default(),
             }],
+            links: Default::default(),
         }],
         firmware: vec![FirmwareInventory {
+            related_item: None,
             service_id: "FirmwareInventory".to_string(),
             id: "BMC".to_string(),
             odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
@@ -152,6 +163,7 @@ fn node_inventory_serializes_as_backend_payload() {
             version: Some("3.19.00".to_string()),
             release_date: Some("2026-01-01T00:00:00Z".to_string()),
             status: Some(status("StandbyOffline", "Critical", "Warning")),
+            links: Default::default(),
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
@@ -217,8 +229,10 @@ fn node_inventory_serializes_as_backend_payload() {
                         "health": "OK",
                         "healthRollup": "OK",
                         "state": "Enabled"
-                    }
-                }]
+                    },
+                    "links": {}
+                }],
+                "links": {}
             }],
             "source": {
                 "sourceType": "redfish",
@@ -241,7 +255,8 @@ fn node_inventory_serializes_as_backend_payload() {
                     "health": "OK",
                     "healthRollup": "OK",
                     "state": "Enabled"
-                }
+                },
+                "links": {"ManagerForServers": [{"@odata.id": "/redfish/v1/Systems/System"}]}
             }],
             "chassis": [{
                 "id": "BMC_0",
@@ -283,10 +298,13 @@ fn node_inventory_serializes_as_backend_payload() {
                         "health": "OK",
                         "healthRollup": "OK",
                         "state": "Enabled"
-                    }
-                }]
+                    },
+                    "links": {}
+                }],
+                "links": {}
             }],
             "firmware": [{
+                "relatedItem": null,
                 "serviceId": "FirmwareInventory",
                 "id": "BMC",
                 "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
@@ -298,7 +316,8 @@ fn node_inventory_serializes_as_backend_payload() {
                     "health": "Critical",
                     "healthRollup": "Warning",
                     "state": "StandbyOffline"
-                }
+                },
+                "links": {}
             }],
             "domainErrors": [{
                 "domain": "chassis.pcieDevices",

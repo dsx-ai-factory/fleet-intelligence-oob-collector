@@ -24,6 +24,7 @@ pub struct ManagerInventory {
     pub model: Option<String>,
     pub firmware_version: Option<String>,
     pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +48,7 @@ pub struct SystemInventory {
     pub memory_gib: Option<f64>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +68,7 @@ pub struct ProcessorInventory {
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
     pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,6 +87,7 @@ pub struct ChassisInventory {
     pub status: Option<InventoryStatus>,
     pub location: Option<ChassisLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,11 +114,13 @@ pub struct PcieDeviceInventory {
     pub part_number: Option<String>,
     pub firmware_version: Option<String>,
     pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirmwareInventory {
+    pub related_item: Option<Vec<InventoryLinkReference>>,
     pub service_id: String,
     pub id: String,
     pub odata_id: Option<String>,
@@ -122,6 +128,7 @@ pub struct FirmwareInventory {
     pub version: Option<String>,
     pub release_date: Option<String>,
     pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +155,20 @@ pub struct InventoryCondition {
 
 #[derive(Debug, Serialize)]
 pub struct InventoryReference {
+    #[serde(rename = "@odata.id")]
+    pub odata_id: String,
+}
+
+/// A relationship retains the single-reference or array shape supplied by Redfish.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum InventoryLink {
+    Single(InventoryLinkReference),
+    Multiple(Vec<InventoryLinkReference>),
+}
+
+#[derive(Debug, Serialize)]
+pub struct InventoryLinkReference {
     #[serde(rename = "@odata.id")]
     pub odata_id: String,
 }

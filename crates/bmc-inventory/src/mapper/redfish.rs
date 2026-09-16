@@ -4,8 +4,9 @@ use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
-    InventoryCondition, InventoryReference, InventorySourceInfo, InventoryStatus, InventoryUuid,
-    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    InventoryCondition, InventoryLink, InventoryLinkReference, InventoryReference,
+    InventorySourceInfo, InventoryStatus, InventoryUuid, ManagerInventory, NodeInventory,
+    PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -202,6 +203,7 @@ fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
         model: manager.model,
         firmware_version: manager.firmware_version,
         status: manager.status.map(map_status),
+        links: manager.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -225,6 +227,7 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         memory_gib: system.memory_gib,
         secure_boot_enabled: system.secure_boot_enabled,
         processors: system.processors.into_iter().map(map_processor).collect(),
+        links: system.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -244,6 +247,7 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         total_cores: processor.total_cores,
         total_threads: processor.total_threads,
         status: processor.status.map(map_status),
+        links: processor.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -272,6 +276,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
             .into_iter()
             .map(map_pcie_device)
             .collect(),
+        links: chassis.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -288,11 +293,18 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
         part_number: device.part_number,
         firmware_version: device.firmware_version,
         status: device.status.map(map_status),
+        links: device.links.into_iter().map(map_link).collect(),
     }
 }
 
 fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
     FirmwareInventory {
+        related_item: firmware.related_item.map(|items| {
+            items
+                .into_iter()
+                .map(|odata_id| InventoryLinkReference { odata_id })
+                .collect()
+        }),
         service_id: firmware.service_id,
         id: firmware.id,
         odata_id: firmware.odata_id,
@@ -300,6 +312,7 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         version: firmware.version,
         release_date: firmware.release_date,
         status: firmware.status.map(map_status),
+        links: firmware.links.into_iter().map(map_link).collect(),
     }
 }
 
@@ -329,13 +342,28 @@ fn map_condition(condition: crate::source::ConditionData) -> InventoryCondition 
     }
 }
 
+fn map_link((relation, link): (String, crate::source::LinkData)) -> (String, InventoryLink) {
+    let value = match link {
+        crate::source::LinkData::Single(odata_id) => {
+            InventoryLink::Single(InventoryLinkReference { odata_id })
+        }
+        crate::source::LinkData::Multiple(items) => InventoryLink::Multiple(
+            items
+                .into_iter()
+                .map(|odata_id| InventoryLinkReference { odata_id })
+                .collect(),
+        ),
+    };
+    (relation, value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{Target, TargetKind};
     use crate::source::{
-        ChassisData, FirmwareData, ManagerData, ProcessorData, RedfishReport, ServiceRootData,
-        SourceRecord, StatusData, SystemData,
+        ChassisData, FirmwareData, LinkData, ManagerData, ProcessorData, RedfishReport,
+        ServiceRootData, SourceRecord, StatusData, SystemData,
     };
 
     #[test]
@@ -464,29 +492,50 @@ mod tests {
     }
 
     #[test]
+    fn maps_links_without_changing_cardinality() {
+        let (relation, single) = map_link((
+            "ContainedBy".into(),
+            LinkData::Single("/redfish/v1/Chassis/Rack".into()),
+        ));
+        assert_eq!(relation, "ContainedBy");
+        assert_eq!(
+            serde_json::to_value(single).unwrap(),
+            serde_json::json!({"@odata.id": "/redfish/v1/Chassis/Rack"})
+        );
+        let (_, empty) = map_link(("Contains".into(), LinkData::Multiple(vec![])));
+        assert_eq!(serde_json::to_value(empty).unwrap(), serde_json::json!([]));
+    }
+
+    #[test]
     fn prefers_system_with_bios() {
+        let mut mapped_processor = processor("CPU1");
+        mapped_processor.links = std::collections::BTreeMap::from([link(
+            "PCIeDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        )]);
+        let mut mapped_system = system("System")
+            .with_odata_id("/redfish/v1/Systems/System")
+            .with_uuid("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")
+            .with_manufacturer("NVIDIA")
+            .with_model("GB200")
+            .with_serial("SN123")
+            .with_bios("1.0")
+            .with_power_state("on")
+            .with_status_state("Enabled")
+            .with_health("OK")
+            .with_cpu(1, 72)
+            .with_memory_gib(480.0)
+            .with_processor(mapped_processor);
+        mapped_system.links =
+            std::collections::BTreeMap::from([link("ManagedBy", "/redfish/v1/Managers/BMC_0")]);
+
         let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
             result: Ok(RedfishReport {
                 service_root: ServiceRootData::default(),
                 managers: Vec::new(),
-                systems: vec![
-                    system("BMC"),
-                    system("System")
-                        .with_odata_id("/redfish/v1/Systems/System")
-                        .with_uuid("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")
-                        .with_manufacturer("NVIDIA")
-                        .with_model("GB200")
-                        .with_serial("SN123")
-                        .with_bios("1.0")
-                        .with_power_state("on")
-                        .with_status_state("Enabled")
-                        .with_health("OK")
-                        .with_cpu(1, 72)
-                        .with_memory_gib(480.0)
-                        .with_processor(processor("CPU1")),
-                ],
+                systems: vec![system("BMC"), mapped_system],
                 chassis: Vec::new(),
                 firmware: Vec::new(),
                 errors: Vec::new(),
@@ -533,6 +582,12 @@ mod tests {
             Some("CPU-SN123")
         );
         assert_eq!(system.processors[0].total_cores, Some(72));
+        assert_link(&system.links, "ManagedBy", "/redfish/v1/Managers/BMC_0");
+        assert_link(
+            &system.processors[0].links,
+            "PCIeDevice",
+            "/redfish/v1/Chassis/HGX_GPU_0/PCIeDevices/GPU_0",
+        );
     }
 
     #[test]
@@ -558,7 +613,11 @@ mod tests {
                         power_state: None,
                         status: None,
                         location: None,
-                        pcie_devices: Vec::new(),
+                        pcie_devices: vec![pcie_device("GPU_0")],
+                        links: std::collections::BTreeMap::from([link(
+                            "Processors",
+                            "/redfish/v1/Systems/System/Processors/GPU_0",
+                        )]),
                     },
                     ChassisData {
                         id: "Baseboard_0".to_string(),
@@ -574,6 +633,7 @@ mod tests {
                         status: None,
                         location: None,
                         pcie_devices: Vec::new(),
+                        links: Default::default(),
                     },
                 ],
                 firmware: Vec::new(),
@@ -588,6 +648,16 @@ mod tests {
                 .expect("serial")
                 .to_string(),
             "  QTWS7G0241600218  "
+        );
+        assert_link(
+            &inventory.chassis[0].links,
+            "Processors",
+            "/redfish/v1/Systems/System/Processors/GPU_0",
+        );
+        assert_link(
+            &inventory.chassis[0].pcie_devices[0].links,
+            "Chassis",
+            "/redfish/v1/Chassis/BMC_0",
         );
         assert_eq!(inventory.chassis[1].serial_number.as_deref(), Some(" "));
     }
@@ -740,10 +810,15 @@ mod tests {
                 model: Some("OpenBMC".to_string()),
                 firmware_version: Some("3.19.00".to_string()),
                 status: Some(status("Enabled", "OK", "OK")),
+                links: std::collections::BTreeMap::from([link(
+                    "ManagerForServers",
+                    "/redfish/v1/Systems/System",
+                )]),
             }],
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: vec![FirmwareData {
+                related_item: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMCImage1".to_string(),
                 odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMCImage1".to_string()),
@@ -751,6 +826,10 @@ mod tests {
                 version: Some("3.19.00".to_string()),
                 release_date: None,
                 status: Some(status("StandbyOffline", "Critical", "Warning")),
+                links: std::collections::BTreeMap::from([link(
+                    "ActiveTargets",
+                    "/redfish/v1/Managers/BMC_0",
+                )]),
             }],
             errors: Vec::new(),
         });
@@ -770,6 +849,12 @@ mod tests {
         assert_eq!(manager_status.state.as_deref(), Some("Enabled"));
         assert_eq!(manager_status.health.as_deref(), Some("OK"));
         assert_eq!(manager_status.health_rollup.as_deref(), Some("OK"));
+        assert_eq!(manager.links.len(), 1);
+        assert_link(
+            &manager.links,
+            "ManagerForServers",
+            "/redfish/v1/Systems/System",
+        );
         assert!(inventory.systems.is_empty());
         assert_eq!(inventory.firmware.len(), 1);
         assert_eq!(
@@ -783,6 +868,47 @@ mod tests {
         assert_eq!(firmware_status.state.as_deref(), Some("StandbyOffline"));
         assert_eq!(firmware_status.health.as_deref(), Some("Critical"));
         assert_eq!(firmware_status.health_rollup.as_deref(), Some("Warning"));
+        assert_link(
+            &inventory.firmware[0].links,
+            "ActiveTargets",
+            "/redfish/v1/Managers/BMC_0",
+        );
+    }
+
+    fn link(relation: &str, odata_id: &str) -> (String, LinkData) {
+        (
+            relation.to_string(),
+            LinkData::Multiple(vec![odata_id.to_string()]),
+        )
+    }
+
+    fn assert_link(
+        links: &std::collections::BTreeMap<String, InventoryLink>,
+        relation: &str,
+        odata_id: &str,
+    ) {
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&links[relation]).unwrap(),
+            serde_json::json!([{"@odata.id": odata_id}])
+        );
+    }
+
+    fn pcie_device(id: &str) -> crate::source::PcieDeviceData {
+        crate::source::PcieDeviceData {
+            id: id.to_string(),
+            odata_id: None,
+            uuid: None,
+            device_type: None,
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            part_number: None,
+            firmware_version: None,
+            status: None,
+            links: std::collections::BTreeMap::from([link("Chassis", "/redfish/v1/Chassis/BMC_0")]),
+        }
     }
 
     fn map_report(report: RedfishReport) -> NodeInventory {
@@ -837,6 +963,7 @@ mod tests {
             memory_gib: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            links: Default::default(),
         }
     }
 
@@ -856,6 +983,7 @@ mod tests {
             total_cores: Some(72),
             total_threads: Some(72),
             status: Some(status("Enabled", "OK", "OK")),
+            links: Default::default(),
         }
     }
 
