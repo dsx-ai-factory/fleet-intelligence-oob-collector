@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bmc_error::sanitize_error_message;
+use bmc_error::SanitizedErrorMessage;
 use serde::Serialize;
 
 pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
@@ -20,7 +20,7 @@ pub struct NodeAttestation {
     pub target_name: String,
     pub bmc_address: String,
     pub success: bool,
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub nonce_refresh_timestamp: Option<String>,
     pub evidences: Vec<AttestationEvidence>,
     pub component_errors: Vec<ComponentError>,
@@ -42,7 +42,7 @@ pub struct AttestationEvidence {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentError {
     pub component_id: Option<String>,
-    pub message: String,
+    pub message: SanitizedErrorMessage,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,7 +59,7 @@ pub struct BackendNodeAttestation {
     pub nonce_refresh_timestamp: Option<String>,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub evidences: Vec<BackendEvidenceItem>,
 }
 
@@ -114,7 +114,7 @@ impl NodeAttestation {
             target_name,
             bmc_address,
             success: false,
-            error_message: Some(sanitize_error_message(&message)),
+            error_message: Some(SanitizedErrorMessage::new(message)),
             nonce_refresh_timestamp: None,
             evidences: Vec::new(),
             component_errors: Vec::new(),

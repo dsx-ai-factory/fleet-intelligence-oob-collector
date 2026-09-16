@@ -1,5 +1,6 @@
 use std::fmt;
 
+use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
 use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
@@ -39,15 +40,15 @@ pub struct NodeInventory {
     pub chassis: Vec<ChassisInventory>,
     pub firmware: Vec<FirmwareInventory>,
     pub domain_errors: Vec<DomainError>,
-    pub target_error: Option<String>,
+    pub target_error: Option<SanitizedErrorMessage>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainError {
     pub domain: String,
-    pub resource: Option<String>,
-    pub message: String,
+    pub resource: Option<SanitizedUriReference>,
+    pub message: SanitizedErrorMessage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

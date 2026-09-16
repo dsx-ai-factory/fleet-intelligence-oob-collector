@@ -1,9 +1,86 @@
 //! Sanitization for Redfish-derived text and URI references in product models.
 
+use std::fmt;
+use std::ops::Deref;
+
+use serde::Serialize;
 use url::Url;
 
 const REDACTED_URL: &str = "[URL_REDACTED]";
 const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://", "//"];
+
+/// Error text whose embedded URLs have been reduced to safe resource paths.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SanitizedErrorMessage(String);
+
+impl SanitizedErrorMessage {
+    pub fn new(value: impl AsRef<str>) -> Self {
+        Self(sanitize_error_message(value.as_ref()))
+    }
+}
+
+/// A URI reference without authority, credentials, port, or query data.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SanitizedUriReference(String);
+
+impl SanitizedUriReference {
+    pub fn new(value: impl AsRef<str>) -> Self {
+        Self(sanitize_uri_reference(value.as_ref()))
+    }
+}
+
+macro_rules! impl_sanitized_string {
+    ($type:ty) => {
+        impl Deref for $type {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl AsRef<str> for $type {
+            fn as_ref(&self) -> &str {
+                self
+            }
+        }
+
+        impl fmt::Display for $type {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+
+        impl From<String> for $type {
+            fn from(value: String) -> Self {
+                Self::new(value)
+            }
+        }
+
+        impl From<&str> for $type {
+            fn from(value: &str) -> Self {
+                Self::new(value)
+            }
+        }
+
+        impl PartialEq<str> for $type {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+
+        impl PartialEq<&str> for $type {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+    };
+}
+
+impl_sanitized_string!(SanitizedErrorMessage);
+impl_sanitized_string!(SanitizedUriReference);
 
 /// Remove sensitive URL components from error text exposed outside the source layer.
 ///
@@ -153,6 +230,25 @@ mod tests {
         ] {
             assert_eq!(sanitize_uri_reference(input), expected, "{input}");
         }
+    }
+
+    #[test]
+    fn sanitized_types_serialize_only_sanitized_values() {
+        let message = SanitizedErrorMessage::new(
+            "failed //user:secret@host/redfish/v1/Systems/1?token=x",
+        );
+        let reference = SanitizedUriReference::new(
+            "//user:secret@host/redfish/v1/Systems/1?token=x#item",
+        );
+
+        assert_eq!(
+            serde_json::to_string(&message).unwrap(),
+            r#""failed /redfish/v1/Systems/1""#
+        );
+        assert_eq!(
+            serde_json::to_string(&reference).unwrap(),
+            r#""/redfish/v1/Systems/1#item""#
+        );
     }
 
     #[test]

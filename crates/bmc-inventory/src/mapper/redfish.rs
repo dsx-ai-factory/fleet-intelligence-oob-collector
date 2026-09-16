@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use bmc_error::{sanitize_error_message, sanitize_uri_reference};
+use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
 
 use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
@@ -107,10 +107,8 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                     .into_iter()
                     .map(|error| DomainError {
                         domain: error.domain,
-                        resource: error
-                            .resource
-                            .map(|resource| sanitize_uri_reference(&resource)),
-                        message: sanitize_error_message(&error.message),
+                        resource: error.resource.map(SanitizedUriReference::new),
+                        message: SanitizedErrorMessage::new(error.message),
                     })
                     .collect(),
                 target_error: None,
@@ -140,7 +138,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
             chassis: Vec::new(),
             firmware: Vec::new(),
             domain_errors: Vec::new(),
-            target_error: Some(sanitize_error_message(&error)),
+            target_error: Some(SanitizedErrorMessage::new(error)),
         },
     }
 }
@@ -364,7 +362,7 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
             items
                 .into_iter()
                 .map(|odata_id| InventoryLinkReference {
-                    odata_id: sanitize_uri_reference(&odata_id),
+                    odata_id: SanitizedUriReference::new(odata_id),
                 })
                 .collect()
         }),
@@ -416,23 +414,17 @@ fn map_condition(condition: crate::source::ConditionData) -> InventoryCondition 
     InventoryCondition {
         timestamp: condition.timestamp,
         message_id: condition.message_id,
-        message_args: condition.message_args.map(|args| {
-            args.into_iter()
-                .map(|message| sanitize_error_message(&message))
-                .collect()
-        }),
-        message: condition
-            .message
-            .map(|message| sanitize_error_message(&message)),
+        message_args: condition
+            .message_args
+            .map(|args| args.into_iter().map(SanitizedErrorMessage::new).collect()),
+        message: condition.message.map(SanitizedErrorMessage::new),
         severity: condition.severity,
-        resolution: condition
-            .resolution
-            .map(|message| sanitize_error_message(&message)),
+        resolution: condition.resolution.map(SanitizedErrorMessage::new),
         condition_type: condition.condition_type,
         origin_of_condition: condition
             .origin_of_condition
             .map(|odata_id| InventoryReference {
-                odata_id: sanitize_uri_reference(&odata_id),
+                odata_id: SanitizedUriReference::new(odata_id),
             }),
     }
 }
@@ -441,14 +433,14 @@ fn map_link((relation, link): (String, crate::source::LinkData)) -> (String, Inv
     let value = link
         .into_iter()
         .map(|odata_id| InventoryLinkReference {
-            odata_id: sanitize_uri_reference(&odata_id),
+            odata_id: SanitizedUriReference::new(odata_id),
         })
         .collect();
     (relation, value)
 }
 
-fn sanitize_optional_uri(reference: Option<String>) -> Option<String> {
-    reference.map(|reference| sanitize_uri_reference(&reference))
+fn sanitize_optional_uri(reference: Option<String>) -> Option<SanitizedUriReference> {
+    reference.map(SanitizedUriReference::new)
 }
 
 #[cfg(test)]
@@ -494,13 +486,7 @@ mod tests {
         );
         assert_eq!(
             condition.message_args.as_deref(),
-            Some(
-                [
-                    "CPU_1 Firmware".to_string(),
-                    "EC_STRAP_MISMATCH".to_string()
-                ]
-                .as_slice()
-            )
+            Some(["CPU_1 Firmware".into(), "EC_STRAP_MISMATCH".into()].as_slice())
         );
         assert_eq!(
             condition.message.as_deref(),
@@ -558,9 +544,7 @@ mod tests {
                 }),
                 links: std::collections::BTreeMap::from([(
                     "ManagerForServers".into(),
-                    LinkData::Multiple(vec![
-                        "//user:secret@bmc.example/redfish/v1/Systems/1?token=x#item".into(),
-                    ]),
+                    vec!["//user:secret@bmc.example/redfish/v1/Systems/1?token=x#item".into()],
                 )]),
             }],
             systems: Vec::new(),

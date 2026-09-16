@@ -110,3 +110,8 @@ before output models reach the backend, JSON, or table sinks. Intentional invent
 addresses, hostnames, and MAC addresses remain available, while attestation evidence
 and certificates are not rewritten. This is URL sanitization, not general secret
 detection in arbitrary BMC-provided strings.
+
+Product-model URI and error fields use transparent sanitized string types with
+private inner values. All public construction paths therefore apply the same
+sanitization, including callers that construct models without using the Redfish
+mapper. Their serialized JSON representation remains a normal string.

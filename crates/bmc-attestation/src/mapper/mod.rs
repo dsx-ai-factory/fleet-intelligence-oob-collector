@@ -1,4 +1,4 @@
-use bmc_error::sanitize_error_message;
+use bmc_error::SanitizedErrorMessage;
 
 use crate::models::{AttestationEvidence, ComponentError, NodeAttestation};
 use crate::source::{AttestationEvidenceData, ComponentErrorData, SourceRecord};
@@ -26,7 +26,7 @@ impl AttestationMapper for RedfishMapper {
                     } else {
                         Some(
                             "failed to collect attestation evidence from all GPU IRoT components"
-                                .to_string(),
+                                .into(),
                         )
                     },
                     nonce_refresh_timestamp: record.nonce_refresh_timestamp,
@@ -59,7 +59,7 @@ fn map_evidence(evidence: AttestationEvidenceData) -> AttestationEvidence {
 fn map_component_error(error: ComponentErrorData) -> ComponentError {
     ComponentError {
         component_id: error.component_id,
-        message: sanitize_error_message(&error.message),
+        message: SanitizedErrorMessage::new(error.message),
     }
 }
 
