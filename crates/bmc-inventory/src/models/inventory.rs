@@ -42,10 +42,8 @@ pub struct SystemInventory {
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
     pub status: Option<InventoryStatus>,
-    pub cpu_count: Option<i64>,
-    pub cpu_core_count: Option<i64>,
-    pub cpu_model: Option<String>,
-    pub memory_gib: Option<f64>,
+    pub processor_summary: Option<ProcessorSummary>,
+    pub memory_summary: Option<MemorySummary>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
@@ -157,6 +155,28 @@ pub struct InventoryCondition {
 pub struct InventoryReference {
     #[serde(rename = "@odata.id")]
     pub odata_id: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessorSummary {
+    pub count: Option<i64>,
+    pub core_count: Option<i64>,
+    pub model: Option<String>,
+    pub logical_processor_count: Option<i64>,
+    pub threading_enabled: Option<bool>,
+    pub status: Option<InventoryStatus>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySummary {
+    #[serde(rename = "totalSystemMemoryGiB")]
+    pub total_system_memory_gib: Option<f64>,
+    #[serde(rename = "totalSystemPersistentMemoryGiB")]
+    pub total_system_persistent_memory_gib: Option<f64>,
+    pub memory_mirroring: Option<String>,
+    pub status: Option<InventoryStatus>,
 }
 
 /// A relationship retains the single-reference or array shape supplied by Redfish.

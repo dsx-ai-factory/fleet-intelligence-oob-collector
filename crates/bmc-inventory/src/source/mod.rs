@@ -71,10 +71,8 @@ pub struct SystemData {
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
     pub status: Option<StatusData>,
-    pub cpu_count: Option<i64>,
-    pub cpu_core_count: Option<i64>,
-    pub cpu_model: Option<String>,
-    pub memory_gib: Option<f64>,
+    pub processor_summary: Option<ProcessorSummaryData>,
+    pub memory_summary: Option<MemorySummaryData>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorData>,
     pub links: std::collections::BTreeMap<String, LinkData>,
@@ -186,4 +184,22 @@ pub struct InventoryErrorData {
     pub domain: String,
     pub resource: Option<String>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProcessorSummaryData {
+    pub count: Option<i64>,
+    pub core_count: Option<i64>,
+    pub model: Option<String>,
+    pub logical_processor_count: Option<i64>,
+    pub threading_enabled: Option<bool>,
+    pub status: Option<StatusData>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MemorySummaryData {
+    pub total_system_memory_gib: Option<f64>,
+    pub total_system_persistent_memory_gib: Option<f64>,
+    pub memory_mirroring: Option<String>,
+    pub status: Option<StatusData>,
 }

@@ -221,10 +221,8 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         asset_tag: system.asset_tag,
         power_state: system.power_state,
         status: system.status.map(map_status),
-        cpu_count: system.cpu_count,
-        cpu_core_count: system.cpu_core_count,
-        cpu_model: system.cpu_model,
-        memory_gib: system.memory_gib,
+        processor_summary: system.processor_summary.map(map_processor_summary),
+        memory_summary: system.memory_summary.map(map_memory_summary),
         secure_boot_enabled: system.secure_boot_enabled,
         processors: system.processors.into_iter().map(map_processor).collect(),
         links: system.links.into_iter().map(map_link).collect(),
@@ -313,6 +311,28 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         release_date: firmware.release_date,
         status: firmware.status.map(map_status),
         links: firmware.links.into_iter().map(map_link).collect(),
+    }
+}
+
+fn map_processor_summary(
+    summary: crate::source::ProcessorSummaryData,
+) -> crate::models::ProcessorSummary {
+    crate::models::ProcessorSummary {
+        count: summary.count,
+        core_count: summary.core_count,
+        model: summary.model,
+        logical_processor_count: summary.logical_processor_count,
+        threading_enabled: summary.threading_enabled,
+        status: summary.status.map(map_status),
+    }
+}
+
+fn map_memory_summary(summary: crate::source::MemorySummaryData) -> crate::models::MemorySummary {
+    crate::models::MemorySummary {
+        total_system_memory_gib: summary.total_system_memory_gib,
+        total_system_persistent_memory_gib: summary.total_system_persistent_memory_gib,
+        memory_mirroring: summary.memory_mirroring,
+        status: summary.status.map(map_status),
     }
 }
 
@@ -489,6 +509,37 @@ mod tests {
         assert_eq!(successful.compute_zone.as_deref(), Some("us-west-dc1"));
         assert_eq!(successful.node_group.as_deref(), Some("gb200-training"));
         assert_eq!(failed.name.as_deref(), Some("node-02"));
+    }
+
+    #[test]
+    fn maps_summary_health_into_nested_payload() {
+        let summary = crate::source::ProcessorSummaryData {
+            count: Some(2),
+            status: Some(crate::source::StatusData {
+                health: Some("Critical".into()),
+                conditions: Some(vec![]),
+                health_rollup: None,
+                state: None,
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(map_processor_summary(summary)).unwrap();
+        assert_eq!(value["count"], 2);
+        assert_eq!(value["status"]["health"], "Critical");
+        assert_eq!(value["status"]["conditions"], serde_json::json!([]));
+        let memory = crate::source::MemorySummaryData {
+            total_system_memory_gib: Some(480.0),
+            status: Some(crate::source::StatusData {
+                health: Some("Warning".into()),
+                conditions: None,
+                health_rollup: None,
+                state: None,
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(map_memory_summary(memory)).unwrap();
+        assert_eq!(value["totalSystemMemoryGiB"], 480.0);
+        assert_eq!(value["status"]["health"], "Warning");
     }
 
     #[test]
@@ -957,10 +1008,8 @@ mod tests {
             asset_tag: None,
             power_state: None,
             status: None,
-            cpu_count: None,
-            cpu_core_count: None,
-            cpu_model: None,
-            memory_gib: None,
+            processor_summary: None,
+            memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
             links: Default::default(),
@@ -1049,13 +1098,19 @@ mod tests {
         }
 
         fn with_cpu(mut self, count: i64, cores: i64) -> Self {
-            self.cpu_count = Some(count);
-            self.cpu_core_count = Some(cores);
+            self.processor_summary = Some(crate::source::ProcessorSummaryData {
+                count: Some(count),
+                core_count: Some(cores),
+                ..Default::default()
+            });
             self
         }
 
         fn with_memory_gib(mut self, memory_gib: f64) -> Self {
-            self.memory_gib = Some(memory_gib);
+            self.memory_summary = Some(crate::source::MemorySummaryData {
+                total_system_memory_gib: Some(memory_gib),
+                ..Default::default()
+            });
             self
         }
 
