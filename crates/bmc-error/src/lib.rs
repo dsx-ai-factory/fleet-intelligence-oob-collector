@@ -3,7 +3,7 @@
 use url::Url;
 
 const REDACTED_URL: &str = "[URL_REDACTED]";
-const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://"];
+const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://", "//"];
 
 /// Remove sensitive URL components from error text sent to a backend.
 ///
@@ -47,10 +47,71 @@ pub fn sanitize_backend_error_message(message: &str) -> String {
 }
 
 fn safe_url_path(url_text: &str) -> String {
+    let absolute;
+    let url_text = if url_text.starts_with("//") {
+        absolute = format!("https:{url_text}");
+        &absolute
+    } else {
+        url_text
+    };
     Url::parse(url_text)
         .ok()
+        .filter(|url| !url.cannot_be_a_base())
         .map(|url| url.path().to_string())
         .filter(|path| !path.is_empty() && path != "/")
+        .unwrap_or_else(|| REDACTED_URL.to_string())
+}
+
+/// Sanitize a structured URI reference for backend inventory output.
+/// Preserve resource paths and fragments, but never authority or query data.
+/// Invalid references are redacted rather than returned verbatim.
+pub fn sanitize_backend_uri_reference(reference: &str) -> String {
+    if reference.is_empty()
+        || reference
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+        || reference.contains('\\')
+    {
+        return REDACTED_URL.to_string();
+    }
+    if reference.starts_with("//") {
+        return safe_uri_reference(&format!("https:{reference}"));
+    }
+    if Url::parse(reference).is_ok() {
+        return safe_uri_reference(reference);
+    }
+    let (resource, fragment) = reference
+        .split_once('#')
+        .map_or((reference, None), |(resource, fragment)| {
+            (resource, Some(fragment))
+        });
+    let path = resource.split('?').next().unwrap_or_default();
+    // A colon in the first segment indicates a malformed absolute URI.
+    if (path.is_empty() && fragment.is_none())
+        || path.split('/').next().unwrap_or_default().contains(':')
+    {
+        return REDACTED_URL.to_string();
+    }
+    match fragment {
+        Some(fragment) => format!("{path}#{fragment}"),
+        None => path.to_string(),
+    }
+}
+
+fn safe_uri_reference(url_text: &str) -> String {
+    Url::parse(url_text)
+        .ok()
+        .filter(|url| !url.cannot_be_a_base())
+        .and_then(|url| {
+            let path = url.path();
+            if path.is_empty() || path == "/" {
+                return None;
+            }
+            Some(match url.fragment() {
+                Some(fragment) => format!("{path}#{fragment}"),
+                None => path.to_string(),
+            })
+        })
         .unwrap_or_else(|| REDACTED_URL.to_string())
 }
 
@@ -62,6 +123,38 @@ fn split_trailing_punctuation(value: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitizes_scheme_relative_errors() {
+        assert_eq!(
+            sanitize_backend_error_message("failed (//user:secret@host/path?token=x#item)"),
+            "failed (/path)"
+        );
+        assert_eq!(
+            sanitize_backend_error_message("failed //host"),
+            "failed [URL_REDACTED]"
+        );
+    }
+
+    #[test]
+    fn sanitizes_structured_references() {
+        for (input, expected) in [
+            ("https://user:secret@host/path?token=x#item", "/path#item"),
+            ("//user:secret@host/path?token=x#item", "/path#item"),
+            ("/redfish/v1/Systems/1?token=x", "/redfish/v1/Systems/1"),
+            ("Systems/1#item", "Systems/1#item"),
+            ("#/Processors/0", "#/Processors/0"),
+            ("//host", REDACTED_URL),
+            ("https://", REDACTED_URL),
+            ("//[invalid/path", REDACTED_URL),
+            ("", REDACTED_URL),
+            ("?token=x", REDACTED_URL),
+            ("bad reference", REDACTED_URL),
+            ("\\\\host/path", REDACTED_URL),
+        ] {
+            assert_eq!(sanitize_backend_uri_reference(input), expected, "{input}");
+        }
+    }
 
     #[test]
     fn preserves_url_path_and_surrounding_error_details() {

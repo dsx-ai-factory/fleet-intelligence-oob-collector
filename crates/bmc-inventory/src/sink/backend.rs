@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
-use bmc_error::sanitize_backend_error_message;
+use bmc_error::{sanitize_backend_error_message, sanitize_backend_uri_reference};
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
@@ -350,6 +350,49 @@ struct NodeUpsertRequest<'a> {
     inventory: BackendInventory<'a>,
 }
 
+// Restrict the projection to inventory resource trees: source addresses and
+// attestation evidence are intentionally outside this transformation.
+struct BackendResources<T>(T);
+
+impl<T: Serialize> Serialize for BackendResources<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut value = serde_json::to_value(&self.0).map_err(serde::ser::Error::custom)?;
+        sanitize_resource_fields(&mut value);
+        value.serialize(serializer)
+    }
+}
+
+fn sanitize_resource_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sanitize_resource_fields(item);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                match (key.as_str(), &mut *value) {
+                    ("odataId" | "@odata.id", serde_json::Value::String(reference)) => {
+                        *reference = sanitize_backend_uri_reference(reference);
+                    }
+                    ("message" | "resolution", serde_json::Value::String(message)) => {
+                        *message = sanitize_backend_error_message(message);
+                    }
+                    ("messageArgs", serde_json::Value::Array(args)) => {
+                        for arg in args {
+                            if let serde_json::Value::String(message) = arg {
+                                *message = sanitize_backend_error_message(message);
+                            }
+                        }
+                    }
+                    _ => sanitize_resource_fields(value),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 struct BackendInventory<'a>(&'a NodeInventory);
 
 impl Serialize for BackendInventory<'_> {
@@ -392,10 +435,10 @@ impl Serialize for BackendInventory<'_> {
         map.serialize_entry("uuid", uuid)?;
         map.serialize_entry("source", source)?;
         map.serialize_entry("primarySystemId", primary_system_id)?;
-        map.serialize_entry("managers", managers)?;
-        map.serialize_entry("systems", systems)?;
-        map.serialize_entry("chassis", chassis)?;
-        map.serialize_entry("firmware", firmware)?;
+        map.serialize_entry("managers", &BackendResources(managers))?;
+        map.serialize_entry("systems", &BackendResources(systems))?;
+        map.serialize_entry("chassis", &BackendResources(chassis))?;
+        map.serialize_entry("firmware", &BackendResources(firmware))?;
 
         let domain_errors = domain_errors
             .iter()
@@ -507,6 +550,70 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
+    }
+
+    #[test]
+    fn backend_resource_projection_sanitizes_nested_references_and_conditions() {
+        let resource = serde_json::json!({
+            "odataId": "//user:secret@host/redfish/v1/Systems/1?token=x#item",
+            "processors": [{"odataId": "https://host/redfish/v1/Processors/1?token=x"}],
+            "status": {"conditions": [{
+                "originOfCondition": {"@odata.id": "//host/redfish/v1/Chassis/1#item"},
+                "message": "failed //user:secret@host/path?token=x",
+                "messageArgs": ["https://host/path?token=x"],
+                "resolution": "check //host/path"
+            }]},
+            "hostName": "host", "serialNumber": "serial-1"
+        });
+        let value = serde_json::to_value(BackendResources(&resource)).expect("serialize");
+        assert_eq!(value["odataId"], "/redfish/v1/Systems/1#item");
+        assert_eq!(
+            value["processors"][0]["odataId"],
+            "/redfish/v1/Processors/1"
+        );
+        let condition = &value["status"]["conditions"][0];
+        assert_eq!(
+            condition["originOfCondition"]["@odata.id"],
+            "/redfish/v1/Chassis/1#item"
+        );
+        assert_eq!(condition["message"], "failed /path");
+        assert_eq!(condition["messageArgs"][0], "/path");
+        assert_eq!(condition["resolution"], "check /path");
+        assert_eq!(value["hostName"], "host");
+        assert_eq!(value["serialNumber"], "serial-1");
+        assert!(resource["odataId"].as_str().unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn batch_request_sanitizes_resource_uris_without_changing_local_inventory() {
+        let mut inventory = inventory("10.0.0.1");
+        inventory.managers.push(crate::models::ManagerInventory {
+            name: "BMC".into(),
+            description: None,
+            id: "BMC".into(),
+            odata_id: Some("//user:secret@host/redfish/v1/Managers/BMC?token=x#item".into()),
+            uuid: None,
+            manager_type: None,
+            model: None,
+            firmware_version: None,
+            status: None,
+            links: Default::default(),
+        });
+        let inventories = [inventory];
+        let value =
+            serde_json::to_value(build_batch_upsert_request(&inventories)).expect("serialize");
+        assert_eq!(
+            value["data"][0]["managers"][0]["@odata.id"],
+            "/redfish/v1/Managers/BMC#item"
+        );
+        assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
+        assert!(
+            inventories[0].managers[0]
+                .odata_id
+                .as_ref()
+                .unwrap()
+                .contains("secret")
+        );
     }
 
     #[test]

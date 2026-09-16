@@ -95,3 +95,18 @@ Workloads run as non-root, without service account tokens or Linux
 capabilities, and with read-only root filesystems. The default NetworkPolicy
 restricts gateway ingress to pods in the same Helm release when enforced by the
 cluster CNI.
+
+### Backend URI sanitization
+
+Backend inventory serialization removes URL authorities (including credentials),
+queries from `@odata.id` references. Absolute and scheme-relative references retain
+only their resource path and fragment; malformed or
+pathless URL references are replaced with `[URL_REDACTED]`. Relative resource paths
+remain relative, with query and fragment data removed.
+
+Inventory errors, condition messages, message arguments, resolutions, and
+attestation errors also sanitize embedded URLs, including scheme-relative URLs.
+This projection leaves local diagnostic output unchanged. Intentional inventory
+addresses, hostnames, and MAC addresses remain available, and attestation evidence
+and certificates are not rewritten. This is URL sanitization, not general secret
+detection in arbitrary BMC-provided strings.

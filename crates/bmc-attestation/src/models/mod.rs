@@ -244,6 +244,22 @@ mod tests {
     }
 
     #[test]
+    fn backend_payload_sanitizes_scheme_relative_error_urls() {
+        let record = NodeAttestation::failed(
+            "node-1".into(),
+            "node-a".into(),
+            "10.0.0.1".into(),
+            "failed //user:secret@host/redfish/v1/ComponentIntegrity?token=x#item",
+        );
+        let value = serde_json::to_value(record.backend_payload()).expect("serialize");
+        assert_eq!(
+            value["errorMessage"],
+            "failed /redfish/v1/ComponentIntegrity"
+        );
+        assert!(record.error_message.as_ref().unwrap().contains("secret"));
+    }
+
+    #[test]
     fn sanitize_backend_error_message_preserves_embedded_url_paths() {
         assert_eq!(
             sanitize_backend_error_message(
