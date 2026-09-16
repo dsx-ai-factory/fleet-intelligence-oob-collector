@@ -110,6 +110,14 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 
 ## Output Conventions
 
+- Collected resources preserve their Redfish `Name` and optional `Description`
+  as `name` and `description`. Resource references use `@odata.id` rather than
+  the former `odataId` key. Resource IDs and names are not synthesized or normalized.
+- Individual-resource `@odata.type` is not exposed by nv-redfish 0.15.1. Recovering
+  the original type/version requires dependency support or a separately designed
+  raw-response capture path; the collector does not fabricate a schema version.
+- Other field casing, null behavior, and `inventory.v1alpha1` remain unchanged.
+  Backend reconciliation owns compatibility with legacy field names.
 - System `processorSummary` and `memorySummary` retain nested counts, capacity,
   processor model/threading, memory mirroring, and their own `status`/conditions.
   They replace `cpuCount`, `cpuCoreCount`, `cpuModel`, and `memoryGib` in JSON;

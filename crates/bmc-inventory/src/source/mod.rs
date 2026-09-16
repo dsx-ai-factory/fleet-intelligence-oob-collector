@@ -47,6 +47,8 @@ pub struct ServiceRootData {
 
 #[derive(Clone, Debug)]
 pub struct ManagerData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -59,6 +61,8 @@ pub struct ManagerData {
 
 #[derive(Clone, Debug)]
 pub struct SystemData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -80,6 +84,8 @@ pub struct SystemData {
 
 #[derive(Clone, Debug)]
 pub struct ProcessorData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -99,6 +105,8 @@ pub struct ProcessorData {
 
 #[derive(Clone, Debug)]
 pub struct ChassisData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub chassis_type: Option<String>,
@@ -126,6 +134,8 @@ pub struct ChassisLocationData {
 
 #[derive(Clone, Debug)]
 pub struct PcieDeviceData {
+    pub name: String,
+    pub description: Option<String>,
     pub id: String,
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
@@ -142,6 +152,7 @@ pub struct PcieDeviceData {
 
 #[derive(Clone, Debug)]
 pub struct FirmwareData {
+    pub description: Option<String>,
     pub related_item: Option<Vec<String>>,
     pub service_id: String,
     pub id: String,

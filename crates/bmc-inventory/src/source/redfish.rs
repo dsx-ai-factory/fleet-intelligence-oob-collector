@@ -165,6 +165,8 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
     for manager in managers {
         let raw = manager.raw();
         out.push(ManagerData {
+            name: raw.base.name.clone(),
+            description: raw.base.description.clone().flatten(),
             id: manager.id().to_string(),
             odata_id: Some(manager.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
@@ -199,6 +201,8 @@ async fn collect_systems<B: Bmc>(
         let system_id = system.id().to_string();
         let raw = system.raw();
         out.push(SystemData {
+            name: raw.base.name.clone(),
+            description: raw.base.description.clone().flatten(),
             id: system_id.clone(),
             odata_id: Some(system.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
@@ -245,6 +249,8 @@ async fn collect_chassis<B: Bmc>(
         let chassis_id = chassis.id().to_string();
         let raw = chassis.raw();
         out.push(ChassisData {
+            name: raw.base.name.clone(),
+            description: raw.base.description.clone().flatten(),
             id: chassis_id.clone(),
             odata_id: Some(chassis.odata_id().to_string()),
             chassis_type: redfish_enum_string(raw.chassis_type),
@@ -386,6 +392,8 @@ async fn collect_processors<B: Bmc>(
     for processor in processors {
         let raw = processor.raw();
         out.push(ProcessorData {
+            name: raw.base.name.clone(),
+            description: raw.base.description.clone().flatten(),
             id: processor.id().to_string(),
             odata_id: Some(processor.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
@@ -444,6 +452,8 @@ async fn collect_pcie_devices<B: Bmc>(
     for device in devices {
         let raw = device.raw();
         out.push(PcieDeviceData {
+            name: raw.base.name.clone(),
+            description: raw.base.description.clone().flatten(),
             id: device.id().to_string(),
             odata_id: Some(device.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
@@ -480,6 +490,7 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .map(|inventory| {
             let raw = inventory.raw();
             FirmwareData {
+                description: raw.base.description.clone().flatten(),
                 related_item: raw.related_item.as_deref().map(reference_targets),
                 service_id: "FirmwareInventory".to_string(),
                 id: inventory.id().to_string(),
@@ -1179,6 +1190,8 @@ mod tests {
             ..ServiceRootData::default()
         };
         let systems = vec![SystemData {
+            name: "System".into(),
+            description: None,
             id: "DGX".to_string(),
             odata_id: None,
             uuid: None,
@@ -1210,6 +1223,8 @@ mod tests {
             ..ServiceRootData::default()
         };
         let systems = vec![SystemData {
+            name: "System".into(),
+            description: None,
             id: "System".to_string(),
             odata_id: None,
             uuid: None,
@@ -1291,6 +1306,11 @@ mod tests {
 
         assert_eq!(report.managers.len(), 1);
         assert_eq!(report.managers[0].id, "BMC_0");
+        assert_eq!(report.managers[0].name, "BMC");
+        assert_eq!(
+            report.managers[0].description.as_deref(),
+            Some("  Baseboard management controller  ")
+        );
         assert_eq!(
             report.managers[0].firmware_version.as_deref(),
             Some("3.19.00")
@@ -1719,6 +1739,7 @@ mod tests {
         "@odata.type": "#Manager.v1_15_0.Manager",
         "Id": "BMC_0",
         "Name": "BMC",
+        "Description": "  Baseboard management controller  ",
         "ManagerType": "BMC",
         "UUID": "11111111-2222-3333-4444-555555555555",
         "Model": "OpenBMC",
