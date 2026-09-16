@@ -1,17 +1,16 @@
-//! Sanitization for error text sent to Fleet Intelligence backends.
+//! Sanitization for Redfish-derived text and URI references in product models.
 
 use url::Url;
 
 const REDACTED_URL: &str = "[URL_REDACTED]";
 const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://", "//"];
 
-/// Remove sensitive URL components from error text sent to a backend.
+/// Remove sensitive URL components from error text exposed outside the source layer.
 ///
 /// Full error messages can contain BMC addresses and can also trigger request
-/// body security filters. Callers should retain the original text for local
-/// diagnostics and sanitize only the backend representation. A valid URL with
-/// a useful path is replaced by that path; other URLs are fully redacted.
-pub fn sanitize_backend_error_message(message: &str) -> String {
+/// body security filters. A valid URL with a useful path is replaced by that
+/// path; other URLs are fully redacted.
+pub fn sanitize_error_message(message: &str) -> String {
     let lower = message.to_ascii_lowercase();
     let mut output = String::with_capacity(message.len());
     let mut index = 0;
@@ -62,10 +61,10 @@ fn safe_url_path(url_text: &str) -> String {
         .unwrap_or_else(|| REDACTED_URL.to_string())
 }
 
-/// Sanitize a structured URI reference for backend inventory output.
+/// Sanitize a structured URI reference for product inventory output.
 /// Preserve resource paths and fragments, but never authority or query data.
 /// Invalid references are redacted rather than returned verbatim.
-pub fn sanitize_backend_uri_reference(reference: &str) -> String {
+pub fn sanitize_uri_reference(reference: &str) -> String {
     if reference.is_empty()
         || reference
             .chars()
@@ -127,11 +126,11 @@ mod tests {
     #[test]
     fn sanitizes_scheme_relative_errors() {
         assert_eq!(
-            sanitize_backend_error_message("failed (//user:secret@host/path?token=x#item)"),
+            sanitize_error_message("failed (//user:secret@host/path?token=x#item)"),
             "failed (/path)"
         );
         assert_eq!(
-            sanitize_backend_error_message("failed //host"),
+            sanitize_error_message("failed //host"),
             "failed [URL_REDACTED]"
         );
     }
@@ -152,14 +151,14 @@ mod tests {
             ("bad reference", REDACTED_URL),
             ("\\\\host/path", REDACTED_URL),
         ] {
-            assert_eq!(sanitize_backend_uri_reference(input), expected, "{input}");
+            assert_eq!(sanitize_uri_reference(input), expected, "{input}");
         }
     }
 
     #[test]
     fn preserves_url_path_and_surrounding_error_details() {
         assert_eq!(
-            sanitize_backend_error_message(
+            sanitize_error_message(
                 "BMC error - url: https://10.0.0.1/redfish/v1/Systems/1 status: 403 Forbidden"
             ),
             "BMC error - url: /redfish/v1/Systems/1 status: 403 Forbidden"
@@ -169,7 +168,7 @@ mod tests {
     #[test]
     fn sanitizes_multiple_urls_case_insensitively() {
         assert_eq!(
-            sanitize_backend_error_message(
+            sanitize_error_message(
                 "HTTP://bmc/redfish failed; retry HTTPS://bmc/redfish?target=system"
             ),
             "/redfish failed; retry /redfish"
@@ -179,7 +178,7 @@ mod tests {
     #[test]
     fn removes_authority_credentials_port_query_and_fragment() {
         assert_eq!(
-            sanitize_backend_error_message(
+            sanitize_error_message(
                 "https://user:secret@10.0.0.1:8443/redfish/v1/Systems/1?detail=all#result"
             ),
             "/redfish/v1/Systems/1"
@@ -189,7 +188,7 @@ mod tests {
     #[test]
     fn preserves_text_without_urls() {
         assert_eq!(
-            sanitize_backend_error_message("connection refused"),
+            sanitize_error_message("connection refused"),
             "connection refused"
         );
     }
@@ -197,7 +196,7 @@ mod tests {
     #[test]
     fn preserves_path_and_punctuation_in_reqwest_url_suffix() {
         assert_eq!(
-            sanitize_backend_error_message(
+            sanitize_error_message(
                 "HTTP status client error (404 Not Found) for url (https://10.0.0.1/redfish/v1)"
             ),
             "HTTP status client error (404 Not Found) for url (/redfish/v1)"
@@ -207,7 +206,7 @@ mod tests {
     #[test]
     fn fully_redacts_invalid_or_pathless_urls() {
         assert_eq!(
-            sanitize_backend_error_message("failed http:// and https://bmc"),
+            sanitize_error_message("failed http:// and https://bmc"),
             "failed [URL_REDACTED] and [URL_REDACTED]"
         );
     }

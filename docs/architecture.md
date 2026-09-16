@@ -96,17 +96,17 @@ capabilities, and with read-only root filesystems. The default NetworkPolicy
 restricts gateway ingress to pods in the same Helm release when enforced by the
 cluster CNI.
 
-### Backend URI sanitization
+### Redfish URI sanitization
 
-Backend inventory serialization removes URL authorities (including credentials),
-queries from `@odata.id` references. Absolute and scheme-relative references retain
-only their resource path and fragment; malformed or
-pathless URL references are replaced with `[URL_REDACTED]`. Relative resource paths
-remain relative, with query and fragment data removed.
+The Redfish mapper removes URL authorities (including credentials) and queries
+from `@odata.id` references before building product inventory models. Absolute
+and scheme-relative references retain only their resource path and fragment;
+malformed or pathless URL references are replaced with `[URL_REDACTED]`.
+Relative resource paths remain relative, with query data removed.
 
 Inventory errors, condition messages, message arguments, resolutions, and
-attestation errors also sanitize embedded URLs, including scheme-relative URLs.
-This projection leaves local diagnostic output unchanged. Intentional inventory
-addresses, hostnames, and MAC addresses remain available, and attestation evidence
+attestation errors also sanitize embedded URLs, including scheme-relative URLs,
+before output models reach the backend, JSON, or table sinks. Intentional inventory
+addresses, hostnames, and MAC addresses remain available, while attestation evidence
 and certificates are not rewritten. This is URL sanitization, not general secret
 detection in arbitrary BMC-provided strings.

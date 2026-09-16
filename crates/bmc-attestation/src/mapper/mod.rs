@@ -1,3 +1,5 @@
+use bmc_error::sanitize_error_message;
+
 use crate::models::{AttestationEvidence, ComponentError, NodeAttestation};
 use crate::source::{AttestationEvidenceData, ComponentErrorData, SourceRecord};
 
@@ -57,7 +59,7 @@ fn map_evidence(evidence: AttestationEvidenceData) -> AttestationEvidence {
 fn map_component_error(error: ComponentErrorData) -> ComponentError {
     ComponentError {
         component_id: error.component_id,
-        message: error.message,
+        message: sanitize_error_message(&error.message),
     }
 }
 
@@ -91,6 +93,32 @@ mod tests {
         assert_eq!(node.node_uuid, "node-1");
         assert_eq!(node.evidences.len(), 1);
         assert_eq!(node.evidences[0].arch.as_deref(), Some("BLACKWELL"));
+    }
+
+    #[test]
+    fn sanitizes_component_errors_before_building_attestation_model() {
+        let node = RedfishMapper.map(SourceRecord {
+            target: target(),
+            collected_at: "2026-01-01T00:00:00Z".to_string(),
+            nonce_refresh_timestamp: None,
+            result: Ok(RedfishAttestationReport {
+                evidences: Vec::new(),
+                errors: vec![ComponentErrorData {
+                    component_id: Some("GPU_0".into()),
+                    message:
+                        "failed //user:secret@bmc.example/redfish/v1/ComponentIntegrity?token=x"
+                            .into(),
+                }],
+            }),
+        });
+
+        assert_eq!(
+            node.component_errors[0].message,
+            "failed /redfish/v1/ComponentIntegrity"
+        );
+        let rendered = serde_json::to_string(&node).unwrap();
+        assert!(!rendered.contains("user:secret@"));
+        assert!(!rendered.contains("token=x"));
     }
 
     #[test]
