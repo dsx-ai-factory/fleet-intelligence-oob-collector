@@ -110,6 +110,11 @@ Add fixture-backed tests before adding another narrowed traversal policy.
 
 ## Output Conventions
 
+- Redfish enum values retain their canonical spelling (for example `BMC`, `On`,
+  `CPU`, and `SingleFunction`), rather than being converted to snake_case.
+  Unknown values discarded by the dependency parser remain unavailable and are
+  represented as null, not a synthetic `UnsupportedValue` string.
+
 - API JSON fields are camelCase.
 - Standard Redfish relationships retain their nested shape in `links`: canonical
   relationship names map to an `{"@odata.id": "..."}` reference or an array of

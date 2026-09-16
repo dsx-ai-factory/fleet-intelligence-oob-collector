@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
-use nv_redfish::core::{EntityTypeRef, NavProperty, ReferenceLeaf, ToSnakeCase};
+use nv_redfish::core::{EntityTypeRef, NavProperty, ReferenceLeaf};
 use nv_redfish::{Bmc, Resource, ServiceRoot};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -168,9 +168,7 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
             id: manager.id().to_string(),
             odata_id: Some(manager.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
-            manager_type: raw
-                .manager_type
-                .map(|manager_type| manager_type.to_snake_case().to_string()),
+            manager_type: raw.manager_type.and_then(redfish_enum_string),
             model: raw.model.clone().flatten(),
             firmware_version: raw.firmware_version.clone().flatten(),
             status: status_data(raw.status.as_ref()),
@@ -211,10 +209,7 @@ async fn collect_systems<B: Bmc>(
             bios_version: raw.bios_version.clone().flatten(),
             host_name: raw.host_name.clone().flatten(),
             asset_tag: raw.asset_tag.clone().flatten(),
-            power_state: raw
-                .power_state
-                .flatten()
-                .map(|power_state| power_state.to_snake_case().to_string()),
+            power_state: raw.power_state.flatten().and_then(redfish_enum_string),
             status: status_data(raw.status.as_ref()),
             cpu_count: raw
                 .processor_summary
@@ -270,17 +265,14 @@ async fn collect_chassis<B: Bmc>(
         out.push(ChassisData {
             id: chassis_id.clone(),
             odata_id: Some(chassis.odata_id().to_string()),
-            chassis_type: Some(raw.chassis_type.to_snake_case().to_string()),
+            chassis_type: redfish_enum_string(raw.chassis_type),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
             sku: raw.sku.clone().flatten(),
             serial_number: raw.serial_number.clone().flatten(),
             part_number: raw.part_number.clone().flatten(),
             asset_tag: raw.asset_tag.clone().flatten(),
-            power_state: raw
-                .power_state
-                .flatten()
-                .map(|power_state| power_state.to_snake_case().to_string()),
+            power_state: raw.power_state.flatten().and_then(redfish_enum_string),
             status: status_data(raw.status.as_ref()),
             location: chassis_location(raw.location.as_ref()),
             pcie_devices: if should_collect_pcie_devices_for_chassis(
@@ -416,10 +408,7 @@ async fn collect_processors<B: Bmc>(
             odata_id: Some(processor.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             socket: raw.socket.clone().flatten(),
-            processor_type: raw
-                .processor_type
-                .flatten()
-                .map(|processor_type| processor_type.to_snake_case().to_string()),
+            processor_type: raw.processor_type.flatten().and_then(redfish_enum_string),
             processor_architecture: raw
                 .processor_architecture
                 .clone()
@@ -476,9 +465,7 @@ async fn collect_pcie_devices<B: Bmc>(
             id: device.id().to_string(),
             odata_id: Some(device.odata_id().to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
-            device_type: raw
-                .device_type
-                .map(|device_type| device_type.to_snake_case().to_string()),
+            device_type: raw.device_type.and_then(redfish_enum_string),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
             sku: raw.sku.clone().flatten(),
@@ -523,6 +510,15 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
             }
         })
         .collect())
+}
+
+/// Use the dependency's Serde names, not its snake_case convenience names.
+/// Unknown tokens have already been discarded by nv-redfish's enum parser.
+fn redfish_enum_string(value: impl serde::Serialize) -> Option<String> {
+    match serde_json::to_value(value).ok()? {
+        serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
+        _ => None,
+    }
 }
 
 fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> BTreeMap<String, LinkData> {
@@ -971,6 +967,35 @@ mod tests {
     }
 
     #[test]
+    fn enum_values_keep_redfish_spelling() {
+        use nv_redfish::schema::{
+            chassis::ChassisType, manager::ManagerType, pcie_device::DeviceType,
+            processor::ProcessorType, resource::PowerState,
+        };
+        assert_eq!(
+            redfish_enum_string(ManagerType::Bmc).as_deref(),
+            Some("BMC")
+        );
+        assert_eq!(
+            redfish_enum_string(PowerState::PoweringOn).as_deref(),
+            Some("PoweringOn")
+        );
+        assert_eq!(
+            redfish_enum_string(ChassisType::RackMount).as_deref(),
+            Some("RackMount")
+        );
+        assert_eq!(
+            redfish_enum_string(ProcessorType::Cpu).as_deref(),
+            Some("CPU")
+        );
+        assert_eq!(
+            redfish_enum_string(DeviceType::SingleFunction).as_deref(),
+            Some("SingleFunction")
+        );
+        assert_eq!(redfish_enum_string(ManagerType::UnsupportedValue), None);
+    }
+
+    #[test]
     fn bmc_url_adds_https_to_bare_address() {
         let url = bmc_url("10.0.0.1").expect("url");
 
@@ -1239,7 +1264,7 @@ mod tests {
             report.systems[0].asset_tag.as_deref(),
             Some("rack-12-tray-3")
         );
-        assert_eq!(report.systems[0].power_state.as_deref(), Some("on"));
+        assert_eq!(report.systems[0].power_state.as_deref(), Some("On"));
         assert_eq!(report.systems[0].cpu_count, Some(1));
         assert_eq!(report.systems[0].cpu_core_count, Some(72));
         assert_eq!(report.systems[0].cpu_model.as_deref(), Some("Grace"));
@@ -1257,7 +1282,7 @@ mod tests {
             Some("22222222-3333-4444-5555-666666666666")
         );
         assert_eq!(processor.socket.as_deref(), Some("CPU Socket 1"));
-        assert_eq!(processor.processor_type.as_deref(), Some("cpu"));
+        assert_eq!(processor.processor_type.as_deref(), Some("CPU"));
         assert_eq!(processor.processor_architecture.as_deref(), Some("ARM"));
         assert_eq!(processor.instruction_set.as_deref(), Some("ARM-A64"));
         assert_eq!(processor.manufacturer.as_deref(), Some("NVIDIA"));
@@ -1297,7 +1322,7 @@ mod tests {
 
         assert_eq!(report.chassis.len(), 1);
         assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
-        assert_eq!(report.chassis[0].chassis_type.as_deref(), Some("module"));
+        assert_eq!(report.chassis[0].chassis_type.as_deref(), Some("Module"));
         assert_eq!(report.chassis[0].manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(report.chassis[0].model.as_deref(), Some("BMC"));
         assert_eq!(report.chassis[0].serial_number.as_deref(), Some("CH123"));
