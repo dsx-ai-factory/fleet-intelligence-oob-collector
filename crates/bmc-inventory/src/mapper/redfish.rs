@@ -271,11 +271,23 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         power_state: chassis.power_state,
         status: chassis.status.map(map_status),
         location: chassis.location.map(|loc| ChassisLocation {
-            service_label: loc.service_label,
-            rack: loc.rack,
-            row: loc.row,
-            room: loc.room,
-            rack_offset: loc.rack_offset,
+            part_location_context: loc.part_location_context,
+            part_location: loc.part_location.map(|part| crate::models::PartLocation {
+                service_label: part.service_label,
+                location_type: part.location_type,
+                location_ordinal_value: part.location_ordinal_value,
+                reference: part.reference,
+                orientation: part.orientation,
+            }),
+            placement: loc.placement.map(|placement| crate::models::Placement {
+                rack: placement.rack,
+                row: placement.row,
+                room: placement.room,
+                rack_offset: placement.rack_offset,
+                rack_offset_units: placement.rack_offset_units,
+                additional_info: placement.additional_info,
+                facility_name: placement.facility_name,
+            }),
         }),
         pcie_devices: chassis
             .pcie_devices

@@ -146,11 +146,18 @@ fn node_inventory_serializes_as_backend_payload() {
             power_state: Some("on".to_string()),
             status: Some(status("Enabled", "OK", "OK")),
             location: Some(ChassisLocation {
-                service_label: Some("Bay 1".to_string()),
-                rack: Some("R12".to_string()),
-                row: Some("A".to_string()),
-                room: None,
-                rack_offset: Some(7),
+                part_location: Some(crate::models::PartLocation {
+                    service_label: Some("Bay 1".to_string()),
+                    ..Default::default()
+                }),
+                placement: Some(crate::models::Placement {
+                    rack: Some("R12".to_string()),
+                    row: Some("A".to_string()),
+                    room: None,
+                    rack_offset: Some(7),
+                    ..Default::default()
+                }),
+                part_location_context: None,
             }),
             pcie_devices: vec![PcieDeviceInventory {
                 name: "PcieDevice".into(),
@@ -299,11 +306,9 @@ fn node_inventory_serializes_as_backend_payload() {
                     "state": "Enabled"
                 },
                 "location": {
-                    "serviceLabel": "Bay 1",
-                    "rack": "R12",
-                    "row": "A",
-                    "room": null,
-                    "rackOffset": 7
+                    "partLocation": {"serviceLabel": "Bay 1", "locationType": null, "locationOrdinalValue": null, "reference": null, "orientation": null},
+                    "placement": {"rack": "R12", "row": "A", "room": null, "rackOffset": 7, "rackOffsetUnits": null, "additionalInfo": null, "facilityName": null},
+                    "partLocationContext": null
                 },
                 "pcieDevices": [{
                 "name": "PcieDevice",

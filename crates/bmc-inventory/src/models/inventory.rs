@@ -103,11 +103,9 @@ pub struct ChassisInventory {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChassisLocation {
-    pub service_label: Option<String>,
-    pub rack: Option<String>,
-    pub row: Option<String>,
-    pub room: Option<String>,
-    pub rack_offset: Option<i64>,
+    pub part_location: Option<PartLocation>,
+    pub placement: Option<Placement>,
+    pub part_location_context: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,4 +206,26 @@ pub enum InventoryLink {
 pub struct InventoryLinkReference {
     #[serde(rename = "@odata.id")]
     pub odata_id: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartLocation {
+    pub service_label: Option<String>,
+    pub location_type: Option<String>,
+    pub location_ordinal_value: Option<i64>,
+    pub reference: Option<String>,
+    pub orientation: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Placement {
+    pub rack: Option<String>,
+    pub row: Option<String>,
+    pub room: Option<String>,
+    pub rack_offset: Option<i64>,
+    pub rack_offset_units: Option<String>,
+    pub additional_info: Option<String>,
+    pub facility_name: Option<String>,
 }

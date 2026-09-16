@@ -327,25 +327,40 @@ fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
 fn chassis_location(
     location: Option<&nv_redfish::schema::resource::Location>,
 ) -> Option<ChassisLocationData> {
-    let location = location?;
-    let part = location.part_location.as_ref();
-    let placement = location.placement.as_ref();
-    let data = ChassisLocationData {
-        service_label: part.and_then(|p| p.service_label.clone().flatten()),
-        rack: placement.and_then(|p| p.rack.clone().flatten()),
-        row: placement.and_then(|p| p.row.clone().flatten()),
-        room: placement.and_then(|p| p.room.clone().flatten()),
-        rack_offset: placement.and_then(|p| p.rack_offset.flatten()),
-    };
-    if data.service_label.is_none()
-        && data.rack.is_none()
-        && data.row.is_none()
-        && data.room.is_none()
-        && data.rack_offset.is_none()
-    {
-        None
-    } else {
-        Some(data)
+    location.map(|location| ChassisLocationData {
+        part_location_context: location.part_location_context.clone().flatten(),
+        part_location: location
+            .part_location
+            .as_ref()
+            .map(|part| super::PartLocationData {
+                service_label: part.service_label.clone().flatten(),
+                location_type: part.location_type.flatten().and_then(location_enum_string),
+                location_ordinal_value: part.location_ordinal_value.flatten(),
+                reference: part.reference.flatten().and_then(location_enum_string),
+                orientation: part.orientation.flatten().and_then(location_enum_string),
+            }),
+        placement: location
+            .placement
+            .as_ref()
+            .map(|placement| super::PlacementData {
+                rack: placement.rack.clone().flatten(),
+                row: placement.row.clone().flatten(),
+                room: placement.room.clone().flatten(),
+                rack_offset: placement.rack_offset.flatten(),
+                rack_offset_units: placement
+                    .rack_offset_units
+                    .flatten()
+                    .and_then(location_enum_string),
+                additional_info: placement.additional_info.clone().flatten(),
+                facility_name: placement.facility_name.clone().flatten(),
+            }),
+    })
+}
+
+fn location_enum_string(value: impl serde::Serialize) -> Option<String> {
+    match serde_json::to_value(value).ok()? {
+        serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
+        _ => None,
     }
 }
 
@@ -988,6 +1003,31 @@ mod tests {
     }
 
     #[test]
+    fn location_keeps_nested_context_without_service_label() {
+        let raw = serde_json::from_value(serde_json::json!({
+            "PartLocation": {"LocationType": "Slot", "LocationOrdinalValue": 0, "Reference": "Front", "Orientation": "LeftToRight"},
+            "PartLocationContext": "Drawer 2",
+            "Placement": {"RackOffset": 3, "RackOffsetUnits": "OpenU", "FacilityName": "Test facility"}
+        })).unwrap();
+        let value = chassis_location(Some(&raw)).unwrap();
+        let part = value.part_location.unwrap();
+        assert_eq!(part.service_label, None);
+        assert_eq!(part.location_type.as_deref(), Some("Slot"));
+        assert_eq!(part.location_ordinal_value, Some(0));
+        assert_eq!(value.part_location_context.as_deref(), Some("Drawer 2"));
+        assert_eq!(
+            value.placement.unwrap().rack_offset_units.as_deref(),
+            Some("OpenU")
+        );
+        let raw = serde_json::from_value(serde_json::json!({"PartLocation": {}, "Placement": {}}))
+            .unwrap();
+        let value = chassis_location(Some(&raw)).unwrap();
+        assert!(value.part_location.is_some());
+        assert!(value.placement.is_some());
+        assert!(chassis_location(None).is_none());
+    }
+
+    #[test]
     fn summaries_preserve_status_conditions_and_partial_fields() {
         let processor = serde_json::from_value(serde_json::json!({
             "Count": 2, "CoreCount": 144, "LogicalProcessorCount": 288, "ThreadingEnabled": true,
@@ -1469,10 +1509,24 @@ mod tests {
             .location
             .as_ref()
             .expect("chassis location");
-        assert_eq!(location.service_label.as_deref(), Some("Bay 1"));
-        assert_eq!(location.rack.as_deref(), Some("R12"));
-        assert_eq!(location.row.as_deref(), Some("A"));
-        assert_eq!(location.rack_offset, Some(7));
+        assert_eq!(
+            location
+                .part_location
+                .as_ref()
+                .unwrap()
+                .service_label
+                .as_deref(),
+            Some("Bay 1")
+        );
+        assert_eq!(
+            location.placement.as_ref().unwrap().rack.as_deref(),
+            Some("R12")
+        );
+        assert_eq!(
+            location.placement.as_ref().unwrap().row.as_deref(),
+            Some("A")
+        );
+        assert_eq!(location.placement.as_ref().unwrap().rack_offset, Some(7));
         assert_eq!(report.chassis[0].links.len(), 2);
 
         assert_eq!(report.chassis[0].pcie_devices.len(), 1);
