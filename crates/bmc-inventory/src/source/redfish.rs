@@ -19,18 +19,11 @@ use super::{
     SourceRecord, StatusData, SystemData, inventory_domain,
 };
 use crate::config::Target;
+use crate::models::PcieCollectionStatus;
 
 type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
 const MAX_REDIRECTS: usize = 3;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum PcieTraversalPolicy {
-    All,
-    Viking,
-    SystemId(String),
-    None,
-}
 
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
@@ -124,7 +117,7 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
             Vec::new()
         }
     };
-    let chassis = match collect_chassis(root, &service_root, &systems, &mut errors).await {
+    let chassis = match collect_chassis(root, &mut errors).await {
         Ok(chassis) => chassis,
         Err(err) => {
             push_inventory_error(&mut errors, inventory_domain::CHASSIS, None, err);
@@ -236,8 +229,6 @@ async fn collect_systems<B: Bmc>(
 
 async fn collect_chassis<B: Bmc>(
     root: &ServiceRoot<B>,
-    service_root: &ServiceRootData,
-    systems: &[SystemData],
     errors: &mut Vec<InventoryErrorData>,
 ) -> Result<Vec<ChassisData>, String> {
     let Some(collection) = root
@@ -252,11 +243,12 @@ async fn collect_chassis<B: Bmc>(
         .members()
         .await
         .map_err(|err| format!("chassis members: {err}"))?;
-    let pcie_traversal_policy = pcie_traversal_policy(service_root, systems);
     let mut out = Vec::with_capacity(chassis.len());
     for chassis in chassis {
         let raw = chassis.raw();
         let chassis_id = raw.id.to_string();
+        let (pcie_devices, pcie_collection_status) =
+            collect_pcie_devices(&chassis, &chassis_id, errors).await;
         out.push(ChassisData {
             name: raw.name.to_string(),
             description: raw
@@ -275,66 +267,13 @@ async fn collect_chassis<B: Bmc>(
             asset_tag: raw.asset_tag.clone().flatten(),
             power_state: raw.power_state.flatten().and_then(redfish_enum_string),
             status: status_data(raw.status.as_ref()),
-            location: location_data(raw.location.as_ref()),
-            pcie_devices: if should_collect_pcie_devices_for_chassis(
-                &pcie_traversal_policy,
-                &chassis_id,
-            ) {
-                collect_pcie_devices(&chassis, &chassis_id, errors).await
-            } else {
-                Vec::new()
-            },
+        location: location_data(raw.location.as_ref()),
+        pcie_devices,
+        pcie_collection_status,
             links: chassis_links(raw.links.as_ref()),
         });
     }
     Ok(out)
-}
-
-fn pcie_traversal_policy(
-    service_root: &ServiceRootData,
-    systems: &[SystemData],
-) -> PcieTraversalPolicy {
-    let vendor = service_root.vendor.as_deref();
-    let selected_system_id =
-        selected_system_for_pcie_traversal(systems).map(|system| system.id.clone());
-
-    if vendor_matches(vendor, "AMI") && selected_system_id.as_deref() == Some("DGX") {
-        return PcieTraversalPolicy::Viking;
-    }
-    if vendor_matches(vendor, "AMI")
-        || vendor_matches(vendor, "Dell")
-        || vendor_matches(vendor, "HPE")
-        || vendor_matches(vendor, "Supermicro")
-        || vendor_matches(vendor, "Lenovo")
-    {
-        return selected_system_id
-            .map(PcieTraversalPolicy::SystemId)
-            .unwrap_or(PcieTraversalPolicy::None);
-    }
-
-    PcieTraversalPolicy::All
-}
-
-fn selected_system_for_pcie_traversal(systems: &[SystemData]) -> Option<&SystemData> {
-    systems
-        .iter()
-        .find(|system| system.bios_version.is_some())
-        .or_else(|| systems.first())
-}
-
-fn should_collect_pcie_devices_for_chassis(policy: &PcieTraversalPolicy, chassis_id: &str) -> bool {
-    match policy {
-        PcieTraversalPolicy::All => true,
-        PcieTraversalPolicy::Viking => {
-            chassis_id.starts_with("HGX_GPU_SXM") || chassis_id.starts_with("HGX_NVSwitch")
-        }
-        PcieTraversalPolicy::SystemId(system_id) => chassis_id == system_id,
-        PcieTraversalPolicy::None => false,
-    }
-}
-
-fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
-    vendor.is_some_and(|vendor| vendor.eq_ignore_ascii_case(expected))
 }
 
 fn location_data(
@@ -508,7 +447,7 @@ async fn collect_pcie_devices<B: Bmc>(
     chassis: &nv_redfish::chassis::Chassis<B>,
     chassis_id: &str,
     errors: &mut Vec<InventoryErrorData>,
-) -> Vec<PcieDeviceData> {
+) -> (Vec<PcieDeviceData>, PcieCollectionStatus) {
     let devices = match chassis.pcie_devices().await {
         Ok(Some(collection)) => match collection.members().await {
             Ok(devices) => devices,
@@ -519,10 +458,10 @@ async fn collect_pcie_devices<B: Bmc>(
                     Some(chassis_id.to_string()),
                     err,
                 );
-                Vec::new()
+                return (Vec::new(), PcieCollectionStatus::Failed);
             }
         },
-        Ok(None) => Vec::new(),
+        Ok(None) => return (Vec::new(), PcieCollectionStatus::NotAdvertised),
         Err(err) => {
             push_inventory_error(
                 errors,
@@ -530,7 +469,7 @@ async fn collect_pcie_devices<B: Bmc>(
                 Some(chassis_id.to_string()),
                 err,
             );
-            return Vec::new();
+            return (Vec::new(), PcieCollectionStatus::Failed);
         }
     };
 
@@ -558,7 +497,7 @@ async fn collect_pcie_devices<B: Bmc>(
             links: pcie_device_links(raw.links.as_ref()),
         });
     }
-    out
+    (out, PcieCollectionStatus::Collected)
 }
 
 async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareData>, String> {
@@ -1285,117 +1224,138 @@ mod tests {
         assert!(!links.contains_key("ComputerSystems"));
     }
 
-    #[test]
-    fn pcie_traversal_policy_controls_selected_chassis() {
-        assert!(should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::All,
-            "BMC_0"
+    // Exercise the public traversal through mock Redfish responses, including BMCs
+    // without Systems. Chassis IDs deliberately do not match a host system ID.
+    async fn pcie_report(vendor: &str, cases: &[(&str, &str)]) -> RedfishReport {
+        let bmc = Arc::new(nv_redfish_bmc_mock::Bmc::<Infallible>::default());
+        bmc.expect(Expect::get(
+            "/redfish/v1",
+            serde_json::json!({
+                "@odata.id": "/redfish/v1", "@odata.type": "#ServiceRoot.v1_16_0.ServiceRoot",
+                "Id": "RootService", "Name": "Root Service", "RedfishVersion": "1.16.0",
+                "Links": {"Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}},
+            "Vendor": vendor, "Chassis": {"@odata.id": "/redfish/v1/Chassis"}
+            }),
         ));
-        assert!(should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::Viking,
-            "HGX_GPU_SXM_0"
-        ));
-        assert!(should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::Viking,
-            "HGX_NVSwitch_0"
-        ));
-        assert!(!should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::Viking,
-            "HGX_GPU_PCIE_0"
-        ));
-
-        assert!(should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::SystemId("System".to_string()),
-            "System"
-        ));
-        assert!(!should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::SystemId("System".to_string()),
-            "BMC_0"
-        ));
-
-        assert!(!should_collect_pcie_devices_for_chassis(
-            &PcieTraversalPolicy::None,
-            "HGX_GPU_SXM_0"
-        ));
+        bmc.expect(Expect::get("/redfish/v1/Chassis", serde_json::json!({
+            "@odata.id": "/redfish/v1/Chassis", "@odata.type": "#ChassisCollection.ChassisCollection",
+            "Name": "Chassis", "Members@odata.count": cases.len(),
+            "Members": cases.iter().map(|(id, _)| serde_json::json!({
+                "@odata.id": format!("/redfish/v1/Chassis/{id}")
+            })).collect::<Vec<_>>()
+        })));
+        let mut chassis_requests = Vec::new();
+        let mut pcie_requests = Vec::new();
+        for (id, case) in cases {
+            let path = format!("/redfish/v1/Chassis/{id}");
+            let collection_path = format!("{path}/PCIeDevices");
+            let device_path = format!("{collection_path}/GPU1");
+            let mut chassis = serde_json::json!({
+                "@odata.id": path, "@odata.type": "#Chassis.v1_25_0.Chassis",
+                "Id": id, "Name": id, "ChassisType": "Module"
+            });
+            if *case != "absent" {
+                chassis["PCIeDevices"] = serde_json::json!({"@odata.id": collection_path});
+                let mut collection = serde_json::json!({
+                    "@odata.id": collection_path,
+                    "@odata.type": "#PCIeDeviceCollection.PCIeDeviceCollection",
+                    "Name": "PCIe Devices", "Members@odata.count": 0, "Members": []
+                });
+                let mut device_request = None;
+                if *case == "collectionFailure" {
+                    collection["Members"] = serde_json::json!(1);
+                } else if *case != "empty" {
+                    collection["Members@odata.count"] = serde_json::json!(1);
+                    collection["Members"] = serde_json::json!([{"@odata.id": device_path}]);
+                    let mut device: serde_json::Value = serde_json::from_str(PCIE_DEVICE).unwrap();
+                    device["@odata.id"] = serde_json::json!(device_path);
+                    // Inventory must not filter by device manufacturer either.
+                    device["Manufacturer"] = serde_json::json!("Example Vendor");
+                    if *case == "memberFailure" {
+                        device["Name"] = serde_json::json!(42);
+                    }
+                    device_request = Some(Expect::get(&device_path, device));
+                }
+                pcie_requests.push(Expect::get(&collection_path, collection));
+                pcie_requests.extend(device_request);
+            }
+            chassis_requests.push(Expect::get(&path, chassis));
+        }
+        for request in chassis_requests.into_iter().chain(pcie_requests) {
+            bmc.expect(request);
+        }
+        let root = ServiceRoot::new(bmc).await.unwrap();
+        collect_report_from_root(&root).await.unwrap()
     }
 
-    #[test]
-    fn pcie_traversal_policy_defaults_to_all_chassis() {
-        let service_root = ServiceRootData {
-            vendor: Some("NVIDIA".to_string()),
-            product: Some("GB200 NVL".to_string()),
-            ..ServiceRootData::default()
-        };
-
-        let policy = pcie_traversal_policy(&service_root, &[]);
-
-        assert_eq!(policy, PcieTraversalPolicy::All);
+    #[tokio::test]
+    async fn pcie_traversal_collects_all_chassis_without_system_or_vendor_filtering() {
+        for vendor in ["AMI", "Dell", "HPE", "Supermicro", "Lenovo", "NVIDIA"] {
+            let report = pcie_report(
+                vendor,
+                &[("BMC_0", "populated"), ("HGX_GPU_PCIE_0", "populated")],
+            )
+            .await;
+            assert!(report.errors.is_empty(), "{vendor}: {:?}", report.errors);
+            assert!(report.systems.is_empty());
+            assert_eq!(report.chassis.len(), 2);
+            for chassis in report.chassis {
+                assert_eq!(
+                    chassis.pcie_collection_status,
+                    PcieCollectionStatus::Collected
+                );
+                assert_eq!(chassis.pcie_devices.len(), 1, "{vendor}: {}", chassis.id);
+                assert_eq!(
+                    chassis.pcie_devices[0].manufacturer.as_deref(),
+                    Some("Example Vendor")
+                );
+            }
+        }
     }
 
-    #[test]
-    fn ami_dgx_pcie_traversal_uses_viking_chassis_prefixes() {
-        let service_root = ServiceRootData {
-            vendor: Some("AMI".to_string()),
-            ..ServiceRootData::default()
-        };
-        let systems = vec![SystemData {
-            name: "System".into(),
-            description: None,
-            id: "DGX".to_string(),
-            odata_id: None,
-            uuid: None,
-            manufacturer: None,
-            model: None,
-            sku: None,
-            serial_number: None,
-            bios_version: Some("1.0".to_string()),
-            host_name: None,
-            asset_tag: None,
-            power_state: None,
-            status: None,
-            processor_summary: None,
-            memory_summary: None,
-            secure_boot_enabled: None,
-            processors: Vec::new(),
-            links: Default::default(),
-        }];
-
-        let policy = pcie_traversal_policy(&service_root, &systems);
-
-        assert_eq!(policy, PcieTraversalPolicy::Viking);
-    }
-
-    #[test]
-    fn selected_system_vendors_match_only_selected_system_chassis() {
-        let service_root = ServiceRootData {
-            vendor: Some("Dell".to_string()),
-            ..ServiceRootData::default()
-        };
-        let systems = vec![SystemData {
-            name: "System".into(),
-            description: None,
-            id: "System".to_string(),
-            odata_id: None,
-            uuid: None,
-            manufacturer: None,
-            model: None,
-            sku: None,
-            serial_number: None,
-            bios_version: Some("1.0".to_string()),
-            host_name: None,
-            asset_tag: None,
-            power_state: None,
-            status: None,
-            processor_summary: None,
-            memory_summary: None,
-            secure_boot_enabled: None,
-            processors: Vec::new(),
-            links: Default::default(),
-        }];
-
-        let policy = pcie_traversal_policy(&service_root, &systems);
-
-        assert_eq!(policy, PcieTraversalPolicy::SystemId("System".to_string()));
+    #[tokio::test]
+    async fn pcie_outcomes_distinguish_unadvertised_empty_and_failed_and_continue() {
+        let report = pcie_report(
+            "NVIDIA",
+            &[
+                ("Absent", "absent"),
+                ("Empty", "empty"),
+                ("BadCollection", "collectionFailure"),
+                ("BadMember", "memberFailure"),
+                ("Good", "populated"),
+            ],
+        )
+        .await;
+        assert_eq!(report.chassis.len(), 5);
+        for (chassis, (status, count)) in report.chassis.iter().zip([
+            (PcieCollectionStatus::NotAdvertised, 0),
+            (PcieCollectionStatus::Collected, 0),
+            (PcieCollectionStatus::Failed, 0),
+            (PcieCollectionStatus::Failed, 0),
+            (PcieCollectionStatus::Collected, 1),
+        ]) {
+            assert_eq!(chassis.pcie_collection_status, status, "{}", chassis.id);
+            assert_eq!(chassis.pcie_devices.len(), count);
+        }
+        assert_eq!(report.errors.len(), 2);
+        for (error, id) in report.errors.iter().zip(["BadCollection", "BadMember"]) {
+            assert_eq!(error.domain, inventory_domain::CHASSIS_PCIE_DEVICES);
+            assert_eq!(error.resource.as_deref(), Some(id));
+        }
+        // Check the actual output contract, not only the source representation.
+        for (chassis, expected) in report.chassis.into_iter().zip([
+            "notAdvertised",
+            "collected",
+            "failed",
+            "failed",
+            "collected",
+        ]) {
+            // Mapping is tested separately; source statuses share the serialized enum.
+            assert_eq!(
+                serde_json::to_value(chassis.pcie_collection_status).unwrap(),
+                expected
+            );
+        }
     }
 
     #[tokio::test]

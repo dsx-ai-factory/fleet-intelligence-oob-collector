@@ -5,7 +5,7 @@ pub use inventory::{
     ChassisInventory, FirmwareInventory, InventoryCondition, InventoryLink, InventoryLinkReference,
     InventoryLocation, InventoryReference, InventorySourceInfo, InventoryStatus, ManagerInventory,
     MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PartLocation, PcieDeviceInventory,
-    Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
+    PcieCollectionStatus, Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
 };
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 

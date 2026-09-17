@@ -78,6 +78,18 @@ pub struct ProcessorInventory {
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
+/// Whether PCIe inventory was actually observed for this chassis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PcieCollectionStatus {
+    /// The advertised collection and its members were read successfully, possibly empty.
+    Collected,
+    /// The chassis did not advertise a PCIeDevices collection; no request was made.
+    NotAdvertised,
+    /// Reading the advertised collection or its members failed; see domainErrors.
+    Failed,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NvidiaGpuInventory {
@@ -125,6 +137,7 @@ pub struct ChassisInventory {
     pub status: Option<InventoryStatus>,
     pub location: Option<InventoryLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
+    pub pcie_collection_status: PcieCollectionStatus,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 

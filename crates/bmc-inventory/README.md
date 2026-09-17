@@ -89,24 +89,27 @@ for that target and record the collection failure instead.
 
 ## PCIe Device Traversal
 
-PCIe devices are collected from every chassis by default. A small set of known
-platform policies narrows traversal where broad collection is known to produce
-duplicates or unrelated devices.
+The collector queries every advertised chassis `PCIeDevices` collection, regardless
+of vendor, BIOS presence, system order, or chassis/system ID naming. All returned
+devices are retained; repeated physical devices are resolved using their resource
+links rather than excluded by platform-wide filters.
 
-Current policies:
+Each chassis includes `pcieCollectionStatus` alongside its existing `pcieDevices` array:
 
-- AMI with selected system `DGX`: collect PCIe devices from chassis IDs starting
-  with `HGX_GPU_SXM` or `HGX_NVSwitch`.
-- AMI, Dell, HPE, Supermicro, and Lenovo: collect PCIe devices only from the
-  chassis whose ID matches the selected system ID.
-- All other platforms: collect PCIe devices from all chassis.
+| Status | Meaning | Consumer behavior |
+| --- | --- | --- |
+| `collected` | The advertised collection and its members were read successfully. | Replace current PCIe inventory, including clearing it when the array is empty. |
+| `notAdvertised` | The chassis did not expose a `PCIeDevices` collection link, so no query was made. | Do not treat the empty array as evidence of device removal. |
+| `failed` | Reading the collection or a member failed. A scoped `chassis.pcieDevices` domain error is also present. | Preserve previous PCIe inventory and record the failure. |
 
-Add fixture-backed tests before adding another narrowed traversal policy.
+There are no policy-based skips. A chassis-domain or target failure still takes
+precedence over per-chassis outcomes. Older payloads without this additive field
+have unknown collection status; absence must not be interpreted as `collected`.
+Consumers must honor these outcomes to distinguish unobserved inventory from
+confirmed empty collections; this collector does not perform backend reconciliation.
 
-## Vendor And Platform Quirks
-
-- Redfish `Vendor` matching is case-insensitive.
-- AMI DGX/Viking platforms use special PCIe chassis selection rules.
+Firmware defects requiring narrower traversal should be handled by evidenced,
+platform-specific library quirks rather than broad vendor filters in this collector.
 
 ## Output Conventions
 
