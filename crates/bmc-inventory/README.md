@@ -89,19 +89,7 @@ for that target and record the collection failure instead.
 
 ## PCIe Device Traversal
 
-The collector queries every advertised chassis `PCIeDevices` collection, regardless
-of vendor, BIOS presence, system order, or chassis/system ID naming. All returned
-devices are retained; repeated physical devices are resolved using their resource
-links rather than excluded by platform-wide filters.
-
-PCIe collection follows the same result/error convention as other inventory
-collections: a missing collection link or a successfully queried empty collection
-returns an empty array. Collection or member failures also return an empty array
-and add a `chassis.pcieDevices` entry to `domainErrors`, scoped by chassis ID.
-Collection continues for other chassis after a PCIe failure.
-
-Firmware defects requiring narrower traversal should be handled by evidenced,
-platform-specific library quirks rather than broad vendor filters in this collector.
+Collect PCIe devices from each chassis’s advertised `PCIeDevices` collection.
 
 ## Output Conventions
 
