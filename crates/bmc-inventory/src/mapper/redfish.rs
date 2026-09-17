@@ -576,10 +576,16 @@ mod tests {
             .unwrap()[0];
         assert_eq!(
             condition.message_args.as_deref(),
-            Some(["/arg".into()].as_slice())
+            Some(["[URL_REDACTED]".into()].as_slice())
         );
-        assert_eq!(condition.message.as_deref(), Some("request /path failed"));
-        assert_eq!(condition.resolution.as_deref(), Some("retry /retry"));
+        assert_eq!(
+            condition.message.as_deref(),
+            Some("request [URL_REDACTED] failed")
+        );
+        assert_eq!(
+            condition.resolution.as_deref(),
+            Some("retry [URL_REDACTED]")
+        );
         assert_eq!(
             condition.origin_of_condition.as_ref().unwrap().odata_id,
             "/redfish/v1/Managers/BMC#condition"
@@ -588,10 +594,7 @@ mod tests {
             inventory.domain_errors[0].resource.as_deref(),
             Some("/redfish/v1/Managers/BMC#item")
         );
-        assert_eq!(
-            inventory.domain_errors[0].message,
-            "failed /redfish/v1/Managers/BMC"
-        );
+        assert_eq!(inventory.domain_errors[0].message, "failed [URL_REDACTED]");
 
         let rendered = serde_json::to_string(&inventory).unwrap();
         assert!(!rendered.contains("user:secret@"));
@@ -602,7 +605,10 @@ mod tests {
             collected_at: collected_at(),
             result: Err("failed //user:secret@bmc.example/redfish/v1?token=x".into()),
         });
-        assert_eq!(failed.target_error.as_deref(), Some("failed /redfish/v1"));
+        assert_eq!(
+            failed.target_error.as_deref(),
+            Some("failed [URL_REDACTED]")
+        );
     }
 
     #[test]

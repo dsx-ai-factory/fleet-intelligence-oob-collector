@@ -9,7 +9,7 @@ use url::Url;
 const REDACTED_URL: &str = "[URL_REDACTED]";
 const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://", "//"];
 
-/// Error text whose embedded URLs have been reduced to safe resource paths.
+/// Error text whose embedded URLs have been fully redacted.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct SanitizedErrorMessage(String);
@@ -85,8 +85,8 @@ impl_sanitized_string!(SanitizedUriReference);
 /// Remove sensitive URL components from error text exposed outside the source layer.
 ///
 /// Full error messages can contain BMC addresses and can also trigger request
-/// body security filters. A valid URL with a useful path is replaced by that
-/// path; other URLs are fully redacted.
+/// body security filters. Replace each embedded URL entirely; structured URI
+/// references are sanitized separately to preserve resource identity.
 pub fn sanitize_error_message(message: &str) -> String {
     let lower = message.to_ascii_lowercase();
     let mut output = String::with_capacity(message.len());
@@ -113,29 +113,12 @@ pub fn sanitize_error_message(message: &str) -> String {
             index += character.len_utf8();
         }
 
-        let (url_text, trailing_punctuation) =
-            split_trailing_punctuation(&message[url_start..index]);
-        output.push_str(&safe_url_path(url_text));
+        let (_, trailing_punctuation) = split_trailing_punctuation(&message[url_start..index]);
+        output.push_str(REDACTED_URL);
         output.push_str(trailing_punctuation);
     }
 
     output
-}
-
-fn safe_url_path(url_text: &str) -> String {
-    let absolute;
-    let url_text = if url_text.starts_with("//") {
-        absolute = format!("https:{url_text}");
-        &absolute
-    } else {
-        url_text
-    };
-    Url::parse(url_text)
-        .ok()
-        .filter(|url| !url.cannot_be_a_base())
-        .map(|url| url.path().to_string())
-        .filter(|path| !path.is_empty() && path != "/" && !contains_embedded_url(path))
-        .unwrap_or_else(|| REDACTED_URL.to_string())
 }
 
 fn contains_embedded_url(value: &str) -> bool {
@@ -215,7 +198,7 @@ mod tests {
     fn sanitizes_scheme_relative_errors() {
         assert_eq!(
             sanitize_error_message("failed (//user:secret@host/path?token=x#item)"),
-            "failed (/path)"
+            "failed ([URL_REDACTED])"
         );
         assert_eq!(
             sanitize_error_message("failed //host"),
@@ -277,7 +260,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&message).unwrap(),
-            r#""failed /redfish/v1/Systems/1""#
+            r#""failed [URL_REDACTED]""#
         );
         assert_eq!(
             serde_json::to_string(&reference).unwrap(),
@@ -286,12 +269,12 @@ mod tests {
     }
 
     #[test]
-    fn preserves_url_path_and_surrounding_error_details() {
+    fn redacts_url_and_preserves_surrounding_error_details() {
         assert_eq!(
             sanitize_error_message(
                 "BMC error - url: https://10.0.0.1/redfish/v1/Systems/1 status: 403 Forbidden"
             ),
-            "BMC error - url: /redfish/v1/Systems/1 status: 403 Forbidden"
+            "BMC error - url: [URL_REDACTED] status: 403 Forbidden"
         );
     }
 
@@ -301,7 +284,7 @@ mod tests {
             sanitize_error_message(
                 "HTTP://bmc/redfish failed; retry HTTPS://bmc/redfish?target=system"
             ),
-            "/redfish failed; retry /redfish"
+            "[URL_REDACTED] failed; retry [URL_REDACTED]"
         );
     }
 
@@ -311,7 +294,7 @@ mod tests {
             sanitize_error_message(
                 "https://user:secret@10.0.0.1:8443/redfish/v1/Systems/1?detail=all#result"
             ),
-            "/redfish/v1/Systems/1"
+            "[URL_REDACTED]"
         );
     }
 
@@ -324,12 +307,12 @@ mod tests {
     }
 
     #[test]
-    fn preserves_path_and_punctuation_in_reqwest_url_suffix() {
+    fn preserves_punctuation_in_reqwest_url_suffix() {
         assert_eq!(
             sanitize_error_message(
                 "HTTP status client error (404 Not Found) for url (https://10.0.0.1/redfish/v1)"
             ),
-            "HTTP status client error (404 Not Found) for url (/redfish/v1)"
+            "HTTP status client error (404 Not Found) for url ([URL_REDACTED])"
         );
     }
 

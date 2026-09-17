@@ -228,15 +228,13 @@ mod tests {
         let value = serde_json::to_value(batch.backend_request()).expect("json");
         assert_eq!(
             value["attestations"]["node-1"]["errorMessage"],
-            "HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
+            "HTTP status client error (404 Not Found) for url ([URL_REDACTED])"
         );
         assert_eq!(
             batch.results_by_node_uuid["node-1"]
                 .error_message
                 .as_deref(),
-            Some(
-                "HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
-            )
+            Some("HTTP status client error (404 Not Found) for url ([URL_REDACTED])")
         );
     }
 
@@ -249,13 +247,10 @@ mod tests {
             "failed //user:secret@host/redfish/v1/ComponentIntegrity?token=x#item",
         );
         let value = serde_json::to_value(record.backend_payload()).expect("serialize");
-        assert_eq!(
-            value["errorMessage"],
-            "failed /redfish/v1/ComponentIntegrity"
-        );
+        assert_eq!(value["errorMessage"], "failed [URL_REDACTED]");
         assert_eq!(
             record.error_message.as_deref(),
-            Some("failed /redfish/v1/ComponentIntegrity")
+            Some("failed [URL_REDACTED]")
         );
     }
 }

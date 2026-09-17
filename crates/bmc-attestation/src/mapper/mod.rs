@@ -112,10 +112,7 @@ mod tests {
             }),
         });
 
-        assert_eq!(
-            node.component_errors[0].message,
-            "failed /redfish/v1/ComponentIntegrity"
-        );
+        assert_eq!(node.component_errors[0].message, "failed [URL_REDACTED]");
         let rendered = serde_json::to_string(&node).unwrap();
         assert!(!rendered.contains("user:secret@"));
         assert!(!rendered.contains("token=x"));
