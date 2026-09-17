@@ -19,7 +19,6 @@ use super::{
     SourceRecord, StatusData, SystemData, inventory_domain,
 };
 use crate::config::Target;
-use crate::models::PcieCollectionStatus;
 
 type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
@@ -247,8 +246,6 @@ async fn collect_chassis<B: Bmc>(
     for chassis in chassis {
         let raw = chassis.raw();
         let chassis_id = raw.id.to_string();
-        let (pcie_devices, pcie_collection_status) =
-            collect_pcie_devices(&chassis, &chassis_id, errors).await;
         out.push(ChassisData {
             name: raw.name.to_string(),
             description: raw
@@ -267,9 +264,8 @@ async fn collect_chassis<B: Bmc>(
             asset_tag: raw.asset_tag.clone().flatten(),
             power_state: raw.power_state.flatten().and_then(redfish_enum_string),
             status: status_data(raw.status.as_ref()),
-        location: location_data(raw.location.as_ref()),
-        pcie_devices,
-        pcie_collection_status,
+            location: location_data(raw.location.as_ref()),
+            pcie_devices: collect_pcie_devices(&chassis, &chassis_id, errors).await,
             links: chassis_links(raw.links.as_ref()),
         });
     }
@@ -447,7 +443,7 @@ async fn collect_pcie_devices<B: Bmc>(
     chassis: &nv_redfish::chassis::Chassis<B>,
     chassis_id: &str,
     errors: &mut Vec<InventoryErrorData>,
-) -> (Vec<PcieDeviceData>, PcieCollectionStatus) {
+) -> Vec<PcieDeviceData> {
     let devices = match chassis.pcie_devices().await {
         Ok(Some(collection)) => match collection.members().await {
             Ok(devices) => devices,
@@ -458,10 +454,10 @@ async fn collect_pcie_devices<B: Bmc>(
                     Some(chassis_id.to_string()),
                     err,
                 );
-                return (Vec::new(), PcieCollectionStatus::Failed);
+                Vec::new()
             }
         },
-        Ok(None) => return (Vec::new(), PcieCollectionStatus::NotAdvertised),
+        Ok(None) => Vec::new(),
         Err(err) => {
             push_inventory_error(
                 errors,
@@ -469,7 +465,7 @@ async fn collect_pcie_devices<B: Bmc>(
                 Some(chassis_id.to_string()),
                 err,
             );
-            return (Vec::new(), PcieCollectionStatus::Failed);
+            return Vec::new();
         }
     };
 
@@ -497,7 +493,7 @@ async fn collect_pcie_devices<B: Bmc>(
             links: pcie_device_links(raw.links.as_ref()),
         });
     }
-    (out, PcieCollectionStatus::Collected)
+    out
 }
 
 async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareData>, String> {
@@ -1300,10 +1296,6 @@ mod tests {
             assert!(report.systems.is_empty());
             assert_eq!(report.chassis.len(), 2);
             for chassis in report.chassis {
-                assert_eq!(
-                    chassis.pcie_collection_status,
-                    PcieCollectionStatus::Collected
-                );
                 assert_eq!(chassis.pcie_devices.len(), 1, "{vendor}: {}", chassis.id);
                 assert_eq!(
                     chassis.pcie_devices[0].manufacturer.as_deref(),
@@ -1314,7 +1306,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pcie_outcomes_distinguish_unadvertised_empty_and_failed_and_continue() {
+    async fn pcie_missing_and_empty_collections_are_empty_and_failures_are_scoped() {
         let report = pcie_report(
             "NVIDIA",
             &[
@@ -1327,34 +1319,13 @@ mod tests {
         )
         .await;
         assert_eq!(report.chassis.len(), 5);
-        for (chassis, (status, count)) in report.chassis.iter().zip([
-            (PcieCollectionStatus::NotAdvertised, 0),
-            (PcieCollectionStatus::Collected, 0),
-            (PcieCollectionStatus::Failed, 0),
-            (PcieCollectionStatus::Failed, 0),
-            (PcieCollectionStatus::Collected, 1),
-        ]) {
-            assert_eq!(chassis.pcie_collection_status, status, "{}", chassis.id);
+        for (chassis, count) in report.chassis.iter().zip([0, 0, 0, 0, 1]) {
             assert_eq!(chassis.pcie_devices.len(), count);
         }
         assert_eq!(report.errors.len(), 2);
         for (error, id) in report.errors.iter().zip(["BadCollection", "BadMember"]) {
             assert_eq!(error.domain, inventory_domain::CHASSIS_PCIE_DEVICES);
             assert_eq!(error.resource.as_deref(), Some(id));
-        }
-        // Check the actual output contract, not only the source representation.
-        for (chassis, expected) in report.chassis.into_iter().zip([
-            "notAdvertised",
-            "collected",
-            "failed",
-            "failed",
-            "collected",
-        ]) {
-            // Mapping is tested separately; source statuses share the serialized enum.
-            assert_eq!(
-                serde_json::to_value(chassis.pcie_collection_status).unwrap(),
-                expected
-            );
         }
     }
 

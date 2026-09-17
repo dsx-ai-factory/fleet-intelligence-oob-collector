@@ -275,7 +275,6 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         power_state: chassis.power_state,
         status: chassis.status.map(map_status),
         location: chassis.location.map(map_location),
-        pcie_collection_status: chassis.pcie_collection_status,
         pcie_devices: chassis
             .pcie_devices
             .into_iter()
@@ -720,7 +719,6 @@ mod tests {
                         power_state: None,
                         status: None,
                         location: None,
-                        pcie_collection_status: crate::models::PcieCollectionStatus::Collected,
                         pcie_devices: vec![pcie_device("GPU_0")],
                         links: std::collections::BTreeMap::from([link(
                             "Processors",
@@ -742,7 +740,6 @@ mod tests {
                         power_state: None,
                         status: None,
                         location: None,
-                        pcie_collection_status: crate::models::PcieCollectionStatus::NotAdvertised,
                         pcie_devices: Vec::new(),
                         links: Default::default(),
                     },
@@ -771,14 +768,6 @@ mod tests {
             "/redfish/v1/Chassis/BMC_0",
         );
         assert_eq!(inventory.chassis[1].serial_number.as_deref(), Some(" "));
-        assert_eq!(
-            inventory.chassis[0].pcie_collection_status,
-            crate::models::PcieCollectionStatus::Collected
-        );
-        assert_eq!(
-            inventory.chassis[1].pcie_collection_status,
-            crate::models::PcieCollectionStatus::NotAdvertised
-        );
     }
 
     #[test]

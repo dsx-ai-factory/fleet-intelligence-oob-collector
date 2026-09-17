@@ -94,19 +94,11 @@ of vendor, BIOS presence, system order, or chassis/system ID naming. All returne
 devices are retained; repeated physical devices are resolved using their resource
 links rather than excluded by platform-wide filters.
 
-Each chassis includes `pcieCollectionStatus` alongside its existing `pcieDevices` array:
-
-| Status | Meaning | Consumer behavior |
-| --- | --- | --- |
-| `collected` | The advertised collection and its members were read successfully. | Replace current PCIe inventory, including clearing it when the array is empty. |
-| `notAdvertised` | The chassis did not expose a `PCIeDevices` collection link, so no query was made. | Do not treat the empty array as evidence of device removal. |
-| `failed` | Reading the collection or a member failed. A scoped `chassis.pcieDevices` domain error is also present. | Preserve previous PCIe inventory and record the failure. |
-
-There are no policy-based skips. A chassis-domain or target failure still takes
-precedence over per-chassis outcomes. Older payloads without this additive field
-have unknown collection status; absence must not be interpreted as `collected`.
-Consumers must honor these outcomes to distinguish unobserved inventory from
-confirmed empty collections; this collector does not perform backend reconciliation.
+PCIe collection follows the same result/error convention as other inventory
+collections: a missing collection link or a successfully queried empty collection
+returns an empty array. Collection or member failures also return an empty array
+and add a `chassis.pcieDevices` entry to `domainErrors`, scoped by chassis ID.
+Collection continues for other chassis after a PCIe failure.
 
 Firmware defects requiring narrower traversal should be handled by evidenced,
 platform-specific library quirks rather than broad vendor filters in this collector.

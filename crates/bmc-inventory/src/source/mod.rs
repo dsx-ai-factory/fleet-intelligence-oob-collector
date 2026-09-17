@@ -150,7 +150,6 @@ pub struct ChassisData {
     pub status: Option<StatusData>,
     pub location: Option<LocationData>,
     pub pcie_devices: Vec<PcieDeviceData>,
-    pub pcie_collection_status: crate::models::PcieCollectionStatus,
     pub links: std::collections::BTreeMap<String, LinkData>,
 }
 

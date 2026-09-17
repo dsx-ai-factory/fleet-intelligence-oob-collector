@@ -94,7 +94,6 @@ struct ChassisDetailRow {
     health: String,
     health_rollup: String,
     location: String,
-    pcie_collection: String,
 }
 
 #[derive(Debug)]
@@ -407,12 +406,6 @@ impl From<&ChassisInventory> for ChassisDetailRow {
             status: status_state(chassis.status.as_ref()),
             health: status_health(chassis.status.as_ref()),
             health_rollup: status_health_rollup(chassis.status.as_ref()),
-            pcie_collection: match chassis.pcie_collection_status {
-                crate::models::PcieCollectionStatus::Collected => "collected",
-                crate::models::PcieCollectionStatus::NotAdvertised => "notAdvertised",
-                crate::models::PcieCollectionStatus::Failed => "failed",
-            }
-            .to_string(),
             location: chassis
                 .location
                 .as_ref()
@@ -423,7 +416,7 @@ impl From<&ChassisInventory> for ChassisDetailRow {
 }
 
 impl ChassisDetailRow {
-    fn values(&self) -> [String; 14] {
+    fn values(&self) -> [String; 13] {
         [
             self.id.clone(),
             self.chassis_type.clone(),
@@ -438,7 +431,6 @@ impl ChassisDetailRow {
             self.health.clone(),
             self.health_rollup.clone(),
             self.location.clone(),
-            self.pcie_collection.clone(),
         ]
     }
 }
@@ -711,7 +703,6 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
             "Health",
             "Health Rollup",
             "Location",
-            "PCIe Collection",
         ],
         chassis_rows,
     ));
@@ -1186,7 +1177,6 @@ mod tests {
                 power_state: Some("on".to_string()),
                 status: Some(inventory_status("Enabled", "OK", "OK")),
                 location: None,
-                pcie_collection_status: crate::models::PcieCollectionStatus::Collected,
                 pcie_devices: vec![PcieDeviceInventory {
                     name: "PcieDevice".into(),
                     description: None,

@@ -193,7 +193,6 @@ fn node_inventory_serializes_as_backend_payload() {
                 }),
                 part_location_context: None,
             }),
-            pcie_collection_status: crate::models::PcieCollectionStatus::Collected,
             pcie_devices: vec![PcieDeviceInventory {
                 name: "PcieDevice".into(),
                 description: None,
@@ -379,7 +378,6 @@ fn node_inventory_serializes_as_backend_payload() {
                     "placement": {"rack": "R12", "row": "A", "room": null, "rackOffset": 7, "rackOffsetUnits": null, "additionalInfo": null, "facilityName": null},
                     "partLocationContext": null
                 },
-                "pcieCollectionStatus": "collected",
                 "pcieDevices": [{
                 "name": "PcieDevice",
                 "description": null,
