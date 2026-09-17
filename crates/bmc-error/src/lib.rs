@@ -134,8 +134,13 @@ fn safe_url_path(url_text: &str) -> String {
         .ok()
         .filter(|url| !url.cannot_be_a_base())
         .map(|url| url.path().to_string())
-        .filter(|path| !path.is_empty() && path != "/")
+        .filter(|path| !path.is_empty() && path != "/" && !contains_embedded_url(path))
         .unwrap_or_else(|| REDACTED_URL.to_string())
+}
+
+fn contains_embedded_url(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    URL_SCHEMES.iter().any(|scheme| lower.contains(scheme))
 }
 
 /// Sanitize a structured URI reference for product inventory output.
@@ -165,6 +170,8 @@ pub fn sanitize_uri_reference(reference: &str) -> String {
     // A colon in the first segment indicates a malformed absolute URI.
     if (path.is_empty() && fragment.is_none())
         || path.split('/').next().unwrap_or_default().contains(':')
+        || contains_embedded_url(path)
+        || fragment.is_some_and(contains_embedded_url)
     {
         return REDACTED_URL.to_string();
     }
@@ -180,7 +187,11 @@ fn safe_uri_reference(url_text: &str) -> String {
         .filter(|url| !url.cannot_be_a_base())
         .and_then(|url| {
             let path = url.path();
-            if path.is_empty() || path == "/" {
+            if path.is_empty()
+                || path == "/"
+                || contains_embedded_url(path)
+                || url.fragment().is_some_and(contains_embedded_url)
+            {
                 return None;
             }
             Some(match url.fragment() {
@@ -213,6 +224,16 @@ mod tests {
     }
 
     #[test]
+    fn redacts_urls_with_embedded_urls() {
+        for input in [
+            "failed https://safe/redfish/https://user:secret@evil/path",
+            "failed https://safe/redfish//user:secret@evil/path",
+        ] {
+            assert_eq!(sanitize_error_message(input), "failed [URL_REDACTED]");
+        }
+    }
+
+    #[test]
     fn sanitizes_structured_references() {
         for (input, expected) in [
             ("https://user:secret@host/path?token=x#item", "/path#item"),
@@ -233,13 +254,26 @@ mod tests {
     }
 
     #[test]
+    fn redacts_structured_references_with_embedded_urls() {
+        for input in [
+            "https://safe/redfish/https://user:secret@evil/path",
+            "https://safe/redfish//user:secret@evil/path",
+            "/redfish/https://user:secret@evil/path",
+            "https://safe/redfish#https://user:secret@evil/path",
+            "/redfish#//user:secret@evil/path",
+        ] {
+            assert_eq!(sanitize_uri_reference(input), REDACTED_URL, "{input}");
+        }
+
+        assert_eq!(sanitize_uri_reference("#/Processors/0"), "#/Processors/0");
+    }
+
+    #[test]
     fn sanitized_types_serialize_only_sanitized_values() {
-        let message = SanitizedErrorMessage::new(
-            "failed //user:secret@host/redfish/v1/Systems/1?token=x",
-        );
-        let reference = SanitizedUriReference::new(
-            "//user:secret@host/redfish/v1/Systems/1?token=x#item",
-        );
+        let message =
+            SanitizedErrorMessage::new("failed //user:secret@host/redfish/v1/Systems/1?token=x");
+        let reference =
+            SanitizedUriReference::new("//user:secret@host/redfish/v1/Systems/1?token=x#item");
 
         assert_eq!(
             serde_json::to_string(&message).unwrap(),
