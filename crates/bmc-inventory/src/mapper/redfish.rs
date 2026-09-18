@@ -386,17 +386,10 @@ fn map_condition(condition: crate::source::ConditionData) -> InventoryCondition 
 }
 
 fn map_link((relation, link): (String, crate::source::LinkData)) -> (String, InventoryLink) {
-    let value = match link {
-        crate::source::LinkData::Single(odata_id) => {
-            InventoryLink::Single(InventoryLinkReference { odata_id })
-        }
-        crate::source::LinkData::Multiple(items) => InventoryLink::Multiple(
-            items
-                .into_iter()
-                .map(|odata_id| InventoryLinkReference { odata_id })
-                .collect(),
-        ),
-    };
+    let value = link
+        .into_iter()
+        .map(|odata_id| InventoryLinkReference { odata_id })
+        .collect();
     (relation, value)
 }
 
@@ -566,17 +559,17 @@ mod tests {
     }
 
     #[test]
-    fn maps_links_without_changing_cardinality() {
+    fn maps_all_links_as_arrays() {
         let (relation, single) = map_link((
             "ContainedBy".into(),
-            LinkData::Single("/redfish/v1/Chassis/Rack".into()),
+            vec!["/redfish/v1/Chassis/Rack".into()],
         ));
         assert_eq!(relation, "ContainedBy");
         assert_eq!(
             serde_json::to_value(single).unwrap(),
-            serde_json::json!({"@odata.id": "/redfish/v1/Chassis/Rack"})
+            serde_json::json!([{"odataId": "/redfish/v1/Chassis/Rack"}])
         );
-        let (_, empty) = map_link(("Contains".into(), LinkData::Multiple(vec![])));
+        let (_, empty) = map_link(("Contains".into(), vec![]));
         assert_eq!(serde_json::to_value(empty).unwrap(), serde_json::json!([]));
     }
 
@@ -958,10 +951,7 @@ mod tests {
     }
 
     fn link(relation: &str, odata_id: &str) -> (String, LinkData) {
-        (
-            relation.to_string(),
-            LinkData::Multiple(vec![odata_id.to_string()]),
-        )
+        (relation.to_string(), vec![odata_id.to_string()])
     }
 
     fn assert_link(
@@ -972,7 +962,7 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(
             serde_json::to_value(&links[relation]).unwrap(),
-            serde_json::json!([{"@odata.id": odata_id}])
+            serde_json::json!([{"odataId": odata_id}])
         );
     }
 

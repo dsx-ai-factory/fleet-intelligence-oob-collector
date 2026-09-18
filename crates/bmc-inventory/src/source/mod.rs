@@ -182,11 +182,9 @@ pub struct ConditionData {
     pub origin_of_condition: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LinkData {
-    Single(String),
-    Multiple(Vec<String>),
-}
+/// Normalized targets for one relationship. Redfish single references are
+/// converted to one-element vectors at the source boundary.
+pub type LinkData = Vec<String>;
 
 #[derive(Clone, Debug)]
 pub struct InventoryErrorData {

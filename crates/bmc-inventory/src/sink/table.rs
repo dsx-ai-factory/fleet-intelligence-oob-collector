@@ -815,11 +815,7 @@ fn push_link_detail_rows(
     source: &str,
     links: &std::collections::BTreeMap<String, InventoryLink>,
 ) {
-    for (relation, link) in links {
-        let targets = match link {
-            InventoryLink::Single(target) => std::slice::from_ref(target),
-            InventoryLink::Multiple(targets) => targets.as_slice(),
-        };
+    for (relation, targets) in links {
         rows.extend(targets.iter().map(|target| {
             [
                 resource_type.to_string(),
@@ -1154,9 +1150,9 @@ mod tests {
                 status: Some(inventory_status("Enabled", "OK", "OK")),
                 links: std::collections::BTreeMap::from([(
                     "ManagerForServers".into(),
-                    InventoryLink::Multiple(vec![crate::models::InventoryLinkReference {
+                    vec![crate::models::InventoryLinkReference {
                         odata_id: "/redfish/v1/Systems/System".into(),
-                    }]),
+                    }],
                 )]),
             }],
             chassis: vec![ChassisInventory {

@@ -31,7 +31,7 @@ fn inventory_condition_serializes_diagnostic_fields() {
             "resolution": "Reset the component and collect logs.",
             "conditionType": "Alert",
             "originOfCondition": {
-                "@odata.id": "/redfish/v1/Chassis/HGX_CPU_1"
+                "odataId": "/redfish/v1/Chassis/HGX_CPU_1"
             }
         })
     );
@@ -126,9 +126,9 @@ fn node_inventory_serializes_as_backend_payload() {
             status: Some(status("Enabled", "OK", "OK")),
             links: std::collections::BTreeMap::from([(
                 "ManagerForServers".into(),
-                InventoryLink::Multiple(vec![InventoryLinkReference {
+                vec![InventoryLinkReference {
                     odata_id: "/redfish/v1/Systems/System".into(),
-                }]),
+                }],
             )]),
         }],
         chassis: vec![ChassisInventory {
@@ -215,7 +215,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "name": "System",
                 "description": null,
                 "id": "System",
-                "@odata.id": "/redfish/v1/Systems/System",
+                "odataId": "/redfish/v1/Systems/System",
                 "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
                 "manufacturer": "NVIDIA",
                 "model": "GB200",
@@ -238,7 +238,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "name": "Processor",
                 "description": null,
                     "id": "CPU1",
-                    "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
+                    "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
                     "uuid": "22222222-3333-4444-5555-666666666666",
                     "socket": "CPU Socket 1",
                     "processorType": "cpu",
@@ -273,7 +273,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "name": "Manager",
                 "description": null,
                 "id": "BMC_0",
-                "@odata.id": "/redfish/v1/Managers/BMC_0",
+                "odataId": "/redfish/v1/Managers/BMC_0",
                 "uuid": "11111111-2222-3333-4444-555555555555",
                 "managerType": "bmc",
                 "model": "OpenBMC",
@@ -284,13 +284,13 @@ fn node_inventory_serializes_as_backend_payload() {
                     "healthRollup": "OK",
                     "state": "Enabled"
                 },
-                "links": {"ManagerForServers": [{"@odata.id": "/redfish/v1/Systems/System"}]}
+                "links": {"ManagerForServers": [{"odataId": "/redfish/v1/Systems/System"}]}
             }],
             "chassis": [{
                 "name": "Chassis",
                 "description": null,
                 "id": "BMC_0",
-                "@odata.id": "/redfish/v1/Chassis/BMC_0",
+                "odataId": "/redfish/v1/Chassis/BMC_0",
                 "chassisType": "module",
                 "manufacturer": "NVIDIA",
                 "model": "BMC",
@@ -314,7 +314,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "name": "PcieDevice",
                 "description": null,
                     "id": "GPU1",
-                    "@odata.id": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
+                    "odataId": "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1",
                     "uuid": null,
                     "deviceType": "single_function",
                     "manufacturer": "NVIDIA",
@@ -339,7 +339,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 "relatedItem": null,
                 "serviceId": "FirmwareInventory",
                 "id": "BMC",
-                "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+                "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
                 "name": "BMC",
                 "version": "3.19.00",
                 "releaseDate": "2026-01-01T00:00:00Z",
