@@ -118,8 +118,10 @@ Add fixture-backed tests before adding another narrowed traversal policy.
   units and does not assume EIA rack units when the BMC omits units.
 - Location covers hardware placement, not geographic/postal/contact fields.
 - Collected resources preserve their Redfish `Name` and optional `Description`
-  as `name` and `description`. Resource references use `@odata.id` rather than
-  the former `odataId` key. Resource IDs and names are not synthesized or normalized.
+  as `name` and `description`. The product model exposes Redfish resource
+  references as the camelCase `odataId` field; the wire-level `@odata.id` key
+  remains confined to Redfish parsing. Resource IDs and names are not synthesized
+  or normalized.
 - Individual-resource `@odata.type` is not exposed by nv-redfish 0.15.1. Recovering
   the original type/version requires dependency support or a separately designed
   raw-response capture path; the collector does not fabricate a schema version.
@@ -139,10 +141,11 @@ Add fixture-backed tests before adding another narrowed traversal policy.
   represented as null, not a synthetic `UnsupportedValue` string.
 
 - API JSON fields are camelCase.
-- Standard Redfish relationships retain their nested shape in `links`: canonical
-  relationship names map to an `{"@odata.id": "..."}` reference or an array of
-  references, matching the source cardinality. Array order, duplicates, and empty
-  arrays are preserved. Resources with no relationships emit `links: {}`.
+- Standard Redfish relationships use one stable shape in `links`: each canonical
+  relationship name maps to an array of `{"odataId": "..."}` references. A
+  singular Redfish relationship becomes a one-element array. Array order,
+  duplicates, and empty arrays are preserved. Resources with no relationships
+  emit `links: {}`.
 - Firmware `relatedItem` is retained separately from `links`.
 - Link targets omit URL authority (including credentials) and query parameters;
   fragments are preserved because they can identify subobjects. Linked resources

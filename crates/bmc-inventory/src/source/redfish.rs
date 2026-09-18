@@ -774,12 +774,10 @@ fn push_nav_links<T: EntityTypeRef>(
     if let Some(links) = links {
         out.insert(
             relation.to_string(),
-            LinkData::Multiple(
-                links
-                    .iter()
-                    .filter_map(|link| normalize_link_target(&link.id().to_string()))
-                    .collect(),
-            ),
+            links
+                .iter()
+                .filter_map(|link| normalize_link_target(&link.id().to_string()))
+                .collect(),
         );
     }
 }
@@ -790,7 +788,7 @@ fn push_nav_link<T: EntityTypeRef>(
     link: Option<&NavProperty<T>>,
 ) {
     if let Some(target) = link.and_then(|link| normalize_link_target(&link.id().to_string())) {
-        out.insert(relation.to_string(), LinkData::Single(target));
+        out.insert(relation.to_string(), vec![target]);
     }
 }
 
@@ -807,10 +805,7 @@ fn push_reference_links(
     links: Option<&[ReferenceLeaf]>,
 ) {
     if let Some(links) = links {
-        out.insert(
-            relation.to_string(),
-            LinkData::Multiple(reference_targets(links)),
-        );
+        out.insert(relation.to_string(), reference_targets(links));
     }
 }
 
@@ -820,7 +815,7 @@ fn push_reference_link(
     link: Option<&ReferenceLeaf>,
 ) {
     if let Some(target) = link.and_then(|link| normalize_link_target(&link.odata_id.to_string())) {
-        out.insert(relation.to_string(), LinkData::Single(target));
+        out.insert(relation.to_string(), vec![target]);
     }
 }
 
@@ -1136,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn link_targets_preserve_fragments_and_relationship_shape() {
+    fn link_targets_preserve_fragments_and_normalize_relationships_to_arrays() {
         assert_eq!(normalize_link_target("https://user:secret@bmc.example.com/redfish/v1/Systems/System?token=secret#/Processors/0").as_deref(),
             Some("/redfish/v1/Systems/System#/Processors/0"));
         assert_eq!(
@@ -1162,17 +1157,17 @@ mod tests {
         let links = chassis_links(Some(&raw));
         assert_eq!(
             links["ContainedBy"],
-            LinkData::Single("/redfish/v1/Chassis/Rack".into())
+            vec!["/redfish/v1/Chassis/Rack".to_string()]
         );
         assert_eq!(
             links["Contains"],
-            LinkData::Multiple(vec![
-                "/redfish/v1/Chassis/B".into(),
-                "/redfish/v1/Chassis/A".into(),
-                "/redfish/v1/Chassis/B".into()
-            ])
+            vec![
+                "/redfish/v1/Chassis/B".to_string(),
+                "/redfish/v1/Chassis/A".to_string(),
+                "/redfish/v1/Chassis/B".to_string()
+            ]
         );
-        assert_eq!(links["ManagedBy"], LinkData::Multiple(vec![]));
+        assert_eq!(links["ManagedBy"], Vec::<String>::new());
         assert!(!links.contains_key("ComputerSystems"));
     }
 
@@ -1359,7 +1354,7 @@ mod tests {
             report.managers[0].links,
             BTreeMap::from([(
                 "ManagerForServers".to_string(),
-                LinkData::Multiple(vec!["/redfish/v1/Systems/System#item".into()])
+                vec!["/redfish/v1/Systems/System#item".into()]
             )])
         );
 
@@ -1444,11 +1439,11 @@ mod tests {
             BTreeMap::from([
                 (
                     "Chassis".into(),
-                    LinkData::Multiple(vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()])
+                    vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()]
                 ),
                 (
                     "ManagedBy".into(),
-                    LinkData::Multiple(vec!["/redfish/v1/Managers/BMC_0".into()])
+                    vec!["/redfish/v1/Managers/BMC_0".into()]
                 )
             ])
         );
@@ -1456,7 +1451,7 @@ mod tests {
             processor.links,
             BTreeMap::from([(
                 "Chassis".to_string(),
-                LinkData::Single("/redfish/v1/Chassis/HGX_GPU_SXM_0".into())
+                vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()]
             )])
         );
 

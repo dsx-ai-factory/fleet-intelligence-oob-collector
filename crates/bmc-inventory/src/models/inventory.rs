@@ -20,7 +20,6 @@ pub struct ManagerInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub manager_type: Option<String>,
@@ -36,7 +35,6 @@ pub struct SystemInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<InventoryUuid>,
     pub manufacturer: Option<String>,
@@ -61,7 +59,6 @@ pub struct ProcessorInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub socket: Option<String>,
@@ -84,7 +81,6 @@ pub struct ChassisInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub chassis_type: Option<String>,
     pub manufacturer: Option<String>,
@@ -114,7 +110,6 @@ pub struct PcieDeviceInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub uuid: Option<String>,
     pub device_type: Option<String>,
@@ -135,7 +130,6 @@ pub struct FirmwareInventory {
     pub related_item: Option<Vec<InventoryLinkReference>>,
     pub service_id: String,
     pub id: String,
-    #[serde(rename = "@odata.id")]
     pub odata_id: Option<String>,
     pub name: String,
     pub version: Option<String>,
@@ -167,8 +161,8 @@ pub struct InventoryCondition {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InventoryReference {
-    #[serde(rename = "@odata.id")]
     pub odata_id: String,
 }
 
@@ -194,17 +188,13 @@ pub struct MemorySummary {
     pub status: Option<InventoryStatus>,
 }
 
-/// A relationship retains the single-reference or array shape supplied by Redfish.
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum InventoryLink {
-    Single(InventoryLinkReference),
-    Multiple(Vec<InventoryLinkReference>),
-}
+/// References for one relationship. Product inventory always emits an array,
+/// regardless of whether Redfish represented the relationship as one or many.
+pub type InventoryLink = Vec<InventoryLinkReference>;
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InventoryLinkReference {
-    #[serde(rename = "@odata.id")]
     pub odata_id: String,
 }
 
