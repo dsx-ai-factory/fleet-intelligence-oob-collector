@@ -3,7 +3,7 @@ use std::fmt;
 
 use super::InventorySink;
 use crate::models::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryLink, InventoryStatus,
+    ChassisInventory, FirmwareInventory, InventoryLink, InventoryLocation, InventoryStatus,
     ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
@@ -125,6 +125,7 @@ struct ProcessorDetailRow {
     manufacturer: String,
     model: String,
     serial: String,
+    part: String,
     max_speed_mhz: String,
     total_cores: String,
     total_threads: String,
@@ -434,7 +435,7 @@ impl ChassisDetailRow {
     }
 }
 
-fn format_location(location: &ChassisLocation) -> String {
+fn format_location(location: &InventoryLocation) -> String {
     let mut parts = Vec::new();
     if let Some(label) = location
         .part_location
@@ -517,6 +518,7 @@ impl ProcessorDetailRow {
             manufacturer: processor.manufacturer.clone().unwrap_or_default(),
             model: processor.model.clone().unwrap_or_default(),
             serial: processor.serial_number.clone().unwrap_or_default(),
+            part: processor.part_number.clone().unwrap_or_default(),
             max_speed_mhz: processor
                 .max_speed_mhz
                 .map(|speed| speed.to_string())
@@ -535,7 +537,7 @@ impl ProcessorDetailRow {
         }
     }
 
-    fn values(&self) -> [String; 16] {
+    fn values(&self) -> [String; 17] {
         [
             self.system_id.clone(),
             self.id.clone(),
@@ -547,6 +549,7 @@ impl ProcessorDetailRow {
             self.manufacturer.clone(),
             self.model.clone(),
             self.serial.clone(),
+            self.part.clone(),
             self.max_speed_mhz.clone(),
             self.total_cores.clone(),
             self.total_threads.clone(),
@@ -668,6 +671,7 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
             "Manufacturer",
             "Model",
             "Serial",
+            "Part",
             "Max MHz",
             "Cores",
             "Threads",
@@ -918,7 +922,7 @@ mod tests {
 
     #[test]
     fn location_display_uses_reported_units() {
-        let location = ChassisLocation {
+        let location = InventoryLocation {
             part_location: None,
             part_location_context: None,
             placement: Some(crate::models::Placement {
@@ -1130,6 +1134,9 @@ mod tests {
                     manufacturer: Some("NVIDIA".to_string()),
                     model: Some("Grace CPU".to_string()),
                     serial_number: Some("CPU-SN123".to_string()),
+                    part_number: Some("CPU-PN123".to_string()),
+                    location: None,
+                    nvidia_gpu: None,
                     max_speed_mhz: Some(3600),
                     total_cores: Some(72),
                     total_threads: Some(72),
