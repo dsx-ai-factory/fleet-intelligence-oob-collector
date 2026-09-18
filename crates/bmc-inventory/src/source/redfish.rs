@@ -14,9 +14,9 @@ use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::{
-    ChassisData, ChassisLocationData, ConditionData, FirmwareData, InventoryErrorData,
-    InventorySource, LinkData, ManagerData, PcieDeviceData, ProcessorData, RedfishReport,
-    ServiceRootData, SourceRecord, StatusData, SystemData, inventory_domain,
+    ChassisData, ConditionData, FirmwareData, InventoryErrorData, InventorySource, LinkData,
+    LocationData, ManagerData, PcieDeviceData, ProcessorData, RedfishReport, ServiceRootData,
+    SourceRecord, StatusData, SystemData, inventory_domain,
 };
 use crate::config::Target;
 
@@ -339,8 +339,8 @@ fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
 
 fn location_data(
     location: Option<&nv_redfish::schema::resource::Location>,
-) -> Option<ChassisLocationData> {
-    location.map(|location| ChassisLocationData {
+) -> Option<LocationData> {
+    location.map(|location| LocationData {
         part_location_context: location.part_location_context.clone().flatten(),
         part_location: part_location_data(location.part_location.as_ref()),
         placement: location

@@ -97,7 +97,7 @@ pub struct ProcessorData {
     pub model: Option<String>,
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
-    pub location: Option<ChassisLocationData>,
+    pub location: Option<LocationData>,
     pub nvidia_gpu: Option<NvidiaGpuData>,
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
@@ -148,13 +148,13 @@ pub struct ChassisData {
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
     pub status: Option<StatusData>,
-    pub location: Option<ChassisLocationData>,
+    pub location: Option<LocationData>,
     pub pcie_devices: Vec<PcieDeviceData>,
     pub links: std::collections::BTreeMap<String, LinkData>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ChassisLocationData {
+pub struct LocationData {
     pub part_location: Option<PartLocationData>,
     pub placement: Option<PlacementData>,
     pub part_location_context: Option<String>,

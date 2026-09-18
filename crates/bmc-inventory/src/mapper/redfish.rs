@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
 use crate::models::{
-    ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
-    InventoryCondition, InventoryLink, InventoryLinkReference, InventoryReference,
+    ChassisInventory, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION, InventoryCondition,
+    InventoryLink, InventoryLinkReference, InventoryLocation, InventoryReference,
     InventorySourceInfo, InventoryStatus, InventoryUuid, ManagerInventory, NodeInventory,
     NvidiaGpuInventory, NvlinkTopologyInventory, PcieDeviceInventory, ProcessorInventory,
     SystemInventory,
@@ -249,7 +249,7 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         model: processor.model,
         serial_number: processor.serial_number,
         part_number: processor.part_number,
-        location: processor.location.map(map_chassis_location),
+        location: processor.location.map(map_location),
         nvidia_gpu: processor.nvidia_gpu.map(map_nvidia_gpu),
         max_speed_mhz: processor.max_speed_mhz,
         total_cores: processor.total_cores,
@@ -274,7 +274,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         asset_tag: chassis.asset_tag,
         power_state: chassis.power_state,
         status: chassis.status.map(map_status),
-        location: chassis.location.map(map_chassis_location),
+        location: chassis.location.map(map_location),
         pcie_devices: chassis
             .pcie_devices
             .into_iter()
@@ -284,8 +284,8 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
     }
 }
 
-fn map_chassis_location(loc: crate::source::ChassisLocationData) -> ChassisLocation {
-    ChassisLocation {
+fn map_location(loc: crate::source::LocationData) -> InventoryLocation {
+    InventoryLocation {
         part_location_context: loc.part_location_context,
         part_location: loc.part_location.map(|part| crate::models::PartLocation {
             service_label: part.service_label,

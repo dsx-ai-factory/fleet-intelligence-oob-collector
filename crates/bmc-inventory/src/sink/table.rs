@@ -3,7 +3,7 @@ use std::fmt;
 
 use super::InventorySink;
 use crate::models::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryLink, InventoryStatus,
+    ChassisInventory, FirmwareInventory, InventoryLink, InventoryLocation, InventoryStatus,
     ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
@@ -435,7 +435,7 @@ impl ChassisDetailRow {
     }
 }
 
-fn format_location(location: &ChassisLocation) -> String {
+fn format_location(location: &InventoryLocation) -> String {
     let mut parts = Vec::new();
     if let Some(label) = location
         .part_location
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn location_display_uses_reported_units() {
-        let location = ChassisLocation {
+        let location = InventoryLocation {
             part_location: None,
             part_location_context: None,
             placement: Some(crate::models::Placement {

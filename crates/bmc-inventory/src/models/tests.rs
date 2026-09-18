@@ -98,7 +98,7 @@ fn node_inventory_serializes_as_backend_payload() {
                 model: Some("Grace".to_string()),
                 serial_number: Some("CPU-SN123".to_string()),
                 part_number: Some("CPU-PN123".to_string()),
-                location: Some(ChassisLocation {
+                location: Some(InventoryLocation {
                     part_location: Some(PartLocation {
                         service_label: Some("GPU_SXM_1".to_string()),
                         location_type: Some("Slot".to_string()),
@@ -179,7 +179,7 @@ fn node_inventory_serializes_as_backend_payload() {
             asset_tag: Some("rack-12".to_string()),
             power_state: Some("on".to_string()),
             status: Some(status("Enabled", "OK", "OK")),
-            location: Some(ChassisLocation {
+            location: Some(InventoryLocation {
                 part_location: Some(crate::models::PartLocation {
                     service_label: Some("Bay 1".to_string()),
                     ..Default::default()

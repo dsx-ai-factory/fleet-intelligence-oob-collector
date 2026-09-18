@@ -72,7 +72,7 @@ pub struct ProcessorInventory {
     pub model: Option<String>,
     pub serial_number: Option<String>,
     pub part_number: Option<String>,
-    pub location: Option<ChassisLocation>,
+    pub location: Option<InventoryLocation>,
     pub nvidia_gpu: Option<NvidiaGpuInventory>,
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
@@ -127,14 +127,14 @@ pub struct ChassisInventory {
     pub asset_tag: Option<String>,
     pub power_state: Option<String>,
     pub status: Option<InventoryStatus>,
-    pub location: Option<ChassisLocation>,
+    pub location: Option<InventoryLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChassisLocation {
+pub struct InventoryLocation {
     pub part_location: Option<PartLocation>,
     pub placement: Option<Placement>,
     pub part_location_context: Option<String>,

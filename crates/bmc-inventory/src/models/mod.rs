@@ -2,10 +2,10 @@ mod inventory;
 mod node;
 
 pub use inventory::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, InventoryCondition, InventoryLink,
-    InventoryLinkReference, InventoryReference, InventorySourceInfo, InventoryStatus,
-    ManagerInventory, MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PartLocation,
-    PcieDeviceInventory, Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
+    ChassisInventory, FirmwareInventory, InventoryCondition, InventoryLink, InventoryLinkReference,
+    InventoryLocation, InventoryReference, InventorySourceInfo, InventoryStatus, ManagerInventory,
+    MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PartLocation, PcieDeviceInventory,
+    Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
 };
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 
