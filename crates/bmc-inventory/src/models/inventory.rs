@@ -71,11 +71,43 @@ pub struct ProcessorInventory {
     pub manufacturer: Option<String>,
     pub model: Option<String>,
     pub serial_number: Option<String>,
+    pub part_number: Option<String>,
+    pub location: Option<ChassisLocation>,
+    pub nvidia_gpu: Option<NvidiaGpuInventory>,
     pub max_speed_mhz: Option<i64>,
     pub total_cores: Option<i64>,
     pub total_threads: Option<i64>,
     pub status: Option<InventoryStatus>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NvidiaGpuInventory {
+    pub mig_mode_enabled: Option<bool>,
+    pub default_boost_clock_speed_mhz: Option<i64>,
+    pub max_boost_clock_speed_mhz: Option<i64>,
+    pub cc_mode_enabled: Option<bool>,
+    pub cc_dev_mode_enabled: Option<bool>,
+    pub protected_pcie_mode_enabled: Option<bool>,
+    pub egm_mode_enabled: Option<bool>,
+    pub total_nv_links: Option<i64>,
+    pub nvlink_topology: Option<NvlinkTopologyInventory>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NvlinkTopologyInventory {
+    pub tray_serial_number: Option<String>,
+    pub tray_slot_number: Option<i64>,
+    pub tray_slot_index: Option<i64>,
+    pub chassis_serial_number: Option<String>,
+    pub host_id: Option<i64>,
+    pub module_id: Option<i64>,
+    pub system_guid: Option<String>,
+    pub ib_guid: Option<String>,
+    pub lsb_ib_guid: Option<String>,
+    pub peer_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

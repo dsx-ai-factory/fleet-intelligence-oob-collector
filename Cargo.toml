@@ -24,9 +24,9 @@ bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 hickory-resolver = "0.26"
 http = "1"
-nv-redfish = { version = "0.15.1", features = ["bmc-http", "std-redfish"] }
-nv-redfish-bmc-mock = "0.15.1"
-nv-redfish-dispatcher = "0.15.1"
+nv-redfish = { version = "0.17.0", features = ["bmc-http", "oem-nvidia", "std-redfish"] }
+nv-redfish-bmc-mock = "0.17.0"
+nv-redfish-dispatcher = "0.17.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "socks", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
 use nv_redfish::core::{EntityTypeRef, NavProperty, ReferenceLeaf};
-use nv_redfish::{Bmc, Resource, ServiceRoot};
+use nv_redfish::{Bmc, ServiceRoot};
+use serde::Deserialize as _;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use url::Url;
@@ -165,10 +166,14 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
     for manager in managers {
         let raw = manager.raw();
         out.push(ManagerData {
-            name: raw.base.name.clone(),
-            description: raw.base.description.clone().flatten(),
-            id: manager.id().to_string(),
-            odata_id: Some(manager.odata_id().to_string()),
+            name: raw.name.to_string(),
+            description: raw
+                .description
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(ToString::to_string),
+            id: raw.id.to_string(),
+            odata_id: Some(raw.odata_id.to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             manager_type: raw.manager_type.and_then(redfish_enum_string),
             model: raw.model.clone().flatten(),
@@ -198,13 +203,17 @@ async fn collect_systems<B: Bmc>(
         .map_err(|err| format!("system members: {err}"))?;
     let mut out = Vec::with_capacity(systems.len());
     for system in systems {
-        let system_id = system.id().to_string();
         let raw = system.raw();
+        let system_id = raw.id.to_string();
         out.push(SystemData {
-            name: raw.base.name.clone(),
-            description: raw.base.description.clone().flatten(),
+            name: raw.name.to_string(),
+            description: raw
+                .description
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(ToString::to_string),
             id: system_id.clone(),
-            odata_id: Some(system.odata_id().to_string()),
+            odata_id: Some(raw.odata_id.to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
@@ -246,13 +255,17 @@ async fn collect_chassis<B: Bmc>(
     let pcie_traversal_policy = pcie_traversal_policy(service_root, systems);
     let mut out = Vec::with_capacity(chassis.len());
     for chassis in chassis {
-        let chassis_id = chassis.id().to_string();
         let raw = chassis.raw();
+        let chassis_id = raw.id.to_string();
         out.push(ChassisData {
-            name: raw.base.name.clone(),
-            description: raw.base.description.clone().flatten(),
+            name: raw.name.to_string(),
+            description: raw
+                .description
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(ToString::to_string),
             id: chassis_id.clone(),
-            odata_id: Some(chassis.odata_id().to_string()),
+            odata_id: Some(raw.odata_id.to_string()),
             chassis_type: redfish_enum_string(raw.chassis_type),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
@@ -262,7 +275,7 @@ async fn collect_chassis<B: Bmc>(
             asset_tag: raw.asset_tag.clone().flatten(),
             power_state: raw.power_state.flatten().and_then(redfish_enum_string),
             status: status_data(raw.status.as_ref()),
-            location: chassis_location(raw.location.as_ref()),
+            location: location_data(raw.location.as_ref()),
             pcie_devices: if should_collect_pcie_devices_for_chassis(
                 &pcie_traversal_policy,
                 &chassis_id,
@@ -324,21 +337,12 @@ fn vendor_matches(vendor: Option<&str>, expected: &str) -> bool {
     vendor.is_some_and(|vendor| vendor.eq_ignore_ascii_case(expected))
 }
 
-fn chassis_location(
+fn location_data(
     location: Option<&nv_redfish::schema::resource::Location>,
 ) -> Option<ChassisLocationData> {
     location.map(|location| ChassisLocationData {
         part_location_context: location.part_location_context.clone().flatten(),
-        part_location: location
-            .part_location
-            .as_ref()
-            .map(|part| super::PartLocationData {
-                service_label: part.service_label.clone().flatten(),
-                location_type: part.location_type.flatten().and_then(location_enum_string),
-                location_ordinal_value: part.location_ordinal_value.flatten(),
-                reference: part.reference.flatten().and_then(location_enum_string),
-                orientation: part.orientation.flatten().and_then(location_enum_string),
-            }),
+        part_location: part_location_data(location.part_location.as_ref()),
         placement: location
             .placement
             .as_ref()
@@ -350,18 +354,23 @@ fn chassis_location(
                 rack_offset_units: placement
                     .rack_offset_units
                     .flatten()
-                    .and_then(location_enum_string),
+                    .and_then(redfish_enum_string),
                 additional_info: placement.additional_info.clone().flatten(),
                 facility_name: placement.facility_name.clone().flatten(),
             }),
     })
 }
 
-fn location_enum_string(value: impl serde::Serialize) -> Option<String> {
-    match serde_json::to_value(value).ok()? {
-        serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
-        _ => None,
-    }
+fn part_location_data(
+    part: Option<&nv_redfish::schema::resource::PartLocation>,
+) -> Option<super::PartLocationData> {
+    part.map(|part| super::PartLocationData {
+        service_label: part.service_label.clone().flatten(),
+        location_type: part.location_type.flatten().and_then(redfish_enum_string),
+        location_ordinal_value: part.location_ordinal_value.flatten(),
+        reference: part.reference.flatten().and_then(redfish_enum_string),
+        orientation: part.orientation.flatten().and_then(redfish_enum_string),
+    })
 }
 
 async fn collect_secure_boot_enabled<B: Bmc>(
@@ -406,11 +415,28 @@ async fn collect_processors<B: Bmc>(
     let mut out = Vec::with_capacity(processors.len());
     for processor in processors {
         let raw = processor.raw();
+        let nvidia_gpu = match nvidia_gpu_data(raw.oem.as_ref()) {
+            Ok(nvidia_gpu) => nvidia_gpu,
+            Err(error) => {
+                push_inventory_error(
+                    errors,
+                    inventory_domain::SYSTEMS_PROCESSORS,
+                    Some(raw.id.to_string()),
+                    format!("NVIDIA GPU OEM data: {error}"),
+                );
+                None
+            }
+        };
+
         out.push(ProcessorData {
-            name: raw.base.name.clone(),
-            description: raw.base.description.clone().flatten(),
-            id: processor.id().to_string(),
-            odata_id: Some(processor.odata_id().to_string()),
+            name: raw.name.to_string(),
+            description: raw
+                .description
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(ToString::to_string),
+            id: raw.id.to_string(),
+            odata_id: Some(raw.odata_id.to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             socket: raw.socket.clone().flatten(),
             processor_type: raw.processor_type.flatten().and_then(redfish_enum_string),
@@ -423,6 +449,9 @@ async fn collect_processors<B: Bmc>(
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
             serial_number: raw.serial_number.clone().flatten(),
+            part_number: raw.part_number.clone().flatten(),
+            location: location_data(raw.location.as_ref()),
+            nvidia_gpu,
             max_speed_mhz: raw.max_speed_mhz.flatten(),
             total_cores: raw.total_cores.flatten(),
             total_threads: raw.total_threads.flatten(),
@@ -431,6 +460,48 @@ async fn collect_processors<B: Bmc>(
         });
     }
     out
+}
+
+fn nvidia_gpu_data(
+    oem: Option<&nv_redfish::schema::resource::Oem>,
+) -> Result<Option<super::NvidiaGpuData>, serde_json::Error> {
+    let Some(nvidia) =
+        oem.and_then(|oem| nv_redfish::oem::oem_value(oem, nv_redfish::oem::nvidia::OEM_KEY))
+    else {
+        return Ok(None);
+    };
+    if !nv_redfish::oem::declares(nvidia, "NvidiaProcessor", "NvidiaGPU") {
+        return Ok(None);
+    }
+
+    let gpu = nv_redfish::oem::nvidia::schema::nvidia_processor::NvidiaGpu::deserialize(nvidia)?;
+    let nvlink_topology =
+        gpu.mnnv_link_topology
+            .flatten()
+            .map(|topology| super::NvlinkTopologyData {
+                tray_serial_number: topology.tray_serial_number.flatten(),
+                tray_slot_number: topology.tray_slot_number.flatten(),
+                tray_slot_index: topology.tray_slot_index.flatten(),
+                chassis_serial_number: topology.chassis_serial_number.flatten(),
+                host_id: topology.host_id.flatten(),
+                module_id: topology.module_id.flatten(),
+                system_guid: topology.system_guid.flatten(),
+                ib_guid: topology.ibguid.flatten(),
+                lsb_ib_guid: topology.lsb_ibguid.flatten(),
+                peer_type: topology.peer_type.flatten().and_then(redfish_enum_string),
+            });
+
+    Ok(Some(super::NvidiaGpuData {
+        mig_mode_enabled: gpu.mig_mode_enabled.flatten(),
+        default_boost_clock_speed_mhz: gpu.default_boost_clock_speed_mhz.flatten(),
+        max_boost_clock_speed_mhz: gpu.max_boost_clock_speed_mhz.flatten(),
+        cc_mode_enabled: gpu.cc_mode_enabled.flatten(),
+        cc_dev_mode_enabled: gpu.cc_dev_mode_enabled.flatten(),
+        protected_pcie_mode_enabled: gpu.ppcie_mode_enabled.flatten(),
+        egm_mode_enabled: gpu.egm_mode_enabled.flatten(),
+        total_nv_links: gpu.total_number_nv_links.flatten(),
+        nvlink_topology,
+    }))
 }
 
 async fn collect_pcie_devices<B: Bmc>(
@@ -467,10 +538,14 @@ async fn collect_pcie_devices<B: Bmc>(
     for device in devices {
         let raw = device.raw();
         out.push(PcieDeviceData {
-            name: raw.base.name.clone(),
-            description: raw.base.description.clone().flatten(),
-            id: device.id().to_string(),
-            odata_id: Some(device.odata_id().to_string()),
+            name: raw.name.to_string(),
+            description: raw
+                .description
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map(ToString::to_string),
+            id: raw.id.to_string(),
+            odata_id: Some(raw.odata_id.to_string()),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             device_type: raw.device_type.and_then(redfish_enum_string),
             manufacturer: raw.manufacturer.clone().flatten(),
@@ -505,12 +580,16 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .map(|inventory| {
             let raw = inventory.raw();
             FirmwareData {
-                description: raw.base.description.clone().flatten(),
+                description: raw
+                    .description
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .map(ToString::to_string),
                 related_item: raw.related_item.as_deref().map(reference_targets),
                 service_id: "FirmwareInventory".to_string(),
-                id: inventory.id().to_string(),
-                odata_id: Some(inventory.odata_id().to_string()),
-                name: raw.base.name.clone(),
+                id: raw.id.to_string(),
+                odata_id: Some(raw.odata_id.to_string()),
+                name: raw.name.to_string(),
                 version: raw.version.clone().flatten(),
                 release_date: raw.release_date.flatten().map(|date| date.to_string()),
                 status: status_data(raw.status.as_ref()),
@@ -1009,7 +1088,7 @@ mod tests {
             "PartLocationContext": "Drawer 2",
             "Placement": {"RackOffset": 3, "RackOffsetUnits": "OpenU", "FacilityName": "Test facility"}
         })).unwrap();
-        let value = chassis_location(Some(&raw)).unwrap();
+        let value = location_data(Some(&raw)).unwrap();
         let part = value.part_location.unwrap();
         assert_eq!(part.service_label, None);
         assert_eq!(part.location_type.as_deref(), Some("Slot"));
@@ -1021,10 +1100,10 @@ mod tests {
         );
         let raw = serde_json::from_value(serde_json::json!({"PartLocation": {}, "Placement": {}}))
             .unwrap();
-        let value = chassis_location(Some(&raw)).unwrap();
+        let value = location_data(Some(&raw)).unwrap();
         assert!(value.part_location.is_some());
         assert!(value.placement.is_some());
-        assert!(chassis_location(None).is_none());
+        assert!(location_data(None).is_none());
     }
 
     #[test]
@@ -1103,6 +1182,41 @@ mod tests {
             Some("SingleFunction")
         );
         assert_eq!(redfish_enum_string(ManagerType::UnsupportedValue), None);
+    }
+
+    #[test]
+    fn nvidia_gpu_is_absent_on_unsupported_processors() {
+        let other_vendor = serde_json::from_value(serde_json::json!({
+            "OtherVendor": {"Enabled": true}
+        }))
+        .expect("resource OEM");
+        assert!(
+            nvidia_gpu_data(Some(&other_vendor))
+                .expect("unsupported OEM")
+                .is_none()
+        );
+
+        let null_nvidia =
+            serde_json::from_value(serde_json::json!({"Nvidia": null})).expect("resource OEM");
+        assert!(
+            nvidia_gpu_data(Some(&null_nvidia))
+                .expect("null NVIDIA OEM")
+                .is_none()
+        );
+        assert!(nvidia_gpu_data(None).expect("absent OEM").is_none());
+    }
+
+    #[test]
+    fn nvidia_gpu_rejects_malformed_declared_gpu_data() {
+        let malformed = serde_json::from_value(serde_json::json!({
+            "Nvidia": {
+                "@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaGPU",
+                "MIGModeEnabled": "not-a-boolean"
+            }
+        }))
+        .expect("resource OEM");
+
+        assert!(nvidia_gpu_data(Some(&malformed)).is_err());
     }
 
     #[test]
@@ -1428,6 +1542,50 @@ mod tests {
         assert_eq!(processor.manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(processor.model.as_deref(), Some("Grace"));
         assert_eq!(processor.serial_number.as_deref(), Some("CPU-SN123"));
+        assert_eq!(processor.part_number.as_deref(), Some("CPU-PN123"));
+        let location = processor.location.as_ref().expect("processor location");
+        assert_eq!(
+            location.part_location_context.as_deref(),
+            Some("HGX_Chassis_0/ProcessorModule_0")
+        );
+        let physical_location = location
+            .part_location
+            .as_ref()
+            .expect("processor part location");
+        assert_eq!(
+            physical_location.service_label.as_deref(),
+            Some("GPU_SXM_1")
+        );
+        assert_eq!(physical_location.location_type.as_deref(), Some("Slot"));
+        assert_eq!(physical_location.location_ordinal_value, Some(1));
+        assert_eq!(
+            physical_location.orientation.as_deref(),
+            Some("LeftToRight")
+        );
+        let nvidia_gpu = processor.nvidia_gpu.as_ref().expect("NVIDIA GPU data");
+        assert_eq!(nvidia_gpu.mig_mode_enabled, Some(false));
+        assert_eq!(nvidia_gpu.default_boost_clock_speed_mhz, Some(1200));
+        assert_eq!(nvidia_gpu.max_boost_clock_speed_mhz, Some(1800));
+        assert_eq!(nvidia_gpu.cc_mode_enabled, Some(true));
+        assert_eq!(nvidia_gpu.total_nv_links, Some(18));
+        assert_eq!(
+            nvidia_gpu
+                .nvlink_topology
+                .as_ref()
+                .and_then(|topology| topology.tray_slot_index),
+            Some(2)
+        );
+        let nvlink_topology = nvidia_gpu
+            .nvlink_topology
+            .as_ref()
+            .expect("NVLink topology");
+        assert_eq!(
+            nvlink_topology.chassis_serial_number.as_deref(),
+            Some("chassis-serial")
+        );
+        assert_eq!(nvlink_topology.host_id, Some(17));
+        assert_eq!(nvlink_topology.ib_guid.as_deref(), Some("ib-guid"));
+        assert_eq!(nvlink_topology.peer_type.as_deref(), Some("Direct"));
         assert_eq!(processor.max_speed_mhz, Some(3600));
         assert_eq!(processor.total_cores, Some(72));
         assert_eq!(processor.total_threads, Some(72));
@@ -1907,6 +2065,35 @@ mod tests {
         "Model": "Grace",
         "UUID": "22222222-3333-4444-5555-666666666666",
         "SerialNumber": "CPU-SN123",
+        "PartNumber": "CPU-PN123",
+        "Location": {
+            "PartLocationContext": "HGX_Chassis_0/ProcessorModule_0",
+            "PartLocation": {
+                "ServiceLabel": "GPU_SXM_1",
+                "LocationType": "Slot",
+                "LocationOrdinalValue": 1,
+                "Orientation": "LeftToRight"
+            }
+        },
+        "Oem": {
+            "Nvidia": {
+                "@odata.type": "#NvidiaProcessor.v1_6_0.NvidiaGPU",
+                "MIGModeEnabled": false,
+                "DefaultBoostClockSpeedMHz": 1200,
+                "MaxBoostClockSpeedMHz": 1800,
+                "CCModeEnabled": true,
+                "TotalNumberNVLinks": 18,
+                "MNNVLinkTopology": {
+                    "ChassisSerialNumber": "chassis-serial",
+                    "HostID": 17,
+                    "IBGUID": "ib-guid",
+                    "PeerType": "Direct",
+                    "TraySlotIndex": 2,
+                    "SystemGUID": "system-guid"
+                }
+            },
+            "OtherVendor": {"Ignored": true}
+        },
         "MaxSpeedMHz": 3600,
         "TotalCores": 72,
         "TotalThreads": 72,

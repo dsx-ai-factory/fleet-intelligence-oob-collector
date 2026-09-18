@@ -4,8 +4,8 @@ mod node;
 pub use inventory::{
     ChassisInventory, ChassisLocation, FirmwareInventory, InventoryCondition, InventoryLink,
     InventoryLinkReference, InventoryReference, InventorySourceInfo, InventoryStatus,
-    ManagerInventory, MemorySummary, PartLocation, PcieDeviceInventory, Placement,
-    ProcessorInventory, ProcessorSummary, SystemInventory,
+    ManagerInventory, MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PartLocation,
+    PcieDeviceInventory, Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
 };
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 

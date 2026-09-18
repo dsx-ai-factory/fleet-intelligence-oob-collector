@@ -6,7 +6,8 @@ use crate::models::{
     ChassisInventory, ChassisLocation, DomainError, FirmwareInventory, INVENTORY_SCHEMA_VERSION,
     InventoryCondition, InventoryLink, InventoryLinkReference, InventoryReference,
     InventorySourceInfo, InventoryStatus, InventoryUuid, ManagerInventory, NodeInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    NvidiaGpuInventory, NvlinkTopologyInventory, PcieDeviceInventory, ProcessorInventory,
+    SystemInventory,
 };
 use crate::source::SourceRecord;
 use crate::source::{ChassisData, SystemData};
@@ -247,6 +248,9 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         manufacturer: processor.manufacturer,
         model: processor.model,
         serial_number: processor.serial_number,
+        part_number: processor.part_number,
+        location: processor.location.map(map_chassis_location),
+        nvidia_gpu: processor.nvidia_gpu.map(map_nvidia_gpu),
         max_speed_mhz: processor.max_speed_mhz,
         total_cores: processor.total_cores,
         total_threads: processor.total_threads,
@@ -270,31 +274,64 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         asset_tag: chassis.asset_tag,
         power_state: chassis.power_state,
         status: chassis.status.map(map_status),
-        location: chassis.location.map(|loc| ChassisLocation {
-            part_location_context: loc.part_location_context,
-            part_location: loc.part_location.map(|part| crate::models::PartLocation {
-                service_label: part.service_label,
-                location_type: part.location_type,
-                location_ordinal_value: part.location_ordinal_value,
-                reference: part.reference,
-                orientation: part.orientation,
-            }),
-            placement: loc.placement.map(|placement| crate::models::Placement {
-                rack: placement.rack,
-                row: placement.row,
-                room: placement.room,
-                rack_offset: placement.rack_offset,
-                rack_offset_units: placement.rack_offset_units,
-                additional_info: placement.additional_info,
-                facility_name: placement.facility_name,
-            }),
-        }),
+        location: chassis.location.map(map_chassis_location),
         pcie_devices: chassis
             .pcie_devices
             .into_iter()
             .map(map_pcie_device)
             .collect(),
         links: chassis.links.into_iter().map(map_link).collect(),
+    }
+}
+
+fn map_chassis_location(loc: crate::source::ChassisLocationData) -> ChassisLocation {
+    ChassisLocation {
+        part_location_context: loc.part_location_context,
+        part_location: loc.part_location.map(|part| crate::models::PartLocation {
+            service_label: part.service_label,
+            location_type: part.location_type,
+            location_ordinal_value: part.location_ordinal_value,
+            reference: part.reference,
+            orientation: part.orientation,
+        }),
+        placement: loc.placement.map(|placement| crate::models::Placement {
+            rack: placement.rack,
+            row: placement.row,
+            room: placement.room,
+            rack_offset: placement.rack_offset,
+            rack_offset_units: placement.rack_offset_units,
+            additional_info: placement.additional_info,
+            facility_name: placement.facility_name,
+        }),
+    }
+}
+
+fn map_nvidia_gpu(gpu: crate::source::NvidiaGpuData) -> NvidiaGpuInventory {
+    NvidiaGpuInventory {
+        mig_mode_enabled: gpu.mig_mode_enabled,
+        default_boost_clock_speed_mhz: gpu.default_boost_clock_speed_mhz,
+        max_boost_clock_speed_mhz: gpu.max_boost_clock_speed_mhz,
+        cc_mode_enabled: gpu.cc_mode_enabled,
+        cc_dev_mode_enabled: gpu.cc_dev_mode_enabled,
+        protected_pcie_mode_enabled: gpu.protected_pcie_mode_enabled,
+        egm_mode_enabled: gpu.egm_mode_enabled,
+        total_nv_links: gpu.total_nv_links,
+        nvlink_topology: gpu.nvlink_topology.map(map_nvlink_topology),
+    }
+}
+
+fn map_nvlink_topology(topology: crate::source::NvlinkTopologyData) -> NvlinkTopologyInventory {
+    NvlinkTopologyInventory {
+        tray_serial_number: topology.tray_serial_number,
+        tray_slot_number: topology.tray_slot_number,
+        tray_slot_index: topology.tray_slot_index,
+        chassis_serial_number: topology.chassis_serial_number,
+        host_id: topology.host_id,
+        module_id: topology.module_id,
+        system_guid: topology.system_guid,
+        ib_guid: topology.ib_guid,
+        lsb_ib_guid: topology.lsb_ib_guid,
+        peer_type: topology.peer_type,
     }
 }
 
@@ -1065,6 +1102,9 @@ mod tests {
             manufacturer: Some("NVIDIA".to_string()),
             model: Some("Grace".to_string()),
             serial_number: Some("CPU-SN123".to_string()),
+            part_number: Some("CPU-PN123".to_string()),
+            location: None,
+            nvidia_gpu: None,
             max_speed_mhz: Some(3600),
             total_cores: Some(72),
             total_threads: Some(72),
