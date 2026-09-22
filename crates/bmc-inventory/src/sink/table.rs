@@ -4,7 +4,8 @@ use std::fmt;
 use super::InventorySink;
 use crate::models::{
     ChassisInventory, FirmwareInventory, InventoryLink, InventoryLocation, InventoryStatus,
-    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    ManagerInventory, NetworkLatencyObservation, NetworkLatencyProtocol, NetworkLatencyStatus,
+    NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -31,6 +32,10 @@ struct SummaryRow {
     chassis: String,
     firmware: String,
     domain_errors: String,
+    latency_status: String,
+    latency_rtt: String,
+    latency_packet_loss: String,
+    latency_error: String,
     error: String,
 }
 
@@ -43,6 +48,20 @@ struct SourceDetailRow {
     redfish_version: String,
     service_uuid: String,
     vendor: String,
+}
+
+#[derive(Debug)]
+struct NetworkLatencyDetailRow {
+    protocol: String,
+    status: String,
+    observed_at: String,
+    resolved_address: String,
+    attempted_probes: String,
+    successful_probes: String,
+    minimum_rtt: String,
+    median_rtt: String,
+    packet_loss: String,
+    error: String,
 }
 
 #[derive(Debug)]
@@ -177,6 +196,29 @@ fn status_health_rollup(status: Option<&InventoryStatus>) -> String {
         .unwrap_or_default()
 }
 
+fn network_latency_protocol(protocol: NetworkLatencyProtocol) -> String {
+    match protocol {
+        NetworkLatencyProtocol::Icmp => "icmp".to_string(),
+    }
+}
+
+fn network_latency_status(status: NetworkLatencyStatus) -> String {
+    match status {
+        NetworkLatencyStatus::Measured => "measured".to_string(),
+        NetworkLatencyStatus::Unavailable => "unavailable".to_string(),
+    }
+}
+
+fn format_rtt(micros: Option<u64>) -> String {
+    micros
+        .map(|micros| format!("{micros} us"))
+        .unwrap_or_default()
+}
+
+fn format_packet_loss(percent: f64) -> String {
+    format!("{percent:.1}%")
+}
+
 fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> String {
     let rows = inventories.iter().map(SummaryRow::from).collect::<Vec<_>>();
     let mut out = render_table(
@@ -198,6 +240,10 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "Chassis",
             "Firmware",
             "Domain Errors",
+            "Latency Status",
+            "Median RTT",
+            "Packet Loss",
+            "Latency Error",
             "Target Error",
         ],
         rows.iter().map(SummaryRow::values),
@@ -236,13 +282,17 @@ impl From<&NodeInventory> for SummaryRow {
             chassis: inventory.chassis.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
             domain_errors: inventory.domain_errors.len().to_string(),
+            latency_status: network_latency_status(inventory.network_latency.status),
+            latency_rtt: format_rtt(inventory.network_latency.median_rtt_micros),
+            latency_packet_loss: format_packet_loss(inventory.network_latency.packet_loss_percent),
+            latency_error: inventory.network_latency.error.clone().unwrap_or_default(),
             error: inventory.target_error.clone().unwrap_or_default(),
         }
     }
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 18] {
+    fn values(&self) -> [String; 22] {
         [
             self.name.clone(),
             self.compute_zone.clone(),
@@ -261,6 +311,10 @@ impl SummaryRow {
             self.chassis.clone(),
             self.firmware.clone(),
             self.domain_errors.clone(),
+            self.latency_status.clone(),
+            self.latency_rtt.clone(),
+            self.latency_packet_loss.clone(),
+            self.latency_error.clone(),
             self.error.clone(),
         ]
     }
@@ -290,6 +344,49 @@ impl SourceDetailRow {
             ["Redfish Version".to_string(), self.redfish_version.clone()],
             ["Service UUID".to_string(), self.service_uuid.clone()],
             ["Vendor".to_string(), self.vendor.clone()],
+        ]
+    }
+}
+
+impl From<&NetworkLatencyObservation> for NetworkLatencyDetailRow {
+    fn from(observation: &NetworkLatencyObservation) -> Self {
+        Self {
+            protocol: network_latency_protocol(observation.protocol),
+            status: network_latency_status(observation.status),
+            observed_at: observation.observed_at.clone(),
+            resolved_address: observation.resolved_address.clone(),
+            attempted_probes: observation.attempted_probes.to_string(),
+            successful_probes: observation.successful_probes.to_string(),
+            minimum_rtt: format_rtt(observation.minimum_rtt_micros),
+            median_rtt: format_rtt(observation.median_rtt_micros),
+            packet_loss: format_packet_loss(observation.packet_loss_percent),
+            error: observation.error.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl NetworkLatencyDetailRow {
+    fn values(&self) -> Vec<[String; 2]> {
+        vec![
+            ["Protocol".to_string(), self.protocol.clone()],
+            ["Status".to_string(), self.status.clone()],
+            ["Observed At".to_string(), self.observed_at.clone()],
+            [
+                "Resolved Address".to_string(),
+                self.resolved_address.clone(),
+            ],
+            [
+                "Attempted Probes".to_string(),
+                self.attempted_probes.clone(),
+            ],
+            [
+                "Successful Probes".to_string(),
+                self.successful_probes.clone(),
+            ],
+            ["Minimum RTT".to_string(), self.minimum_rtt.clone()],
+            ["Median RTT".to_string(), self.median_rtt.clone()],
+            ["Packet Loss".to_string(), self.packet_loss.clone()],
+            ["Error".to_string(), self.error.clone()],
         ]
     }
 }
@@ -598,6 +695,13 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
     out.push_str("Source Information\n");
     out.push_str(&render_table(&["Attribute", "Value"], source_row.values()));
 
+    let network_latency_row = NetworkLatencyDetailRow::from(&inventory.network_latency);
+    out.push_str("Network Latency\n");
+    out.push_str(&render_table(
+        &["Attribute", "Value"],
+        network_latency_row.values(),
+    ));
+
     let manager_rows = inventory
         .managers
         .iter()
@@ -894,6 +998,7 @@ mod tests {
     use super::*;
     use crate::models::{
         INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, ManagerInventory,
+        NetworkLatencyObservation, NetworkLatencyProtocol, NetworkLatencyStatus,
         PcieDeviceInventory, SystemInventory,
     };
 
@@ -966,6 +1071,10 @@ mod tests {
         assert_eq!(row.chassis, "1");
         assert_eq!(row.firmware, "1");
         assert_eq!(row.domain_errors, "0");
+        assert_eq!(row.latency_status, "measured");
+        assert_eq!(row.latency_rtt, "120 us");
+        assert_eq!(row.latency_packet_loss, "20.0%");
+        assert_eq!(row.latency_error, "");
         assert_eq!(row.error, "timeout");
     }
 
@@ -986,6 +1095,10 @@ mod tests {
         assert!(rendered.contains("Redfish"));
         assert!(rendered.contains("Service UUID"));
         assert!(rendered.contains("Vendor"));
+        assert!(rendered.contains("Latency Status"));
+        assert!(rendered.contains("Median RTT"));
+        assert!(rendered.contains("Packet Loss"));
+        assert!(rendered.contains("Latency Error"));
         assert!(rendered.contains("10.0.0.1"));
         assert!(rendered.contains("bmc-a.example.com"));
         assert!(rendered.contains("redfish"));
@@ -993,6 +1106,9 @@ mod tests {
         assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
         assert!(rendered.contains("NVIDIA"));
         assert!(rendered.contains("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
+        assert!(rendered.contains("measured"));
+        assert!(rendered.contains("120 us"));
+        assert!(rendered.contains("20.0%"));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }
@@ -1007,6 +1123,12 @@ mod tests {
         assert!(rendered.contains("Redfish Version"));
         assert!(rendered.contains("Service UUID"));
         assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
+        assert!(rendered.contains("Network Latency\n"));
+        assert!(rendered.contains("| Protocol          | icmp"));
+        assert!(rendered.contains("| Status            | measured"));
+        assert!(rendered.contains("| Minimum RTT       | 80 us"));
+        assert!(rendered.contains("| Median RTT        | 120 us"));
+        assert!(rendered.contains("| Packet Loss       | 20.0%"));
         assert!(rendered.contains("Managers\n"));
         assert!(rendered.contains("OpenBMC"));
         assert!(rendered.contains("Systems\n"));
@@ -1035,6 +1157,7 @@ mod tests {
         assert!(rendered.contains("/redfish/v1/Systems/System"));
 
         let source = rendered.find("Source Information\n").expect("source");
+        let network_latency = rendered.find("Network Latency\n").expect("network latency");
         let manager = rendered.find("Managers\n").expect("manager");
         let system = rendered.find("Systems\n").expect("system");
         let processor = rendered.find("Processors\n").expect("processor");
@@ -1042,13 +1165,30 @@ mod tests {
         let pcie = rendered.find("PCIe Devices\n").expect("pcie");
         let firmware = rendered.find("Firmware\n").expect("firmware");
         let links = rendered.find("Links\n").expect("links");
-        assert!(source < manager);
+        assert!(source < network_latency);
+        assert!(network_latency < manager);
         assert!(manager < system);
         assert!(system < processor);
         assert!(processor < chassis);
         assert!(chassis < pcie);
         assert!(pcie < firmware);
         assert!(firmware < links);
+    }
+
+    #[test]
+    fn render_inventory_tables_includes_latency_error() {
+        let mut inventory = full_inventory();
+        inventory.network_latency.status = NetworkLatencyStatus::Unavailable;
+        inventory.network_latency.minimum_rtt_micros = None;
+        inventory.network_latency.median_rtt_micros = None;
+        inventory.network_latency.packet_loss_percent = 100.0;
+        inventory.network_latency.error = Some("operation not permitted".to_string());
+
+        let rendered = render_inventory_tables(&[inventory], true);
+
+        assert!(rendered.contains("unavailable"));
+        assert!(rendered.contains("100.0%"));
+        assert!(rendered.contains("operation not permitted"));
     }
 
     #[test]
@@ -1085,7 +1225,18 @@ mod tests {
             compute_zone: Some("us-west-dc1".to_string()),
             node_group: Some("gb200-training".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
-            network_latency: Default::default(),
+            network_latency: NetworkLatencyObservation {
+                protocol: NetworkLatencyProtocol::Icmp,
+                status: NetworkLatencyStatus::Measured,
+                observed_at: "2026-01-01T00:00:00Z".to_string(),
+                resolved_address: "10.0.0.1".to_string(),
+                attempted_probes: 5,
+                successful_probes: 4,
+                minimum_rtt_micros: Some(80),
+                median_rtt_micros: Some(120),
+                packet_loss_percent: 20.0,
+                error: None,
+            },
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
