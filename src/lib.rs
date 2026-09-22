@@ -781,10 +781,10 @@ mod tests {
         partial.domain_errors.push(DomainError {
             domain: "firmware".to_string(),
             resource: None,
-            message: "not supported".to_string(),
+            message: "not supported".into(),
         });
         let mut failed = inventory("10.0.0.3");
-        failed.target_error = Some("connection refused".to_string());
+        failed.target_error = Some("connection refused".into());
 
         assert_eq!(
             summarize_inventory_collection(&[successful, partial, failed]),
@@ -802,7 +802,7 @@ mod tests {
         let mut exportable = inventory("10.0.0.1");
         exportable.uuid = InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187");
         let mut collection_failure = inventory("10.0.0.2");
-        collection_failure.target_error = Some("connection refused".to_string());
+        collection_failure.target_error = Some("connection refused".into());
 
         let (exportable, unexportable) =
             partition_exportable_inventory(vec![exportable, collection_failure]);
@@ -840,7 +840,7 @@ mod tests {
         );
         failed.component_errors.push(ComponentError {
             component_id: Some("GPU_0".to_string()),
-            message: "unsupported".to_string(),
+            message: "unsupported".into(),
         });
         let batch =
             BatchAttestation::new("2026-01-01T00:00:00Z".to_string(), vec![successful, failed]);

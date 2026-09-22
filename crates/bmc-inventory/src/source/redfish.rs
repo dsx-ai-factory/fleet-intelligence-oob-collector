@@ -839,6 +839,16 @@ fn normalize_link_target(odata_id: &str) -> Option<String> {
     if value.is_empty() {
         return None;
     }
+    if let Some(reference) = value.strip_prefix("//") {
+        let url = Url::parse(&format!("https://{reference}")).ok()?;
+        if !url.has_host() {
+            return None;
+        }
+        return Some(match url.fragment() {
+            Some(fragment) => format!("{}#{fragment}", url.path()),
+            None => url.path().to_string(),
+        });
+    }
     if let Ok(url) = Url::parse(value)
         && url.has_host()
     {
@@ -1186,6 +1196,13 @@ mod tests {
         assert_eq!(
             normalize_link_target("/redfish/v1/Systems/System?token=secret#/Processors/0")
                 .as_deref(),
+            Some("/redfish/v1/Systems/System#/Processors/0")
+        );
+        assert_eq!(
+            normalize_link_target(
+                "//user:secret@bmc.example.com/redfish/v1/Systems/System?token=secret#/Processors/0"
+            )
+            .as_deref(),
             Some("/redfish/v1/Systems/System#/Processors/0")
         );
         assert_eq!(

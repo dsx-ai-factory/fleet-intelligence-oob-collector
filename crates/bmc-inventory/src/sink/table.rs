@@ -236,7 +236,11 @@ impl From<&NodeInventory> for SummaryRow {
             chassis: inventory.chassis.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
             domain_errors: inventory.domain_errors.len().to_string(),
-            error: inventory.target_error.clone().unwrap_or_default(),
+            error: inventory
+                .target_error
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
         }
     }
 }
@@ -825,7 +829,7 @@ fn push_link_detail_rows(
                 resource_type.to_string(),
                 source.to_string(),
                 relation.clone(),
-                target.odata_id.clone(),
+                target.odata_id.to_string(),
             ]
         }));
     }
@@ -947,7 +951,7 @@ mod tests {
     #[test]
     fn summary_row_formats_error_and_counts() {
         let mut inventory = full_inventory();
-        inventory.target_error = Some("timeout".to_string());
+        inventory.target_error = Some("timeout".into());
 
         let row = SummaryRow::from(&inventory);
 
@@ -1099,7 +1103,7 @@ mod tests {
                 name: "System".into(),
                 description: None,
                 id: "System".to_string(),
-                odata_id: Some("/redfish/v1/Systems/System".to_string()),
+                odata_id: Some("/redfish/v1/Systems/System".to_string().into()),
                 uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
                 manufacturer: Some("NVIDIA".to_string()),
                 model: Some("GB200".to_string()),
@@ -1125,7 +1129,11 @@ mod tests {
                     name: "Processor".into(),
                     description: None,
                     id: "CPU1".to_string(),
-                    odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
+                    odata_id: Some(
+                        "/redfish/v1/Systems/System/Processors/CPU1"
+                            .to_string()
+                            .into(),
+                    ),
                     uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
                     socket: Some("CPU Socket 1".to_string()),
                     processor_type: Some("cpu".to_string()),
@@ -1149,7 +1157,7 @@ mod tests {
                 name: "Manager".into(),
                 description: None,
                 id: "BMC_0".to_string(),
-                odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
+                odata_id: Some("/redfish/v1/Managers/BMC_0".to_string().into()),
                 uuid: Some("manager-uuid".to_string()),
                 manager_type: Some("bmc".to_string()),
                 model: Some("OpenBMC".to_string()),
@@ -1166,7 +1174,7 @@ mod tests {
                 name: "Chassis".into(),
                 description: None,
                 id: "BMC_0".to_string(),
-                odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
+                odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string().into()),
                 chassis_type: Some("module".to_string()),
                 manufacturer: Some("NVIDIA".to_string()),
                 model: Some("BMC".to_string()),
@@ -1181,7 +1189,11 @@ mod tests {
                     name: "PcieDevice".into(),
                     description: None,
                     id: "GPU1".to_string(),
-                    odata_id: Some("/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1".to_string()),
+                    odata_id: Some(
+                        "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1"
+                            .to_string()
+                            .into(),
+                    ),
                     uuid: None,
                     device_type: Some("single_function".to_string()),
                     manufacturer: Some("NVIDIA".to_string()),
@@ -1200,7 +1212,11 @@ mod tests {
                 related_item: None,
                 service_id: "FirmwareInventory".to_string(),
                 id: "BMC".to_string(),
-                odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
+                odata_id: Some(
+                    "/redfish/v1/UpdateService/FirmwareInventory/BMC"
+                        .to_string()
+                        .into(),
+                ),
                 name: "BMC".to_string(),
                 version: Some("3.19.00".to_string()),
                 release_date: Some("2026-01-01T00:00:00Z".to_string()),

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bmc_error::sanitize_backend_error_message;
+use bmc_error::SanitizedErrorMessage;
 use serde::Serialize;
 
 pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
@@ -20,7 +20,7 @@ pub struct NodeAttestation {
     pub target_name: String,
     pub bmc_address: String,
     pub success: bool,
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub nonce_refresh_timestamp: Option<String>,
     pub evidences: Vec<AttestationEvidence>,
     pub component_errors: Vec<ComponentError>,
@@ -42,7 +42,7 @@ pub struct AttestationEvidence {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentError {
     pub component_id: Option<String>,
-    pub message: String,
+    pub message: SanitizedErrorMessage,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,7 +59,7 @@ pub struct BackendNodeAttestation {
     pub nonce_refresh_timestamp: Option<String>,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub evidences: Vec<BackendEvidenceItem>,
 }
 
@@ -108,12 +108,13 @@ impl NodeAttestation {
         bmc_address: String,
         message: impl Into<String>,
     ) -> Self {
+        let message = message.into();
         Self {
             node_uuid,
             target_name,
             bmc_address,
             success: false,
-            error_message: Some(message.into()),
+            error_message: Some(SanitizedErrorMessage::new(message)),
             nonce_refresh_timestamp: None,
             evidences: Vec::new(),
             component_errors: Vec::new(),
@@ -124,11 +125,7 @@ impl NodeAttestation {
         BackendNodeAttestation {
             nonce_refresh_timestamp: self.nonce_refresh_timestamp.clone(),
             success: self.success,
-            // Redact absolute URLs before upload to avoid request body filters.
-            error_message: self
-                .error_message
-                .as_deref()
-                .map(sanitize_backend_error_message),
+            error_message: self.error_message.clone(),
             evidences: self
                 .evidences
                 .iter()
@@ -217,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_payload_strips_reqwest_url_from_error_message() {
+    fn failed_attestation_sanitizes_reqwest_url_for_all_outputs() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation::failed(
@@ -231,41 +228,29 @@ mod tests {
         let value = serde_json::to_value(batch.backend_request()).expect("json");
         assert_eq!(
             value["attestations"]["node-1"]["errorMessage"],
-            "HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
+            "HTTP status client error (404 Not Found) for url ([URL_REDACTED])"
         );
-        // Local record keeps the full message for debugging.
-        assert!(
+        assert_eq!(
             batch.results_by_node_uuid["node-1"]
                 .error_message
-                .as_deref()
-                .unwrap()
-                .contains("https://10.91.54.137/")
+                .as_deref(),
+            Some("HTTP status client error (404 Not Found) for url ([URL_REDACTED])")
         );
     }
 
     #[test]
-    fn sanitize_backend_error_message_preserves_embedded_url_paths() {
+    fn failed_attestation_sanitizes_scheme_relative_url_for_all_outputs() {
+        let record = NodeAttestation::failed(
+            "node-1".into(),
+            "node-a".into(),
+            "10.0.0.1".into(),
+            "failed //user:secret@host/redfish/v1/ComponentIntegrity?token=x#item",
+        );
+        let value = serde_json::to_value(record.backend_payload()).expect("serialize");
+        assert_eq!(value["errorMessage"], "failed [URL_REDACTED]");
         assert_eq!(
-            sanitize_backend_error_message(
-                "fetch failed contacting https://10.0.0.1/redfish/v1/ComponentIntegrity"
-            ),
-            "fetch failed contacting /redfish/v1/ComponentIntegrity"
+            record.error_message.as_deref(),
+            Some("failed [URL_REDACTED]")
         );
-        assert_eq!(
-            sanitize_backend_error_message("no GPU IRoT ComponentIntegrity resources found"),
-            "no GPU IRoT ComponentIntegrity resources found"
-        );
-    }
-
-    #[test]
-    fn sanitize_backend_error_message_preserves_paths_for_multiple_urls() {
-        let sanitized = sanitize_backend_error_message(
-            "proxy https://10.0.0.1/redfish/v1 failed: HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
-        );
-        assert_eq!(
-            sanitized,
-            "proxy /redfish/v1 failed: HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
-        );
-        assert!(!sanitized.contains("http://") && !sanitized.contains("https://"));
     }
 }
