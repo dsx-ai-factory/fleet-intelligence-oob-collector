@@ -367,6 +367,7 @@ impl Serialize for BackendInventory<'_> {
             node_group,
             uuid,
             source,
+            network_latency,
             primary_system_id,
             managers,
             systems,
@@ -375,7 +376,7 @@ impl Serialize for BackendInventory<'_> {
             domain_errors,
             target_error,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(16))?;
+        let mut map = serializer.serialize_map(Some(17))?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
@@ -391,6 +392,7 @@ impl Serialize for BackendInventory<'_> {
         }
         map.serialize_entry("uuid", uuid)?;
         map.serialize_entry("source", source)?;
+        map.serialize_entry("networkLatency", network_latency)?;
         map.serialize_entry("primarySystemId", primary_system_id)?;
         map.serialize_entry("managers", managers)?;
         map.serialize_entry("systems", systems)?;
@@ -492,6 +494,7 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert_eq!(value["agent"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
+        assert_eq!(value["data"][0]["networkLatency"]["protocol"], "icmp");
         assert_eq!(value["data"][0]["kind"], "nvswitch");
         assert_eq!(value["data"][0]["name"], "node-01");
         assert_eq!(value["data"][0]["computeZone"], "us-west-dc1");
@@ -679,6 +682,7 @@ mod tests {
             compute_zone: None,
             node_group: None,
             uuid: None,
+            network_latency: Default::default(),
             source: crate::models::InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),

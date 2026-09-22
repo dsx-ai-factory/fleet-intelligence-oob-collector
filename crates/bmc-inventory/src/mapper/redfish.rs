@@ -56,6 +56,7 @@ impl InventoryMapper for RedfishMapper {
 fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory {
     let target = record.target;
     let collected_at = record.collected_at;
+    let network_latency = record.network_latency;
     match record.result {
         Ok(report) => {
             let source = InventorySourceInfo {
@@ -85,6 +86,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                 node_group: target.node_group,
                 uuid: Some(node_uuid.clone()),
                 source,
+                network_latency,
                 primary_system_id: primary_system_id.clone(),
                 managers: report.managers.into_iter().map(map_manager).collect(),
                 systems: report
@@ -131,6 +133,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                 service_uuid: None,
                 vendor: None,
             },
+            network_latency,
             primary_system_id: None,
             managers: Vec::new(),
             systems: Vec::new(),
@@ -507,6 +510,7 @@ mod tests {
             SourceRecord {
                 target: target(),
                 collected_at: collected_at(),
+                network_latency: Default::default(),
                 result: Ok(RedfishReport {
                     service_root: ServiceRootData::default(),
                     managers: Vec::new(),
@@ -535,6 +539,7 @@ mod tests {
             SourceRecord {
                 target: successful_target,
                 collected_at: collected_at(),
+                network_latency: Default::default(),
                 result: Ok(RedfishReport {
                     service_root: ServiceRootData::default(),
                     managers: Vec::new(),
@@ -553,6 +558,7 @@ mod tests {
             SourceRecord {
                 target: failed_target,
                 collected_at: collected_at(),
+                network_latency: Default::default(),
                 result: Err("unreachable".to_string()),
             },
             None,
@@ -636,6 +642,7 @@ mod tests {
         let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
+            network_latency: Default::default(),
             result: Ok(RedfishReport {
                 service_root: ServiceRootData::default(),
                 managers: Vec::new(),
@@ -699,6 +706,7 @@ mod tests {
         let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
+            network_latency: Default::default(),
             result: Ok(RedfishReport {
                 service_root: ServiceRootData::default(),
                 managers: Vec::new(),
@@ -882,6 +890,7 @@ mod tests {
         let inventory = map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
+            network_latency: Default::default(),
             result: Err("systems collection: timeout".to_string()),
         });
 
@@ -1026,6 +1035,7 @@ mod tests {
         map(SourceRecord {
             target: target(),
             collected_at: collected_at(),
+            network_latency: Default::default(),
             result: Ok(report),
         })
     }

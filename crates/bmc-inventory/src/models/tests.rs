@@ -57,6 +57,7 @@ fn node_inventory_serializes_as_backend_payload() {
         compute_zone: Some("us-west-dc1".to_string()),
         node_group: Some("gb200-training".to_string()),
         uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+        network_latency: Default::default(),
         primary_system_id: Some("System".to_string()),
         systems: vec![SystemInventory {
             name: "System".into(),
@@ -244,6 +245,18 @@ fn node_inventory_serializes_as_backend_payload() {
             "computeZone": "us-west-dc1",
             "nodeGroup": "gb200-training",
             "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
+            "networkLatency": {
+                "protocol": "icmp",
+                "status": "unavailable",
+                "observedAt": "1970-01-01T00:00:00Z",
+                "resolvedAddress": "",
+                "attemptedProbes": 0,
+                "successfulProbes": 0,
+                "minimumRttMicros": null,
+                "medianRttMicros": null,
+                "packetLossPercent": 0.0,
+                "error": "network latency was not measured"
+            },
             "primarySystemId": "System",
             "systems": [{
                 "name": "System",
@@ -440,6 +453,7 @@ fn target_error_inventory_serializes_absent_uuid() {
         compute_zone: None,
         node_group: None,
         uuid: None,
+        network_latency: Default::default(),
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
             mac: "00:11:22:33:44:55".to_string(),

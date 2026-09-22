@@ -10,6 +10,7 @@ bmc-dispatch.workspace = true
 bmc-error.workspace = true
 hickory-resolver.workspace = true
 nv-redfish.workspace = true
+ping.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

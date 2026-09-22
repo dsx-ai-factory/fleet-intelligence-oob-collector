@@ -1,8 +1,10 @@
+pub(crate) mod icmp;
 mod redfish;
 
 use async_trait::async_trait;
 
 use crate::config::Target;
+use crate::models::NetworkLatencyObservation;
 
 pub use redfish::RedfishSource;
 
@@ -19,12 +21,17 @@ pub mod inventory_domain {
 pub struct SourceRecord {
     pub target: Target,
     pub collected_at: String,
+    pub network_latency: NetworkLatencyObservation,
     pub result: Result<RedfishReport, String>,
 }
 
 #[async_trait]
-pub trait InventorySource {
-    async fn collect(&self, target: Target) -> SourceRecord;
+pub trait InventorySource: Send + Sync {
+    async fn collect(
+        &self,
+        target: Target,
+        network_latency: NetworkLatencyObservation,
+    ) -> SourceRecord;
 }
 
 #[derive(Clone, Debug)]

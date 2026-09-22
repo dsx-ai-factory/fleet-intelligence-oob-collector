@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use super::{
-    ChassisInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory, SystemInventory,
+    ChassisInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory,
+    NetworkLatencyObservation, SystemInventory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +34,7 @@ pub struct NodeInventory {
     pub node_group: Option<String>,
     pub uuid: Option<InventoryUuid>,
     pub source: InventorySourceInfo,
+    pub network_latency: NetworkLatencyObservation,
     pub primary_system_id: Option<String>,
     pub managers: Vec<ManagerInventory>,
     pub systems: Vec<SystemInventory>,

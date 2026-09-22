@@ -43,6 +43,7 @@ mod tests {
             compute_zone: None,
             node_group: None,
             uuid: None,
+            network_latency: Default::default(),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),

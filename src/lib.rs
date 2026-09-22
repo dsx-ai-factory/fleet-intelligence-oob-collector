@@ -10,14 +10,13 @@ use bmc_attestation::config as attestation_config;
 use bmc_attestation::models::BatchAttestation;
 use bmc_attestation::sink::BackendSink as AttestationBackendSink;
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
+use bmc_inventory::collector::InventoryCollector;
 use bmc_inventory::config;
-use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
     BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
     JsonSink, TableSink,
 };
-use bmc_inventory::source::{InventorySource, RedfishSource};
 use futures::stream::{self, StreamExt};
 
 use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
@@ -407,16 +406,12 @@ async fn collect_and_upload_inventory(
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
-    let mapper = RedfishMapper::new();
+    let collector = InventoryCollector::new(options.insecure_tls, timeout, dispatcher)?;
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
     let producer = tokio::spawn(async move {
         let mut collections = stream::iter(collector_config.targets)
-            .map(|target| async {
-                let record = source.collect(target).await;
-                mapper.map(record).await
-            })
+            .map(|target| collector.collect(target))
             .buffer_unordered(target_concurrency);
         while let Some(inventory) = collections.next().await {
             if tx.send(inventory).await.is_err() {
@@ -735,14 +730,10 @@ async fn collect_inventory_targets(
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
-    let mapper = RedfishMapper::new();
+    let collector = InventoryCollector::new(options.insecure_tls, timeout, dispatcher)?;
 
     Ok(stream::iter(targets)
-        .map(|target| async {
-            let record = source.collect(target).await;
-            mapper.map(record).await
-        })
+        .map(|target| collector.collect(target))
         .buffered(target_concurrency)
         .collect()
         .await)
@@ -959,6 +950,7 @@ mod tests {
             compute_zone: None,
             node_group: None,
             uuid: None,
+            network_latency: Default::default(),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),

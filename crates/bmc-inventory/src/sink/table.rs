@@ -1085,6 +1085,7 @@ mod tests {
             compute_zone: Some("us-west-dc1".to_string()),
             node_group: Some("gb200-training".to_string()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
+            network_latency: Default::default(),
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),

@@ -81,12 +81,17 @@ impl RedfishSource {
 
 #[async_trait]
 impl InventorySource for RedfishSource {
-    async fn collect(&self, target: Target) -> SourceRecord {
+    async fn collect(
+        &self,
+        target: Target,
+        network_latency: crate::models::NetworkLatencyObservation,
+    ) -> SourceRecord {
         let collected_at = now_rfc3339();
         let result = self.collect_report(&target).await;
         SourceRecord {
             target,
             collected_at,
+            network_latency,
             result,
         }
     }
