@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
 
 use super::InventoryMapper;
 use super::reverse_dns::{DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname};
@@ -106,8 +107,8 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
                     .into_iter()
                     .map(|error| DomainError {
                         domain: error.domain,
-                        resource: error.resource,
-                        message: error.message,
+                        resource: error.resource.map(SanitizedUriReference::new),
+                        message: SanitizedErrorMessage::new(error.message),
                     })
                     .collect(),
                 target_error: None,
@@ -137,7 +138,7 @@ fn map_record(record: SourceRecord, host_name: Option<String>) -> NodeInventory 
             chassis: Vec::new(),
             firmware: Vec::new(),
             domain_errors: Vec::new(),
-            target_error: Some(error),
+            target_error: Some(SanitizedErrorMessage::new(error)),
         },
     }
 }
@@ -200,7 +201,7 @@ fn map_manager(manager: crate::source::ManagerData) -> ManagerInventory {
         name: manager.name,
         description: manager.description,
         id: manager.id,
-        odata_id: manager.odata_id,
+        odata_id: sanitize_optional_uri(manager.odata_id),
         uuid: manager.uuid,
         manager_type: manager.manager_type,
         model: manager.model,
@@ -215,7 +216,7 @@ fn map_system(system: SystemData, uuid: Option<InventoryUuid>) -> SystemInventor
         name: system.name,
         description: system.description,
         id: system.id,
-        odata_id: system.odata_id,
+        odata_id: sanitize_optional_uri(system.odata_id),
         uuid,
         manufacturer: system.manufacturer,
         model: system.model,
@@ -239,7 +240,7 @@ fn map_processor(processor: crate::source::ProcessorData) -> ProcessorInventory 
         name: processor.name,
         description: processor.description,
         id: processor.id,
-        odata_id: processor.odata_id,
+        odata_id: sanitize_optional_uri(processor.odata_id),
         uuid: processor.uuid,
         socket: processor.socket,
         processor_type: processor.processor_type,
@@ -264,7 +265,7 @@ fn map_chassis(chassis: ChassisData) -> ChassisInventory {
         name: chassis.name,
         description: chassis.description,
         id: chassis.id,
-        odata_id: chassis.odata_id,
+        odata_id: sanitize_optional_uri(chassis.odata_id),
         chassis_type: chassis.chassis_type,
         manufacturer: chassis.manufacturer,
         model: chassis.model,
@@ -340,7 +341,7 @@ fn map_pcie_device(device: crate::source::PcieDeviceData) -> PcieDeviceInventory
         name: device.name,
         description: device.description,
         id: device.id,
-        odata_id: device.odata_id,
+        odata_id: sanitize_optional_uri(device.odata_id),
         uuid: device.uuid,
         device_type: device.device_type,
         manufacturer: device.manufacturer,
@@ -360,12 +361,14 @@ fn map_firmware(firmware: crate::source::FirmwareData) -> FirmwareInventory {
         related_item: firmware.related_item.map(|items| {
             items
                 .into_iter()
-                .map(|odata_id| InventoryLinkReference { odata_id })
+                .map(|odata_id| InventoryLinkReference {
+                    odata_id: SanitizedUriReference::new(odata_id),
+                })
                 .collect()
         }),
         service_id: firmware.service_id,
         id: firmware.id,
-        odata_id: firmware.odata_id,
+        odata_id: sanitize_optional_uri(firmware.odata_id),
         name: firmware.name,
         version: firmware.version,
         release_date: firmware.release_date,
@@ -411,23 +414,33 @@ fn map_condition(condition: crate::source::ConditionData) -> InventoryCondition 
     InventoryCondition {
         timestamp: condition.timestamp,
         message_id: condition.message_id,
-        message_args: condition.message_args,
-        message: condition.message,
+        message_args: condition
+            .message_args
+            .map(|args| args.into_iter().map(SanitizedErrorMessage::new).collect()),
+        message: condition.message.map(SanitizedErrorMessage::new),
         severity: condition.severity,
-        resolution: condition.resolution,
+        resolution: condition.resolution.map(SanitizedErrorMessage::new),
         condition_type: condition.condition_type,
         origin_of_condition: condition
             .origin_of_condition
-            .map(|odata_id| InventoryReference { odata_id }),
+            .map(|odata_id| InventoryReference {
+                odata_id: SanitizedUriReference::new(odata_id),
+            }),
     }
 }
 
 fn map_link((relation, link): (String, crate::source::LinkData)) -> (String, InventoryLink) {
     let value = link
         .into_iter()
-        .map(|odata_id| InventoryLinkReference { odata_id })
+        .map(|odata_id| InventoryLinkReference {
+            odata_id: SanitizedUriReference::new(odata_id),
+        })
         .collect();
     (relation, value)
+}
+
+fn sanitize_optional_uri(reference: Option<String>) -> Option<SanitizedUriReference> {
+    reference.map(SanitizedUriReference::new)
 }
 
 #[cfg(test)]
@@ -473,13 +486,7 @@ mod tests {
         );
         assert_eq!(
             condition.message_args.as_deref(),
-            Some(
-                [
-                    "CPU_1 Firmware".to_string(),
-                    "EC_STRAP_MISMATCH".to_string()
-                ]
-                .as_slice()
-            )
+            Some(["CPU_1 Firmware".into(), "EC_STRAP_MISMATCH".into()].as_slice())
         );
         assert_eq!(
             condition.message.as_deref(),
@@ -498,6 +505,109 @@ mod tests {
                 .expect("origin reference")
                 .odata_id,
             "/redfish/v1/Chassis/HGX_CPU_1"
+        );
+    }
+
+    #[test]
+    fn sanitizes_redfish_urls_before_building_inventory_models() {
+        let inventory = map_report(RedfishReport {
+            service_root: ServiceRootData::default(),
+            managers: vec![ManagerData {
+                name: "BMC".into(),
+                description: None,
+                id: "BMC".into(),
+                odata_id: Some(
+                    "//user:secret@bmc.example/redfish/v1/Managers/BMC?token=x#item".into(),
+                ),
+                uuid: None,
+                manager_type: None,
+                model: None,
+                firmware_version: None,
+                status: Some(StatusData {
+                    conditions: Some(vec![crate::source::ConditionData {
+                        timestamp: None,
+                        message_id: "Alert.1.0.Test".into(),
+                        message_args: Some(vec!["https://bmc.example/arg?token=x".into()]),
+                        message: Some(
+                            "request //user:secret@bmc.example/path?token=x failed".into(),
+                        ),
+                        severity: None,
+                        resolution: Some("retry https://bmc.example/retry?token=x".into()),
+                        condition_type: None,
+                        origin_of_condition: Some(
+                            "//bmc.example/redfish/v1/Managers/BMC?token=x#condition".into(),
+                        ),
+                    }]),
+                    health: None,
+                    health_rollup: None,
+                    state: None,
+                }),
+                links: std::collections::BTreeMap::from([(
+                    "ManagerForServers".into(),
+                    vec!["//user:secret@bmc.example/redfish/v1/Systems/1?token=x#item".into()],
+                )]),
+            }],
+            systems: Vec::new(),
+            chassis: Vec::new(),
+            firmware: Vec::new(),
+            errors: vec![crate::source::InventoryErrorData {
+                domain: "managers".into(),
+                resource: Some("//bmc.example/redfish/v1/Managers/BMC?token=x#item".into()),
+                message: "failed https://bmc.example/redfish/v1/Managers/BMC?token=x".into(),
+            }],
+        });
+
+        let manager = &inventory.managers[0];
+        assert_eq!(
+            manager.odata_id.as_deref(),
+            Some("/redfish/v1/Managers/BMC#item")
+        );
+        assert_link(
+            &manager.links,
+            "ManagerForServers",
+            "/redfish/v1/Systems/1#item",
+        );
+        let condition = &manager
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .as_ref()
+            .unwrap()[0];
+        assert_eq!(
+            condition.message_args.as_deref(),
+            Some(["[URL_REDACTED]".into()].as_slice())
+        );
+        assert_eq!(
+            condition.message.as_deref(),
+            Some("request [URL_REDACTED] failed")
+        );
+        assert_eq!(
+            condition.resolution.as_deref(),
+            Some("retry [URL_REDACTED]")
+        );
+        assert_eq!(
+            condition.origin_of_condition.as_ref().unwrap().odata_id,
+            "/redfish/v1/Managers/BMC#condition"
+        );
+        assert_eq!(
+            inventory.domain_errors[0].resource.as_deref(),
+            Some("/redfish/v1/Managers/BMC#item")
+        );
+        assert_eq!(inventory.domain_errors[0].message, "failed [URL_REDACTED]");
+
+        let rendered = serde_json::to_string(&inventory).unwrap();
+        assert!(!rendered.contains("user:secret@"));
+        assert!(!rendered.contains("token=x"));
+
+        let failed = map(SourceRecord {
+            target: target(),
+            collected_at: collected_at(),
+            result: Err("failed //user:secret@bmc.example/redfish/v1?token=x".into()),
+        });
+        assert_eq!(
+            failed.target_error.as_deref(),
+            Some("failed [URL_REDACTED]")
         );
     }
 

@@ -7,16 +7,13 @@ fn inventory_condition_serializes_diagnostic_fields() {
     let condition = InventoryCondition {
         timestamp: Some("2026-08-25T20:51:47Z".to_string()),
         message_id: "ResourceEvent.1.0.ResourceErrorsDetected".to_string(),
-        message_args: Some(vec![
-            "CPU_1 Firmware".to_string(),
-            "EC_STRAP_MISMATCH".to_string(),
-        ]),
-        message: Some("The resource property CPU_1 Firmware has detected errors.".to_string()),
+        message_args: Some(vec!["CPU_1 Firmware".into(), "EC_STRAP_MISMATCH".into()]),
+        message: Some("The resource property CPU_1 Firmware has detected errors.".into()),
         severity: Some("Critical".to_string()),
-        resolution: Some("Reset the component and collect logs.".to_string()),
+        resolution: Some("Reset the component and collect logs.".into()),
         condition_type: Some("Alert".to_string()),
         origin_of_condition: Some(InventoryReference {
-            odata_id: "/redfish/v1/Chassis/HGX_CPU_1".to_string(),
+            odata_id: "/redfish/v1/Chassis/HGX_CPU_1".to_string().into(),
         }),
     };
 
@@ -62,7 +59,7 @@ fn node_inventory_serializes_as_backend_payload() {
             name: "System".into(),
             description: None,
             id: "System".to_string(),
-            odata_id: Some("/redfish/v1/Systems/System".to_string()),
+            odata_id: Some("/redfish/v1/Systems/System".to_string().into()),
             uuid: InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187"),
             manufacturer: Some("NVIDIA".to_string()),
             model: Some("GB200".to_string()),
@@ -88,7 +85,11 @@ fn node_inventory_serializes_as_backend_payload() {
                 name: "Processor".into(),
                 description: None,
                 id: "CPU1".to_string(),
-                odata_id: Some("/redfish/v1/Systems/System/Processors/CPU1".to_string()),
+                odata_id: Some(
+                    "/redfish/v1/Systems/System/Processors/CPU1"
+                        .to_string()
+                        .into(),
+                ),
                 uuid: Some("22222222-3333-4444-5555-666666666666".to_string()),
                 socket: Some("CPU Socket 1".to_string()),
                 processor_type: Some("cpu".to_string()),
@@ -152,7 +153,7 @@ fn node_inventory_serializes_as_backend_payload() {
             name: "Manager".into(),
             description: None,
             id: "BMC_0".to_string(),
-            odata_id: Some("/redfish/v1/Managers/BMC_0".to_string()),
+            odata_id: Some("/redfish/v1/Managers/BMC_0".to_string().into()),
             uuid: Some("11111111-2222-3333-4444-555555555555".to_string()),
             manager_type: Some("bmc".to_string()),
             model: Some("OpenBMC".to_string()),
@@ -169,7 +170,7 @@ fn node_inventory_serializes_as_backend_payload() {
             name: "Chassis".into(),
             description: None,
             id: "BMC_0".to_string(),
-            odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string()),
+            odata_id: Some("/redfish/v1/Chassis/BMC_0".to_string().into()),
             chassis_type: Some("module".to_string()),
             manufacturer: Some("NVIDIA".to_string()),
             model: Some("BMC".to_string()),
@@ -197,7 +198,11 @@ fn node_inventory_serializes_as_backend_payload() {
                 name: "PcieDevice".into(),
                 description: None,
                 id: "GPU1".to_string(),
-                odata_id: Some("/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1".to_string()),
+                odata_id: Some(
+                    "/redfish/v1/Chassis/BMC_0/PCIeDevices/GPU1"
+                        .to_string()
+                        .into(),
+                ),
                 uuid: None,
                 device_type: Some("single_function".to_string()),
                 manufacturer: Some("NVIDIA".to_string()),
@@ -216,7 +221,11 @@ fn node_inventory_serializes_as_backend_payload() {
             related_item: None,
             service_id: "FirmwareInventory".to_string(),
             id: "BMC".to_string(),
-            odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/BMC".to_string()),
+            odata_id: Some(
+                "/redfish/v1/UpdateService/FirmwareInventory/BMC"
+                    .to_string()
+                    .into(),
+            ),
             name: "BMC".to_string(),
             version: Some("3.19.00".to_string()),
             release_date: Some("2026-01-01T00:00:00Z".to_string()),
@@ -225,8 +234,8 @@ fn node_inventory_serializes_as_backend_payload() {
         }],
         domain_errors: vec![DomainError {
             domain: "chassis.pcieDevices".to_string(),
-            resource: Some("HGX_GPU_SXM_0".to_string()),
-            message: "timeout".to_string(),
+            resource: Some("HGX_GPU_SXM_0".into()),
+            message: "timeout".into(),
         }],
         target_error: None,
     };
@@ -455,7 +464,7 @@ fn target_error_inventory_serializes_absent_uuid() {
         chassis: Vec::new(),
         firmware: Vec::new(),
         domain_errors: Vec::new(),
-        target_error: Some("malformed system UUID".to_string()),
+        target_error: Some("malformed system UUID".into()),
     };
 
     let value = serde_json::to_value(inventory).expect("json");

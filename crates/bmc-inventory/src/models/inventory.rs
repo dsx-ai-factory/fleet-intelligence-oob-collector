@@ -1,3 +1,4 @@
+use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
 use serde::Serialize;
 
 use super::InventoryUuid;
@@ -20,7 +21,7 @@ pub struct ManagerInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub uuid: Option<String>,
     pub manager_type: Option<String>,
     pub model: Option<String>,
@@ -35,7 +36,7 @@ pub struct SystemInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub uuid: Option<InventoryUuid>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
@@ -59,7 +60,7 @@ pub struct ProcessorInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub uuid: Option<String>,
     pub socket: Option<String>,
     pub processor_type: Option<String>,
@@ -113,7 +114,7 @@ pub struct ChassisInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub chassis_type: Option<String>,
     pub manufacturer: Option<String>,
     pub model: Option<String>,
@@ -142,7 +143,7 @@ pub struct PcieDeviceInventory {
     pub name: String,
     pub description: Option<String>,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub uuid: Option<String>,
     pub device_type: Option<String>,
     pub manufacturer: Option<String>,
@@ -162,7 +163,7 @@ pub struct FirmwareInventory {
     pub related_item: Option<Vec<InventoryLinkReference>>,
     pub service_id: String,
     pub id: String,
-    pub odata_id: Option<String>,
+    pub odata_id: Option<SanitizedUriReference>,
     pub name: String,
     pub version: Option<String>,
     pub release_date: Option<String>,
@@ -184,10 +185,10 @@ pub struct InventoryStatus {
 pub struct InventoryCondition {
     pub timestamp: Option<String>,
     pub message_id: String,
-    pub message_args: Option<Vec<String>>,
-    pub message: Option<String>,
+    pub message_args: Option<Vec<SanitizedErrorMessage>>,
+    pub message: Option<SanitizedErrorMessage>,
     pub severity: Option<String>,
-    pub resolution: Option<String>,
+    pub resolution: Option<SanitizedErrorMessage>,
     pub condition_type: Option<String>,
     pub origin_of_condition: Option<InventoryReference>,
 }
@@ -195,7 +196,7 @@ pub struct InventoryCondition {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryReference {
-    pub odata_id: String,
+    pub odata_id: SanitizedUriReference,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -227,7 +228,7 @@ pub type InventoryLink = Vec<InventoryLinkReference>;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryLinkReference {
-    pub odata_id: String,
+    pub odata_id: SanitizedUriReference,
 }
 
 #[derive(Debug, Default, Serialize)]
