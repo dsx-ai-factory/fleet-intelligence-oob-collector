@@ -12,6 +12,8 @@ For the repository-level component and runtime view, see the
 
 ```text
 Target
+  -> InventoryCollector
+  -> source::icmp::IcmpProbe
   -> source::RedfishSource
   -> source::RedfishReport
   -> mapper::RedfishMapper
@@ -19,7 +21,10 @@ Target
   -> sink::{TableSink, JsonSink, BackendSink}
 ```
 
-`RedfishSource` collects raw-ish Redfish data into source structs. `RedfishMapper`
+`InventoryCollector` first measures ICMP network latency, then runs Redfish
+collection with the resulting observation. An unavailable latency measurement
+does not prevent Redfish collection. `RedfishSource` collects raw-ish Redfish
+data into source structs. `RedfishMapper`
 acts as the processing stage: it enriches source metadata with best-effort
 reverse DNS and normalizes the report into the backend payload shape.
 
