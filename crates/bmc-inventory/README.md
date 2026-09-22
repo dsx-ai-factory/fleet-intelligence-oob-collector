@@ -89,24 +89,7 @@ for that target and record the collection failure instead.
 
 ## PCIe Device Traversal
 
-PCIe devices are collected from every chassis by default. A small set of known
-platform policies narrows traversal where broad collection is known to produce
-duplicates or unrelated devices.
-
-Current policies:
-
-- AMI with selected system `DGX`: collect PCIe devices from chassis IDs starting
-  with `HGX_GPU_SXM` or `HGX_NVSwitch`.
-- AMI, Dell, HPE, Supermicro, and Lenovo: collect PCIe devices only from the
-  chassis whose ID matches the selected system ID.
-- All other platforms: collect PCIe devices from all chassis.
-
-Add fixture-backed tests before adding another narrowed traversal policy.
-
-## Vendor And Platform Quirks
-
-- Redfish `Vendor` matching is case-insensitive.
-- AMI DGX/Viking platforms use special PCIe chassis selection rules.
+Collect PCIe devices from each chassis’s advertised `PCIeDevices` collection.
 
 ## Output Conventions
 
