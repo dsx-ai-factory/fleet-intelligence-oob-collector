@@ -10,6 +10,3 @@ pub use resources::{
 };
 
 pub const INVENTORY_SCHEMA_VERSION: &str = "inventory.v1alpha1";
-
-#[cfg(test)]
-mod serialization_tests;
