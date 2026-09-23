@@ -30,8 +30,9 @@ target config + projected credential files
                                        telemetry API
 ```
 
-Inventory follows a source → mapper → model → sink pipeline. This keeps
-vendor-specific Redfish structures out of the Fleet Intelligence schema.
+Inventory follows a source → model → sink pipeline. The Redfish source builds
+the Fleet Intelligence inventory model directly, keeping vendor-specific
+Redfish structures inside the source.
 Inventory and attestation use the same dispatcher so their requests share
 per-BMC concurrency and rate limits.
 
@@ -98,8 +99,8 @@ cluster CNI.
 
 ### Redfish URI sanitization
 
-The Redfish mapper removes URL authorities (including credentials) and queries
-from `@odata.id` references before building product inventory models. Absolute
+The Redfish source removes URL authorities (including credentials) and queries
+from `@odata.id` references while building product inventory models. Absolute
 and scheme-relative references retain only their resource path and fragment;
 malformed or pathless URL references are replaced with `[URL_REDACTED]`.
 Relative resource paths remain relative, with query data removed.
@@ -114,4 +115,4 @@ detection in arbitrary BMC-provided strings.
 Product-model URI and error fields use transparent sanitized string types with
 private inner values. All public construction paths therefore apply the same
 sanitization, including callers that construct models without using the Redfish
-mapper. Their serialized JSON representation remains a normal string.
+source. Their serialized JSON representation remains a normal string.

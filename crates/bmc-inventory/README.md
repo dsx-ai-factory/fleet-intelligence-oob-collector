@@ -13,23 +13,21 @@ For the repository-level component and runtime view, see the
 ```text
 Target
   -> source::RedfishSource
-  -> source::RedfishReport
-  -> mapper::RedfishMapper
   -> models::NodeInventory
   -> sink::{TableSink, JsonSink, BackendSink}
 ```
 
-`RedfishSource` collects raw-ish Redfish data into source structs. `RedfishMapper`
-acts as the processing stage: it enriches source metadata with best-effort
-reverse DNS and normalizes the report into the backend payload shape.
+`RedfishSource` converts Redfish resources directly into the inventory model. It
+resolves source metadata with best-effort reverse DNS and assigns node identity
+after collecting canonical resource models.
 
 ## Node Identity
 
 - The primary node UUID comes from the selected Redfish `ComputerSystem.UUID`.
 - The selected system is the first system with a non-empty BIOS version.
-- If no system has a BIOS version, the mapper falls back to the first system in
+- If no system has a BIOS version, the source falls back to the first system in
   the Redfish systems collection.
-- If the selected system has a missing, empty, or malformed UUID, the mapper
+- If the selected system has a missing, empty, or malformed UUID, the source
   derives a stable UUID from the Redfish service root UUID when present, or the
   target address otherwise.
 - `NodeInventory.primarySystemId` records the selected system ID used for node
@@ -45,7 +43,7 @@ reverse DNS and normalizes the report into the backend payload shape.
 The BIOS-based selection is a host-system heuristic. Some BMCs expose auxiliary
 systems, such as BMC, DPU, or baseboard systems, in the same collection as the
 host. The host system is the one expected to carry BIOS data and the stable node
-UUID. The mapper still preserves every collected Redfish manager and system in
+UUID. The source still preserves every collected Redfish manager and system in
 `managers[]` and `systems[]`; selection only determines the top-level node UUID
 and primary marker.
 

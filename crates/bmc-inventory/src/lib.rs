@@ -3,7 +3,6 @@
 #![cfg_attr(test, recursion_limit = "256")]
 
 pub mod config;
-pub mod mapper;
 pub mod models;
 pub mod sink;
 pub mod source;
