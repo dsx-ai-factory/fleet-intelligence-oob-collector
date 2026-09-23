@@ -534,7 +534,26 @@ mod tests {
     }
 
     #[test]
-    fn source_sanitizes_domain_errors() {}
+    fn source_sanitizes_domain_errors() {
+        let url = "https://user:secret@bmc.example.com/redfish/v1/Chassis/A?token=secret#part";
+        let mut errors = Vec::new();
+
+        push_inventory_error(
+            &mut errors,
+            inventory_domain::CHASSIS,
+            Some(url.to_string()),
+            format!("GET {url} failed"),
+        );
+
+        assert_eq!(errors.len(), 1);
+        let error = &errors[0];
+        assert_eq!(error.domain, inventory_domain::CHASSIS);
+        assert_eq!(error.message.as_ref(), "GET [URL_REDACTED] failed");
+        assert_eq!(
+            error.resource.as_ref().map(AsRef::as_ref),
+            Some("/redfish/v1/Chassis/A#part")
+        );
+    }
 
     #[tokio::test]
     async fn collect_report_from_mock_bmc_traverses_inventory() {
