@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,29 +7,30 @@ use async_trait::async_trait;
 use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::ServiceRoot;
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::resources::collect_report_from_root;
 use crate::config::Target;
-use crate::models::NodeInventory;
+use crate::models::{LatencyMeasurement, NodeInventory};
 use crate::source::assembly::assemble;
 use crate::source::reverse_dns::{
     DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname,
 };
-use crate::source::{InventorySource, RedfishReport};
+use crate::source::tcp_probe::{self, LatencyProbe};
+use crate::source::{InventorySource, RedfishReport, now_rfc3339};
 
 type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
 const MAX_REDIRECTS: usize = 3;
 /// Identifies collector traffic in BMC access logs.
 const USER_AGENT: &str = "fleet-intelligence-oob-collector";
+const DEFAULT_REDFISH_PORT: u16 = 443;
 
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
     dispatcher: Arc<Dispatcher>,
     reverse_dns: Option<ReverseDnsResolver>,
+    latency_probe: LatencyProbe,
 }
 
 impl RedfishSource {
@@ -63,7 +65,40 @@ impl RedfishSource {
             client,
             dispatcher,
             reverse_dns,
+            latency_probe: LatencyProbe::Disabled,
         })
+    }
+
+    /// Measure collector-to-BMC latency after each target's Redfish
+    /// collection.
+    #[must_use]
+    pub fn with_latency_probe(mut self, latency_probe: LatencyProbe) -> Self {
+        self.latency_probe = latency_probe;
+        self
+    }
+
+    async fn measure_latency(&self, target: &Target) -> Vec<LatencyMeasurement> {
+        let destination = SocketAddr::new(target.ip, target.port.unwrap_or(DEFAULT_REDFISH_PORT));
+        let config = match self.latency_probe {
+            LatencyProbe::Disabled => return Vec::new(),
+            LatencyProbe::Intercepted => return vec![tcp_probe::intercepted(destination)],
+            LatencyProbe::Enabled(config) => config,
+        };
+        let Some(gate) = self.dispatcher.inventory_gate(&target.mac) else {
+            return vec![tcp_probe::unavailable(
+                destination,
+                format!("no dispatcher endpoint for target {:?}", target.mac),
+            )];
+        };
+        // One admission covers the whole round so the probe respects per-BMC
+        // rate and concurrency limits without spending a token per connect.
+        let measurement = gate
+            .execute(async {
+                Ok::<_, std::convert::Infallible>(tcp_probe::probe(destination, config).await)
+            })
+            .await
+            .unwrap_or_else(|error| tcp_probe::unavailable(destination, error.to_string()));
+        vec![measurement]
     }
 
     async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
@@ -97,22 +132,20 @@ impl RedfishSource {
 impl InventorySource for RedfishSource {
     async fn collect(&self, target: Target) -> NodeInventory {
         let collected_at = now_rfc3339();
-        let (result, host_name) = tokio::join!(
-            self.collect_report(&target),
+        let redfish_then_probe = async {
+            let result = self.collect_report(&target).await;
+            (result, self.measure_latency(&target).await)
+        };
+        let ((result, latency), host_name) = tokio::join!(
+            redfish_then_probe,
             resolve_hostname(
                 self.reverse_dns.as_ref(),
                 target.ip,
                 DEFAULT_REVERSE_DNS_TIMEOUT,
             )
         );
-        assemble(target, collected_at, host_name, result)
+        assemble(target, collected_at, host_name, result, latency)
     }
-}
-
-fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn bmc_url(address: &str) -> Result<Url, Box<dyn Error>> {

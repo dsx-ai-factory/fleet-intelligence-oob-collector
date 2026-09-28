@@ -32,6 +32,7 @@ fn failed_inventory() -> NodeInventory {
         fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: Some("connection refused".into()),
+        latency: Vec::new(),
     }
 }
 

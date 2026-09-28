@@ -192,6 +192,15 @@ limiting with `bmcCollector.bmcRequestsPerSecond` and `bmcCollector.bmcBurst`.
 The global in-flight ceiling is `targetConcurrency * bmcMaxInFlight`. Set
 `bmcCollector.timeoutSeconds` to control the timeout for each Redfish request.
 
+After each BMC's inventory collection, the collector measures TCP connect time
+to the BMC's Redfish port to record collector-to-BMC network latency. Each
+round opens five connections without sending TLS or HTTP data and shares the
+BMC's request limits. Set `bmcCollector.latencyProbe: false` to
+disable it. If a service mesh sidecar intercepts the collector's outbound TCP,
+the measurement is reported as `intercepted`; exclude the collector pod from
+sidecar injection, or exclude BMC address ranges from outbound capture, to get
+usable measurements.
+
 See `values.yaml` for the small set of supported settings.
 When `bmcCollector.image.tag` is empty, the chart uses its own version as the
 image tag.

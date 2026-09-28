@@ -65,6 +65,10 @@ struct CollectorArgs {
 
     #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
     timeout_seconds: u64,
+
+    /// Skip the per-BMC TCP connect latency probe.
+    #[arg(long, env = "FLEETINT_DISABLE_LATENCY_PROBE")]
+    disable_latency_probe: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -127,6 +131,7 @@ impl CollectorArgs {
             bmc_requests_per_second: self.bmc_requests_per_second,
             bmc_burst: self.bmc_burst,
             timeout_seconds: self.timeout_seconds,
+            latency_probe: !self.disable_latency_probe,
         }
     }
 }

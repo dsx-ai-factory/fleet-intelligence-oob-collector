@@ -63,6 +63,7 @@ fn compute_node_inventory_serializes_expected_json() {
         fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: None,
+        latency: Vec::new(),
     };
     inventory.managers.push(ManagerInventory {
         name: "Manager".to_string(),
@@ -431,6 +432,7 @@ fn nvswitch_node_inventory_serializes_expected_json() {
         }],
         domain_errors: Vec::new(),
         target_error: None,
+        latency: Vec::new(),
     };
 
     let actual = serde_json::to_value(inventory).expect("serialize inventory");

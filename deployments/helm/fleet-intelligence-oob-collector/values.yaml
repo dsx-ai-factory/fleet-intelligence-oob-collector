@@ -47,6 +47,8 @@ bmcCollector:
   bmcBurst: 10
   # Timeout for each Redfish request.
   timeoutSeconds: 30
+  # Measure collector-to-BMC TCP connect time after each inventory collection.
+  latencyProbe: true
 
 # Optional NICo Redfish hardware-health service. Its generated TOML
 # configuration may contain BMC credentials and is kept in a memory-backed

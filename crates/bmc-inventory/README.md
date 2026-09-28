@@ -19,7 +19,8 @@ Target
 
 `RedfishSource` converts Redfish resources directly into the inventory model. It
 resolves source metadata with best-effort reverse DNS and assigns node identity
-after collecting canonical resource models.
+after collecting canonical resource models. When enabled, it also measures
+collector-to-BMC latency after the Redfish collection completes.
 
 ## Node Identity
 
@@ -106,6 +107,30 @@ its siblings. A collection missing `Members` is an error, not an empty list, so
 it cannot clear stored fabrics. NVIDIA switch OEM data is decoded through
 nv-redfish's typed `Switch::oem_nvidia()`; malformed OEM data keeps the switch's
 standard inventory and records a `fabrics.switches` error.
+
+## Network Latency Measurement
+
+`latency[]` carries collector-to-BMC network latency measurements. It is not
+part of the inventory snapshot: the backend
+receives it as a top-level upsert field and stores it outside `oobInventory`.
+The key is omitted when the probe is disabled.
+
+- Method `tcp_connect` times TCP connection establishment to the target IP and
+  Redfish port (443 unless configured). The stream is closed without sending
+  TLS or HTTP, so the duration is roughly one round trip and excludes BMC
+  application processing.
+- Each round makes five attempts, 100 ms apart, with a 2 s timeout, under one
+  dispatcher admission for the target's inventory workflow.
+- `status: ok` requires at least three successful attempts and reports `minUs`
+  and `medianUs`. Consumers should compare the minimum, which filters transient
+  queuing delay.
+- `status: unavailable` means too few attempts succeeded. It carries a sanitized
+  `error` and no latency values; it is a missing measurement, not a high one.
+- Once per collection run, the collector connects to `192.0.2.1:443` (RFC 5737
+  TEST-NET-1). A successful connect means a local component, such as a service
+  mesh sidecar, terminates outbound TCP. Every target is then reported with
+  `status: intercepted` and no probe traffic is sent.
+- Probe failures never populate `domainErrors` or `targetError`.
 
 ## PCIe Device Traversal
 

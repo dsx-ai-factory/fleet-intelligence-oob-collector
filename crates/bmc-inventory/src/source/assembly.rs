@@ -3,7 +3,8 @@ use bmc_error::SanitizedErrorMessage;
 use super::RedfishReport;
 use crate::config::Target;
 use crate::models::{
-    INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, NodeInventory, SystemInventory,
+    INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, LatencyMeasurement,
+    NodeInventory, SystemInventory,
 };
 
 const DERIVED_NODE_UUID_KEY_PREFIX: &str = "fleet-intelligence-oob:redfish:";
@@ -13,6 +14,7 @@ pub(super) fn assemble(
     collected_at: String,
     host_name: Option<String>,
     result: Result<RedfishReport, String>,
+    latency: Vec<LatencyMeasurement>,
 ) -> NodeInventory {
     let mut inventory = NodeInventory {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
@@ -40,6 +42,7 @@ pub(super) fn assemble(
         fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: None,
+        latency,
     };
 
     match result {
@@ -187,6 +190,7 @@ mod tests {
                 system("Aux", None, Some(auxiliary_uuid)),
                 system("Host", Some("3A21"), Some(host_uuid)),
             ])),
+            Vec::new(),
         );
 
         assert_eq!(inventory.primary_system_id.as_deref(), Some("Host"));
@@ -210,6 +214,7 @@ mod tests {
             "2026-01-01T00:00:00Z".into(),
             None,
             Ok(report(vec![system("Host", Some("3A21"), None)])),
+            Vec::new(),
         );
         let expected = InventoryUuid::from_stable_name(
             b"fleet-intelligence-oob:redfish:service:870155dd-d474-aca8-11ee-6e809af87c0c",
@@ -226,7 +231,7 @@ mod tests {
             resource: None,
             message: SanitizedErrorMessage::new("firmware unavailable"),
         });
-        let inventory = assemble(target(), "time".into(), None, Ok(partial));
+        let inventory = assemble(target(), "time".into(), None, Ok(partial), Vec::new());
         assert_eq!(inventory.domain_errors.len(), 1);
         assert!(inventory.target_error.is_none());
         assert!(inventory.uuid.is_some());
@@ -236,6 +241,7 @@ mod tests {
             "time".into(),
             None,
             Err("request failed at https://user:secret@bmc.example.com/redfish/v1".into()),
+            Vec::new(),
         );
         assert!(failed.uuid.is_none());
         assert!(failed.systems.is_empty());

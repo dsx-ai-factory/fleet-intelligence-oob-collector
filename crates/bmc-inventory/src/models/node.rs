@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use super::{
-    ChassisInventory, FabricInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory,
-    SystemInventory,
+    ChassisInventory, FabricInventory, FirmwareInventory, InventorySourceInfo, LatencyMeasurement,
+    ManagerInventory, SystemInventory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -43,6 +43,10 @@ pub struct NodeInventory {
     pub fabrics: Vec<FabricInventory>,
     pub domain_errors: Vec<DomainError>,
     pub target_error: Option<SanitizedErrorMessage>,
+    /// Collector-to-BMC network measurements. Not part of the inventory
+    /// snapshot: the backend stores them separately from `oobInventory`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub latency: Vec<LatencyMeasurement>,
 }
 
 #[derive(Debug, Serialize)]

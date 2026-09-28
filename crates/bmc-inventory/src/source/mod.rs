@@ -1,8 +1,11 @@
 mod assembly;
 mod redfish;
 mod reverse_dns;
+mod tcp_probe;
 
 use async_trait::async_trait;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::config::Target;
 use crate::models::{
@@ -11,6 +14,7 @@ use crate::models::{
 };
 
 pub use redfish::RedfishSource;
+pub use tcp_probe::{LatencyProbe, TcpProbeConfig};
 
 pub mod inventory_domain {
     pub const MANAGERS: &str = "managers";
@@ -46,4 +50,10 @@ struct ServiceRootData {
     uuid: Option<String>,
     vendor: Option<String>,
     product: Option<String>,
+}
+
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
