@@ -1,0 +1,231 @@
+{
+  "chassis": [
+    {
+      "assetTag": null,
+      "chassisType": "Module",
+      "description": null,
+      "id": "HGX_CPU_1",
+      "links": {},
+      "location": {
+        "partLocation": {
+          "locationOrdinalValue": null,
+          "locationType": null,
+          "orientation": null,
+          "reference": null,
+          "serviceLabel": "Bay 1"
+        },
+        "partLocationContext": null,
+        "placement": {
+          "additionalInfo": null,
+          "facilityName": null,
+          "rack": "R12",
+          "rackOffset": 7,
+          "rackOffsetUnits": null,
+          "room": null,
+          "row": "A"
+        }
+      },
+      "manufacturer": null,
+      "model": null,
+      "name": "Chassis",
+      "odataId": "/redfish/v1/Chassis/HGX_CPU_1",
+      "partNumber": null,
+      "pcieDevices": [
+        {
+          "description": null,
+          "deviceType": "SingleFunction",
+          "firmwareVersion": "96.00.5E.00.02",
+          "id": "GPU1",
+          "links": {},
+          "manufacturer": "NVIDIA",
+          "model": "B200",
+          "name": "PcieDevice",
+          "odataId": "/redfish/v1/Chassis/HGX_CPU_1/PCIeDevices/GPU1",
+          "partNumber": null,
+          "serialNumber": "GPU-SN456",
+          "sku": null,
+          "status": null,
+          "uuid": null
+        }
+      ],
+      "powerState": null,
+      "serialNumber": null,
+      "sku": null,
+      "status": {
+        "conditions": [
+          {
+            "conditionType": "Alert",
+            "message": "CPU_1 Firmware has detected errors",
+            "messageArgs": [
+              "CPU_1 Firmware",
+              "EC_STRAP_MISMATCH"
+            ],
+            "messageId": "ResourceEvent.1.0.ResourceErrorsDetected",
+            "originOfCondition": {
+              "odataId": "/redfish/v1/Chassis/HGX_CPU_1"
+            },
+            "resolution": "Reset the component",
+            "severity": "Critical",
+            "timestamp": "2026-08-25T20:51:47Z"
+          }
+        ],
+        "health": "Critical",
+        "healthRollup": "Warning",
+        "state": "Enabled"
+      }
+    }
+  ],
+  "collectedAt": "2026-01-01T00:00:00Z",
+  "computeZone": "us-west-dc1",
+  "domainErrors": [
+    {
+      "domain": "systems.secureBoot",
+      "message": "secure boot request timed out",
+      "resource": "System"
+    }
+  ],
+  "enrolledAt": "2026-01-02T00:00:00Z",
+  "firmware": [
+    {
+      "description": null,
+      "id": "BMC",
+      "links": {},
+      "name": "BMC",
+      "odataId": "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+      "relatedItem": [
+        {
+          "odataId": "/redfish/v1/Managers/BMC_0"
+        }
+      ],
+      "releaseDate": "2026-01-01T00:00:00Z",
+      "serviceId": "FirmwareInventory",
+      "status": null,
+      "version": "3.19.00"
+    }
+  ],
+  "kind": "compute",
+  "managers": [
+    {
+      "description": null,
+      "firmwareVersion": "3.19.00",
+      "id": "BMC_0",
+      "links": {
+        "ManagerForServers": [
+          {
+            "odataId": "/redfish/v1/Systems/System"
+          }
+        ]
+      },
+      "managerType": "BMC",
+      "model": "OpenBMC",
+      "name": "Manager",
+      "odataId": "/redfish/v1/Managers/BMC_0",
+      "status": null,
+      "uuid": "11111111-2222-3333-4444-555555555555"
+    }
+  ],
+  "name": "node-01",
+  "nodeGroup": "gb200-training",
+  "primarySystemId": "System",
+  "schemaVersion": "inventory.v1alpha1",
+  "source": {
+    "address": "10.0.0.1",
+    "hostName": "bmc-a.example.com",
+    "mac": "00:11:22:33:44:55",
+    "redfishVersion": "1.15.1",
+    "serviceUuid": "870155dd-d474-aca8-11ee-6e809af87c0c",
+    "sourceType": "redfish",
+    "vendor": "NVIDIA"
+  },
+  "systems": [
+    {
+      "assetTag": null,
+      "biosVersion": "3A21",
+      "description": null,
+      "hostName": "node-a.example.com",
+      "id": "System",
+      "links": {},
+      "manufacturer": "NVIDIA",
+      "memorySummary": {
+        "memoryMirroring": null,
+        "status": null,
+        "totalSystemMemoryGiB": 480.0,
+        "totalSystemPersistentMemoryGiB": null
+      },
+      "model": "GB200",
+      "name": "System",
+      "odataId": "/redfish/v1/Systems/System",
+      "powerState": "On",
+      "processorSummary": {
+        "coreCount": 72,
+        "count": 1,
+        "logicalProcessorCount": null,
+        "model": "Grace CPU",
+        "status": null,
+        "threadingEnabled": null
+      },
+      "processors": [
+        {
+          "description": null,
+          "id": "CPU1",
+          "instructionSet": "ARM-A64",
+          "links": {},
+          "location": {
+            "partLocation": {
+              "locationOrdinalValue": null,
+              "locationType": "Slot",
+              "orientation": null,
+              "reference": null,
+              "serviceLabel": "CPU Socket 1"
+            },
+            "partLocationContext": "HGX_Chassis_0/ProcessorModule_0",
+            "placement": null
+          },
+          "manufacturer": "NVIDIA",
+          "maxSpeedMhz": 3600,
+          "model": "Grace CPU",
+          "name": "Processor",
+          "nvidiaGpu": {
+            "ccDevModeEnabled": null,
+            "ccModeEnabled": true,
+            "defaultBoostClockSpeedMhz": 1200,
+            "egmModeEnabled": null,
+            "maxBoostClockSpeedMhz": 1800,
+            "migModeEnabled": false,
+            "nvlinkTopology": {
+              "chassisSerialNumber": null,
+              "hostId": null,
+              "ibGuid": null,
+              "lsbIbGuid": null,
+              "moduleId": null,
+              "peerType": null,
+              "systemGuid": "system-guid",
+              "traySerialNumber": null,
+              "traySlotIndex": 2,
+              "traySlotNumber": null
+            },
+            "protectedPcieModeEnabled": null,
+            "totalNvLinks": 18
+          },
+          "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
+          "partNumber": null,
+          "processorArchitecture": "ARM",
+          "processorType": "CPU",
+          "serialNumber": null,
+          "socket": "CPU Socket 1",
+          "status": null,
+          "totalCores": 72,
+          "totalThreads": 72,
+          "uuid": "22222222-3333-4444-5555-666666666666"
+        }
+      ],
+      "secureBootEnabled": true,
+      "serialNumber": "SN123",
+      "sku": null,
+      "status": null,
+      "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
+    }
+  ],
+  "targetError": null,
+  "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
+}
