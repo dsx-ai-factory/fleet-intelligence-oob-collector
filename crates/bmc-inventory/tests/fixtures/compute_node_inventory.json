@@ -34,7 +34,7 @@
         {
           "description": null,
           "deviceType": "SingleFunction",
-          "firmwareVersion": "96.00.5E.00.02",
+          "firmwareVersion": null,
           "id": "GPU1",
           "links": {},
           "manufacturer": "NVIDIA",
@@ -44,7 +44,12 @@
           "partNumber": null,
           "serialNumber": "GPU-SN456",
           "sku": null,
-          "status": null,
+          "status": {
+            "conditions": null,
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          },
           "uuid": null
         }
       ],
@@ -52,38 +57,16 @@
       "serialNumber": null,
       "sku": null,
       "status": {
-        "conditions": [
-          {
-            "conditionType": "Alert",
-            "message": "CPU_1 Firmware has detected errors",
-            "messageArgs": [
-              "CPU_1 Firmware",
-              "EC_STRAP_MISMATCH"
-            ],
-            "messageId": "ResourceEvent.1.0.ResourceErrorsDetected",
-            "originOfCondition": {
-              "odataId": "/redfish/v1/Chassis/HGX_CPU_1"
-            },
-            "resolution": "Reset the component",
-            "severity": "Critical",
-            "timestamp": "2026-08-25T20:51:47Z"
-          }
-        ],
-        "health": "Critical",
-        "healthRollup": "Warning",
+        "conditions": null,
+        "health": "OK",
+        "healthRollup": "OK",
         "state": "Enabled"
       }
     }
   ],
   "collectedAt": "2026-01-01T00:00:00Z",
   "computeZone": "us-west-dc1",
-  "domainErrors": [
-    {
-      "domain": "systems.secureBoot",
-      "message": "secure boot request timed out",
-      "resource": "System"
-    }
-  ],
+  "domainErrors": [],
   "enrolledAt": "2026-01-02T00:00:00Z",
   "firmware": [
     {
@@ -97,9 +80,14 @@
           "odataId": "/redfish/v1/Managers/BMC_0"
         }
       ],
-      "releaseDate": "2026-01-01T00:00:00Z",
+      "releaseDate": null,
       "serviceId": "FirmwareInventory",
-      "status": null,
+      "status": {
+        "conditions": null,
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+      },
       "version": "3.19.00"
     }
   ],
@@ -120,7 +108,12 @@
       "model": "OpenBMC",
       "name": "Manager",
       "odataId": "/redfish/v1/Managers/BMC_0",
-      "status": null,
+      "status": {
+        "conditions": null,
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+      },
       "uuid": "11111111-2222-3333-4444-555555555555"
     }
   ],
@@ -158,7 +151,7 @@
       "powerState": "On",
       "processorSummary": {
         "coreCount": 72,
-        "count": 1,
+        "count": 2,
         "logicalProcessorCount": null,
         "model": "Grace CPU",
         "status": null,
@@ -168,7 +161,7 @@
         {
           "description": null,
           "id": "CPU1",
-          "instructionSet": "ARM-A64",
+          "instructionSet": null,
           "links": {},
           "location": {
             "partLocation": {
@@ -184,6 +177,43 @@
           "manufacturer": "NVIDIA",
           "maxSpeedMhz": 3600,
           "model": "Grace CPU",
+          "name": "Processor",
+          "nvidiaGpu": null,
+          "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
+          "partNumber": null,
+          "processorArchitecture": null,
+          "processorType": "CPU",
+          "serialNumber": null,
+          "socket": "CPU Socket 1",
+          "status": {
+            "conditions": null,
+            "health": "OK",
+            "healthRollup": null,
+            "state": "Enabled"
+          },
+          "totalCores": 72,
+          "totalThreads": 72,
+          "uuid": "22222222-3333-4444-5555-666666666666"
+        },
+        {
+          "description": null,
+          "id": "GPU1",
+          "instructionSet": null,
+          "links": {},
+          "location": {
+            "partLocation": {
+              "locationOrdinalValue": null,
+              "locationType": null,
+              "orientation": null,
+              "reference": null,
+              "serviceLabel": "GPU 1"
+            },
+            "partLocationContext": "HGX_Chassis_0/GPU_1",
+            "placement": null
+          },
+          "manufacturer": "NVIDIA",
+          "maxSpeedMhz": null,
+          "model": "B200",
           "name": "Processor",
           "nvidiaGpu": {
             "ccDevModeEnabled": null,
@@ -207,22 +237,32 @@
             "protectedPcieModeEnabled": null,
             "totalNvLinks": 18
           },
-          "odataId": "/redfish/v1/Systems/System/Processors/CPU1",
+          "odataId": "/redfish/v1/Systems/System/Processors/GPU1",
           "partNumber": null,
-          "processorArchitecture": "ARM",
-          "processorType": "CPU",
+          "processorArchitecture": null,
+          "processorType": "GPU",
           "serialNumber": null,
-          "socket": "CPU Socket 1",
-          "status": null,
-          "totalCores": 72,
-          "totalThreads": 72,
-          "uuid": "22222222-3333-4444-5555-666666666666"
+          "socket": null,
+          "status": {
+            "conditions": null,
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          },
+          "totalCores": null,
+          "totalThreads": null,
+          "uuid": "33333333-4444-5555-6666-777777777777"
         }
       ],
       "secureBootEnabled": true,
       "serialNumber": "SN123",
       "sku": null,
-      "status": null,
+      "status": {
+        "conditions": null,
+        "health": "OK",
+        "healthRollup": null,
+        "state": "Enabled"
+      },
       "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
     }
   ],
