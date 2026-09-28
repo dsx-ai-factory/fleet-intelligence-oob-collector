@@ -449,6 +449,81 @@ mod tests {
     use super::*;
     use nv_redfish_bmc_mock::Expect;
 
+    struct MockBmcResponses {
+        manager: &'static str,
+        system: &'static str,
+        processors: bool,
+        secure_boot: Option<&'static str>,
+        pcie_collection: &'static str,
+        pcie_device: Option<&'static str>,
+        firmware: &'static str,
+    }
+
+    impl Default for MockBmcResponses {
+        fn default() -> Self {
+            Self {
+                manager: MANAGER,
+                system: SYSTEM,
+                processors: false,
+                secure_boot: None,
+                pcie_collection: PCIE_DEVICES_COLLECTION,
+                pcie_device: Some(PCIE_DEVICE),
+                firmware: FIRMWARE,
+            }
+        }
+    }
+
+    async fn collect_mock_inventory(fixture: MockBmcResponses) -> RedfishReport {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", fixture.manager));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", fixture.system));
+        if fixture.processors {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/Processors",
+                PROCESSORS_COLLECTION,
+            ));
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/Processors/CPU1",
+                PROCESSOR,
+            ));
+        }
+        if let Some(secure_boot) = fixture.secure_boot {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/SecureBoot",
+                secure_boot,
+            ));
+        }
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
+            fixture.pcie_collection,
+        ));
+        if let Some(pcie_device) = fixture.pcie_device {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
+                pcie_device,
+            ));
+        }
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            fixture.firmware,
+        ));
+
+        let root = ServiceRoot::new(bmc).await.expect("service root wrapper");
+        collect_report_from_root(&root).await.expect("report")
+    }
+
     #[test]
     fn summaries_preserve_status_conditions_and_partial_fields() {
         let processor = serde_json::from_value(serde_json::json!({
@@ -557,50 +632,12 @@ mod tests {
 
     #[tokio::test]
     async fn collect_report_from_mock_bmc_traverses_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System",
-            SYSTEM_WITH_PROCESSORS,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/CPU1",
-            PROCESSOR,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_PROCESSORS,
+            processors: true,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(
             report.service_root.redfish_version.as_deref(),
@@ -892,46 +929,12 @@ mod tests {
 
     #[tokio::test]
     async fn secure_boot_collection_failure_records_system_id_resource() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System",
-            SYSTEM_WITH_SECURE_BOOT,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/SecureBoot",
-            MALFORMED_SECURE_BOOT,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_SECURE_BOOT,
+            secure_boot: Some(MALFORMED_SECURE_BOOT),
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.systems[0].id, "DGX");
@@ -947,35 +950,12 @@ mod tests {
 
     #[tokio::test]
     async fn pcie_devices_collection_failure_records_chassis_id_resource() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            MALFORMED_PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            pcie_collection: MALFORMED_PCIE_DEVICES_COLLECTION,
+            pcie_device: None,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.chassis.len(), 1);
         assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
@@ -991,39 +971,11 @@ mod tests {
 
     #[tokio::test]
     async fn manager_collection_failure_is_partial_and_keeps_other_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MALFORMED_MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            manager: MALFORMED_MANAGER,
+            ..Default::default()
+        })
+        .await;
 
         assert!(report.managers.is_empty());
         assert_eq!(report.systems.len(), 1);
@@ -1038,39 +990,11 @@ mod tests {
 
     #[tokio::test]
     async fn firmware_collection_failure_is_partial_and_keeps_other_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            MALFORMED_FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            firmware: MALFORMED_FIRMWARE,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.managers.len(), 1);
         assert_eq!(report.systems.len(), 1);
