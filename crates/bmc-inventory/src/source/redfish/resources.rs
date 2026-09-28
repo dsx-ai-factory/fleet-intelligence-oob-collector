@@ -1,98 +1,23 @@
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::sync::Arc;
-use std::time::Duration;
-
-use async_trait::async_trait;
-use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
-use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
-use nv_redfish::core::{EntityTypeRef, NavProperty, ReferenceLeaf};
+use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
 use nv_redfish::{Bmc, ServiceRoot};
 use serde::Deserialize as _;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-use url::Url;
 
-use super::{
-    ChassisData, ConditionData, FirmwareData, InventoryErrorData, InventorySource, LinkData,
-    LocationData, ManagerData, PcieDeviceData, ProcessorData, RedfishReport, ServiceRootData,
-    SourceRecord, StatusData, SystemData, inventory_domain,
+use super::links::{
+    chassis_links, firmware_links, manager_links, pcie_device_links, processor_links,
+    reference_targets, system_links,
 };
-use crate::config::Target;
+use super::location::location_data;
+use super::status::{redfish_enum_string, status_data};
+use crate::models::{
+    ChassisInventory, DomainError, FirmwareInventory, InventoryUuid, ManagerInventory,
+    MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PcieDeviceInventory,
+    ProcessorInventory, ProcessorSummary, SystemInventory,
+};
+use crate::source::{RedfishReport, ServiceRootData, inventory_domain};
 
-type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
-
-const MAX_REDIRECTS: usize = 3;
-
-pub struct RedfishSource {
-    client: nv_redfish::bmc_http::reqwest::Client,
-    dispatcher: Arc<Dispatcher>,
-}
-
-impl RedfishSource {
-    pub fn new(
-        insecure_tls: bool,
-        request_timeout: Duration,
-        dispatcher: Arc<Dispatcher>,
-    ) -> Result<Self, Box<dyn Error>> {
-        if request_timeout.is_zero() {
-            return Err("request timeout must be greater than zero".into());
-        }
-        let connect_timeout = request_timeout.min(Duration::from_secs(10));
-        let client = nv_redfish::bmc_http::reqwest::Client::with_params(
-            nv_redfish::bmc_http::reqwest::ClientParams::new()
-                .timeout(request_timeout)
-                .connect_timeout(connect_timeout)
-                .accept_invalid_certs(insecure_tls)
-                // Some BMCs canonicalize the service root (for example,
-                // /redfish/v1 -> /redfish/v1/). Keep redirects bounded while
-                // allowing those standards-compatible endpoints to work.
-                .max_redirects(MAX_REDIRECTS),
-        )?;
-        Ok(Self { client, dispatcher })
-    }
-
-    async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
-        let root = self
-            .service_root(target)
-            .await
-            .map_err(|err| err.to_string())?;
-        collect_report_from_root(&root).await
-    }
-
-    async fn service_root(
-        &self,
-        target: &Target,
-    ) -> Result<ServiceRoot<RedfishBmc>, Box<dyn Error>> {
-        let url = bmc_url(&target.address)?;
-        let gate = self
-            .dispatcher
-            .inventory_gate(&target.mac)
-            .ok_or_else(|| format!("no dispatcher endpoint for target {:?}", target.mac))?;
-        let bmc = Arc::new(HttpBmc::new(
-            DispatchingHttpClient::new(self.client.clone(), gate),
-            url,
-            BmcCredentials::new(target.username.clone(), target.password.clone()),
-            CacheSettings::with_capacity(32),
-        ));
-        Ok(ServiceRoot::new(bmc).await?)
-    }
-}
-
-#[async_trait]
-impl InventorySource for RedfishSource {
-    async fn collect(&self, target: Target) -> SourceRecord {
-        let collected_at = now_rfc3339();
-        let result = self.collect_report(&target).await;
-        SourceRecord {
-            target,
-            collected_at,
-            result,
-        }
-    }
-}
-
-async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<RedfishReport, String> {
+pub(super) async fn collect_report_from_root<B: Bmc>(
+    root: &ServiceRoot<B>,
+) -> Result<RedfishReport, String> {
     let raw_root = root.root.as_ref();
     let service_root = ServiceRootData {
         redfish_version: raw_root.redfish_version.clone(),
@@ -102,34 +27,20 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
     };
 
     let mut errors = Vec::new();
-    let managers = match collect_managers(root).await {
-        Ok(managers) => managers,
-        Err(err) => {
-            push_inventory_error(&mut errors, inventory_domain::MANAGERS, None, err);
-            Vec::new()
-        }
-    };
-    let systems = match collect_systems(root, &mut errors).await {
-        Ok(systems) => systems,
-        Err(err) => {
-            push_inventory_error(&mut errors, inventory_domain::SYSTEMS, None, err);
-            Vec::new()
-        }
-    };
-    let chassis = match collect_chassis(root, &mut errors).await {
-        Ok(chassis) => chassis,
-        Err(err) => {
-            push_inventory_error(&mut errors, inventory_domain::CHASSIS, None, err);
-            Vec::new()
-        }
-    };
-    let firmware = match collect_firmware(root).await {
-        Ok(firmware) => firmware,
-        Err(err) => {
-            push_inventory_error(&mut errors, inventory_domain::FIRMWARE, None, err);
-            Vec::new()
-        }
-    };
+    let managers = collect_domain(
+        &mut errors,
+        inventory_domain::MANAGERS,
+        collect_managers(root).await,
+    );
+    let systems_result = collect_systems(root, &mut errors).await;
+    let systems = collect_domain(&mut errors, inventory_domain::SYSTEMS, systems_result);
+    let chassis_result = collect_chassis(root, &mut errors).await;
+    let chassis = collect_domain(&mut errors, inventory_domain::CHASSIS, chassis_result);
+    let firmware = collect_domain(
+        &mut errors,
+        inventory_domain::FIRMWARE,
+        collect_firmware(root).await,
+    );
 
     Ok(RedfishReport {
         service_root,
@@ -141,7 +52,25 @@ async fn collect_report_from_root<B: Bmc>(root: &ServiceRoot<B>) -> Result<Redfi
     })
 }
 
-async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerData>, String> {
+fn collect_domain<T>(
+    errors: &mut Vec<DomainError>,
+    domain: &str,
+    result: Result<Vec<T>, String>,
+) -> Vec<T> {
+    match result {
+        Ok(items) => items,
+        Err(error) => {
+            push_inventory_error(errors, domain, None, error);
+            Vec::new()
+        }
+    }
+}
+
+fn description<T: ToString>(value: Option<&Option<T>>) -> Option<String> {
+    value.and_then(Option::as_ref).map(ToString::to_string)
+}
+
+async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerInventory>, String> {
     let Some(collection) = root
         .managers()
         .await
@@ -157,15 +86,11 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
     let mut out = Vec::with_capacity(managers.len());
     for manager in managers {
         let raw = manager.raw();
-        out.push(ManagerData {
+        out.push(ManagerInventory {
             name: raw.name.to_string(),
-            description: raw
-                .description
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(ToString::to_string),
+            description: description(raw.description.as_ref()),
             id: raw.id.to_string(),
-            odata_id: Some(raw.odata_id.to_string()),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             manager_type: raw.manager_type.and_then(redfish_enum_string),
             model: raw.model.clone().flatten(),
@@ -179,8 +104,8 @@ async fn collect_managers<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<ManagerDa
 
 async fn collect_systems<B: Bmc>(
     root: &ServiceRoot<B>,
-    errors: &mut Vec<InventoryErrorData>,
-) -> Result<Vec<SystemData>, String> {
+    errors: &mut Vec<DomainError>,
+) -> Result<Vec<SystemInventory>, String> {
     let Some(collection) = root
         .systems()
         .await
@@ -197,16 +122,15 @@ async fn collect_systems<B: Bmc>(
     for system in systems {
         let raw = system.raw();
         let system_id = raw.id.to_string();
-        out.push(SystemData {
+        out.push(SystemInventory {
             name: raw.name.to_string(),
-            description: raw
-                .description
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(ToString::to_string),
+            description: description(raw.description.as_ref()),
             id: system_id.clone(),
-            odata_id: Some(raw.odata_id.to_string()),
-            uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
+            uuid: raw
+                .uuid
+                .flatten()
+                .and_then(|uuid| InventoryUuid::parse(&uuid.to_string())),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
             sku: raw.sku.clone().flatten(),
@@ -228,8 +152,8 @@ async fn collect_systems<B: Bmc>(
 
 async fn collect_chassis<B: Bmc>(
     root: &ServiceRoot<B>,
-    errors: &mut Vec<InventoryErrorData>,
-) -> Result<Vec<ChassisData>, String> {
+    errors: &mut Vec<DomainError>,
+) -> Result<Vec<ChassisInventory>, String> {
     let Some(collection) = root
         .chassis()
         .await
@@ -246,15 +170,11 @@ async fn collect_chassis<B: Bmc>(
     for chassis in chassis {
         let raw = chassis.raw();
         let chassis_id = raw.id.to_string();
-        out.push(ChassisData {
+        out.push(ChassisInventory {
             name: raw.name.to_string(),
-            description: raw
-                .description
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(ToString::to_string),
+            description: description(raw.description.as_ref()),
             id: chassis_id.clone(),
-            odata_id: Some(raw.odata_id.to_string()),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
             chassis_type: redfish_enum_string(raw.chassis_type),
             manufacturer: raw.manufacturer.clone().flatten(),
             model: raw.model.clone().flatten(),
@@ -272,46 +192,10 @@ async fn collect_chassis<B: Bmc>(
     Ok(out)
 }
 
-fn location_data(
-    location: Option<&nv_redfish::schema::resource::Location>,
-) -> Option<LocationData> {
-    location.map(|location| LocationData {
-        part_location_context: location.part_location_context.clone().flatten(),
-        part_location: part_location_data(location.part_location.as_ref()),
-        placement: location
-            .placement
-            .as_ref()
-            .map(|placement| super::PlacementData {
-                rack: placement.rack.clone().flatten(),
-                row: placement.row.clone().flatten(),
-                room: placement.room.clone().flatten(),
-                rack_offset: placement.rack_offset.flatten(),
-                rack_offset_units: placement
-                    .rack_offset_units
-                    .flatten()
-                    .and_then(redfish_enum_string),
-                additional_info: placement.additional_info.clone().flatten(),
-                facility_name: placement.facility_name.clone().flatten(),
-            }),
-    })
-}
-
-fn part_location_data(
-    part: Option<&nv_redfish::schema::resource::PartLocation>,
-) -> Option<super::PartLocationData> {
-    part.map(|part| super::PartLocationData {
-        service_label: part.service_label.clone().flatten(),
-        location_type: part.location_type.flatten().and_then(redfish_enum_string),
-        location_ordinal_value: part.location_ordinal_value.flatten(),
-        reference: part.reference.flatten().and_then(redfish_enum_string),
-        orientation: part.orientation.flatten().and_then(redfish_enum_string),
-    })
-}
-
 async fn collect_secure_boot_enabled<B: Bmc>(
     system: &nv_redfish::computer_system::ComputerSystem<B>,
     system_id: &str,
-    errors: &mut Vec<InventoryErrorData>,
+    errors: &mut Vec<DomainError>,
 ) -> Option<bool> {
     let secure_boot = match system.secure_boot().await {
         Ok(secure_boot) => secure_boot?,
@@ -331,8 +215,8 @@ async fn collect_secure_boot_enabled<B: Bmc>(
 async fn collect_processors<B: Bmc>(
     system: &nv_redfish::computer_system::ComputerSystem<B>,
     system_id: &str,
-    errors: &mut Vec<InventoryErrorData>,
-) -> Vec<ProcessorData> {
+    errors: &mut Vec<DomainError>,
+) -> Vec<ProcessorInventory> {
     let processors = match system.processors().await {
         Ok(Some(processors)) => processors,
         Ok(None) => return Vec::new(),
@@ -363,15 +247,11 @@ async fn collect_processors<B: Bmc>(
             }
         };
 
-        out.push(ProcessorData {
+        out.push(ProcessorInventory {
             name: raw.name.to_string(),
-            description: raw
-                .description
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(ToString::to_string),
+            description: description(raw.description.as_ref()),
             id: raw.id.to_string(),
-            odata_id: Some(raw.odata_id.to_string()),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             socket: raw.socket.clone().flatten(),
             processor_type: raw.processor_type.flatten().and_then(redfish_enum_string),
@@ -399,7 +279,7 @@ async fn collect_processors<B: Bmc>(
 
 fn nvidia_gpu_data(
     oem: Option<&nv_redfish::schema::resource::Oem>,
-) -> Result<Option<super::NvidiaGpuData>, serde_json::Error> {
+) -> Result<Option<NvidiaGpuInventory>, serde_json::Error> {
     let Some(nvidia) =
         oem.and_then(|oem| nv_redfish::oem::oem_value(oem, nv_redfish::oem::nvidia::OEM_KEY))
     else {
@@ -413,7 +293,7 @@ fn nvidia_gpu_data(
     let nvlink_topology =
         gpu.mnnv_link_topology
             .flatten()
-            .map(|topology| super::NvlinkTopologyData {
+            .map(|topology| NvlinkTopologyInventory {
                 tray_serial_number: topology.tray_serial_number.flatten(),
                 tray_slot_number: topology.tray_slot_number.flatten(),
                 tray_slot_index: topology.tray_slot_index.flatten(),
@@ -426,7 +306,7 @@ fn nvidia_gpu_data(
                 peer_type: topology.peer_type.flatten().and_then(redfish_enum_string),
             });
 
-    Ok(Some(super::NvidiaGpuData {
+    Ok(Some(NvidiaGpuInventory {
         mig_mode_enabled: gpu.mig_mode_enabled.flatten(),
         default_boost_clock_speed_mhz: gpu.default_boost_clock_speed_mhz.flatten(),
         max_boost_clock_speed_mhz: gpu.max_boost_clock_speed_mhz.flatten(),
@@ -442,22 +322,15 @@ fn nvidia_gpu_data(
 async fn collect_pcie_devices<B: Bmc>(
     chassis: &nv_redfish::chassis::Chassis<B>,
     chassis_id: &str,
-    errors: &mut Vec<InventoryErrorData>,
-) -> Vec<PcieDeviceData> {
+    errors: &mut Vec<DomainError>,
+) -> Vec<PcieDeviceInventory> {
     let devices = match chassis.pcie_devices().await {
-        Ok(Some(collection)) => match collection.members().await {
-            Ok(devices) => devices,
-            Err(err) => {
-                push_inventory_error(
-                    errors,
-                    inventory_domain::CHASSIS_PCIE_DEVICES,
-                    Some(chassis_id.to_string()),
-                    err,
-                );
-                Vec::new()
-            }
-        },
-        Ok(None) => Vec::new(),
+        Ok(Some(collection)) => collection.members().await.map_err(|err| err.to_string()),
+        Ok(None) => return Vec::new(),
+        Err(err) => Err(err.to_string()),
+    };
+    let devices = match devices {
+        Ok(devices) => devices,
         Err(err) => {
             push_inventory_error(
                 errors,
@@ -472,15 +345,11 @@ async fn collect_pcie_devices<B: Bmc>(
     let mut out = Vec::with_capacity(devices.len());
     for device in devices {
         let raw = device.raw();
-        out.push(PcieDeviceData {
+        out.push(PcieDeviceInventory {
             name: raw.name.to_string(),
-            description: raw
-                .description
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map(ToString::to_string),
+            description: description(raw.description.as_ref()),
             id: raw.id.to_string(),
-            odata_id: Some(raw.odata_id.to_string()),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
             uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
             device_type: raw.device_type.and_then(redfish_enum_string),
             manufacturer: raw.manufacturer.clone().flatten(),
@@ -496,7 +365,7 @@ async fn collect_pcie_devices<B: Bmc>(
     out
 }
 
-async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareData>, String> {
+async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareInventory>, String> {
     let Some(update_service) = root
         .update_service()
         .await
@@ -514,16 +383,12 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
         .into_iter()
         .map(|inventory| {
             let raw = inventory.raw();
-            FirmwareData {
-                description: raw
-                    .description
-                    .as_ref()
-                    .and_then(Option::as_ref)
-                    .map(ToString::to_string),
+            FirmwareInventory {
+                description: description(raw.description.as_ref()),
                 related_item: raw.related_item.as_deref().map(reference_targets),
                 service_id: "FirmwareInventory".to_string(),
                 id: raw.id.to_string(),
-                odata_id: Some(raw.odata_id.to_string()),
+                odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
                 name: raw.name.to_string(),
                 version: raw.version.clone().flatten(),
                 release_date: raw.release_date.flatten().map(|date| date.to_string()),
@@ -536,8 +401,8 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareD
 
 fn processor_summary_data(
     summary: &nv_redfish::schema::computer_system::ProcessorSummary,
-) -> super::ProcessorSummaryData {
-    super::ProcessorSummaryData {
+) -> ProcessorSummary {
+    ProcessorSummary {
         count: summary.count.flatten(),
         core_count: summary.core_count.flatten(),
         model: summary.model.clone().flatten(),
@@ -549,501 +414,114 @@ fn processor_summary_data(
 
 fn memory_summary_data(
     summary: &nv_redfish::schema::computer_system::MemorySummary,
-) -> super::MemorySummaryData {
-    super::MemorySummaryData {
+) -> MemorySummary {
+    MemorySummary {
         total_system_memory_gib: summary.total_system_memory_gi_b.flatten(),
         total_system_persistent_memory_gib: summary.total_system_persistent_memory_gi_b.flatten(),
-        memory_mirroring: summary.memory_mirroring.flatten().and_then(|value| {
-            match serde_json::to_value(value).ok()? {
-                serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
-                _ => None,
-            }
-        }),
+        memory_mirroring: summary
+            .memory_mirroring
+            .flatten()
+            .and_then(redfish_enum_string),
         status: status_data(summary.status.as_ref()),
     }
 }
 
-/// Use the dependency's Serde names, not its snake_case convenience names.
-/// Unknown tokens have already been discarded by nv-redfish's enum parser.
-fn redfish_enum_string(value: impl serde::Serialize) -> Option<String> {
-    match serde_json::to_value(value).ok()? {
-        serde_json::Value::String(value) if value != "UnsupportedValue" => Some(value),
-        _ => None,
-    }
-}
-
-fn manager_links(links: Option<&nv_redfish::schema::manager::Links>) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_nav_links(
-        &mut out,
-        "ManagerForServers",
-        links.manager_for_servers.as_deref(),
-    );
-    push_nav_links(
-        &mut out,
-        "ManagerForChassis",
-        links.manager_for_chassis.as_deref(),
-    );
-    push_nav_link(
-        &mut out,
-        "ManagerInChassis",
-        links.manager_in_chassis.as_ref(),
-    );
-    push_reference_links(
-        &mut out,
-        "ManagerForSwitches",
-        links.manager_for_switches.as_deref(),
-    );
-    push_nav_link(
-        &mut out,
-        "ActiveSoftwareImage",
-        links.active_software_image.as_ref(),
-    );
-    push_nav_links(&mut out, "SoftwareImages", links.software_images.as_deref());
-    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
-    push_nav_links(
-        &mut out,
-        "ManagerForManagers",
-        links.manager_for_managers.as_deref(),
-    );
-    push_nav_link(
-        &mut out,
-        "SelectedNetworkPort",
-        links.selected_network_port.as_ref(),
-    );
-    push_reference_links(
-        &mut out,
-        "ManagerForFabrics",
-        links.manager_for_fabrics.as_deref(),
-    );
-    out
-}
-
-fn system_links(
-    links: Option<&nv_redfish::schema::computer_system::Links>,
-) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_nav_links(&mut out, "Chassis", links.chassis.as_deref());
-    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
-    push_reference_links(&mut out, "PoweredBy", links.powered_by.as_deref());
-    push_reference_links(&mut out, "CooledBy", links.cooled_by.as_deref());
-    push_reference_links(&mut out, "Endpoints", links.endpoints.as_deref());
-    push_reference_links(&mut out, "ResourceBlocks", links.resource_blocks.as_deref());
-    push_nav_links(
-        &mut out,
-        "ConsumingComputerSystems",
-        links.consuming_computer_systems.as_deref(),
-    );
-    push_nav_links(
-        &mut out,
-        "SupplyingComputerSystems",
-        links.supplying_computer_systems.as_deref(),
-    );
-    push_nav_links(
-        &mut out,
-        "OffloadedNetworkDeviceFunctions",
-        links.offloaded_network_device_functions.as_deref(),
-    );
-    push_reference_links(
-        &mut out,
-        "TrustedComponents",
-        links.trusted_components.as_deref(),
-    );
-    push_nav_link(
-        &mut out,
-        "HostingComputerSystem",
-        links.hosting_computer_system.as_ref(),
-    );
-    push_nav_links(
-        &mut out,
-        "VirtualMachines",
-        links.virtual_machines.as_deref(),
-    );
-    out
-}
-
-fn chassis_links(links: Option<&nv_redfish::schema::chassis::Links>) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_nav_links(
-        &mut out,
-        "ComputerSystems",
-        links.computer_systems.as_deref(),
-    );
-    push_nav_links(&mut out, "ManagedBy", links.managed_by.as_deref());
-    push_nav_link(&mut out, "ContainedBy", links.contained_by.as_ref());
-    push_nav_links(&mut out, "Contains", links.contains.as_deref());
-    push_reference_links(&mut out, "PoweredBy", links.powered_by.as_deref());
-    push_reference_links(&mut out, "CooledBy", links.cooled_by.as_deref());
-    push_nav_links(
-        &mut out,
-        "ManagersInChassis",
-        links.managers_in_chassis.as_deref(),
-    );
-    push_nav_links(&mut out, "Drives", links.drives.as_deref());
-    push_nav_links(&mut out, "Storage", links.storage.as_deref());
-    push_nav_links(&mut out, "PCIeDevices", links.pcie_devices.as_deref());
-    push_reference_links(&mut out, "ResourceBlocks", links.resource_blocks.as_deref());
-    push_reference_links(&mut out, "Switches", links.switches.as_deref());
-    push_nav_links(&mut out, "Processors", links.processors.as_deref());
-    push_reference_link(&mut out, "Facility", links.facility.as_ref());
-    push_reference_links(&mut out, "Cables", links.cables.as_deref());
-    push_reference_links(&mut out, "PowerOutlets", links.power_outlets.as_deref());
-    push_nav_links(&mut out, "PowerSupplies", links.power_supplies.as_deref());
-    push_nav_links(&mut out, "Fans", links.fans.as_deref());
-    push_nav_link(
-        &mut out,
-        "PowerDistribution",
-        links.power_distribution.as_ref(),
-    );
-    push_reference_links(&mut out, "CoolingUnits", links.cooling_units.as_deref());
-    push_reference_links(
-        &mut out,
-        "ConnectedCoolingLoops",
-        links.connected_cooling_loops.as_deref(),
-    );
-    push_reference_links(
-        &mut out,
-        "AutomationNodes",
-        links.automation_nodes.as_deref(),
-    );
-    out
-}
-
-fn processor_links(
-    links: Option<&nv_redfish::schema::processor::Links>,
-) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_nav_link(&mut out, "Chassis", links.chassis.as_ref());
-    push_reference_links(&mut out, "Endpoints", links.endpoints.as_deref());
-    push_nav_links(
-        &mut out,
-        "ConnectedProcessors",
-        links.connected_processors.as_deref(),
-    );
-    push_nav_link(&mut out, "PCIeDevice", links.pcie_device.as_ref());
-    push_reference_links(&mut out, "PCIeFunctions", links.pcie_functions.as_deref());
-    push_nav_links(&mut out, "Memory", links.memory.as_deref());
-    push_reference_link(
-        &mut out,
-        "GraphicsController",
-        links.graphics_controller.as_ref(),
-    );
-    push_nav_links(
-        &mut out,
-        "NetworkDeviceFunctions",
-        links.network_device_functions.as_deref(),
-    );
-    push_reference_links(&mut out, "FabricAdapters", links.fabric_adapters.as_deref());
-    out
-}
-
-fn pcie_device_links(
-    links: Option<&nv_redfish::schema::pcie_device::Links>,
-) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_nav_links(&mut out, "Chassis", links.chassis.as_deref());
-    push_reference_links(&mut out, "PCIeFunctions", links.pcie_functions.as_deref());
-    push_reference_link(&mut out, "Switch", links.switch.as_ref());
-    push_nav_links(&mut out, "Processors", links.processors.as_deref());
-    push_nav_links(
-        &mut out,
-        "ConnectedPCIePorts",
-        links.connected_pcie_ports.as_deref(),
-    );
-    out
-}
-
-fn firmware_links(
-    links: Option<&nv_redfish::schema::software_inventory::Links>,
-) -> BTreeMap<String, LinkData> {
-    let mut out = BTreeMap::new();
-    let Some(links) = links else {
-        return out;
-    };
-    push_reference_links(&mut out, "StagedTargets", links.staged_targets.as_deref());
-    push_reference_links(&mut out, "ActiveTargets", links.active_targets.as_deref());
-    out
-}
-
-fn push_nav_links<T: EntityTypeRef>(
-    out: &mut BTreeMap<String, LinkData>,
-    relation: &str,
-    links: Option<&[NavProperty<T>]>,
-) {
-    if let Some(links) = links {
-        out.insert(
-            relation.to_string(),
-            links
-                .iter()
-                .filter_map(|link| normalize_link_target(&link.id().to_string()))
-                .collect(),
-        );
-    }
-}
-
-fn push_nav_link<T: EntityTypeRef>(
-    out: &mut BTreeMap<String, LinkData>,
-    relation: &str,
-    link: Option<&NavProperty<T>>,
-) {
-    if let Some(target) = link.and_then(|link| normalize_link_target(&link.id().to_string())) {
-        out.insert(relation.to_string(), vec![target]);
-    }
-}
-
-fn reference_targets(links: &[ReferenceLeaf]) -> Vec<String> {
-    links
-        .iter()
-        .filter_map(|link| normalize_link_target(&link.odata_id.to_string()))
-        .collect()
-}
-
-fn push_reference_links(
-    out: &mut BTreeMap<String, LinkData>,
-    relation: &str,
-    links: Option<&[ReferenceLeaf]>,
-) {
-    if let Some(links) = links {
-        out.insert(relation.to_string(), reference_targets(links));
-    }
-}
-
-fn push_reference_link(
-    out: &mut BTreeMap<String, LinkData>,
-    relation: &str,
-    link: Option<&ReferenceLeaf>,
-) {
-    if let Some(target) = link.and_then(|link| normalize_link_target(&link.odata_id.to_string())) {
-        out.insert(relation.to_string(), vec![target]);
-    }
-}
-
-/// Strip authority/credentials and query parameters, but retain subobject identity.
-fn normalize_link_target(odata_id: &str) -> Option<String> {
-    let value = odata_id.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some(reference) = value.strip_prefix("//") {
-        let url = Url::parse(&format!("https://{reference}")).ok()?;
-        if !url.has_host() {
-            return None;
-        }
-        return Some(match url.fragment() {
-            Some(fragment) => format!("{}#{fragment}", url.path()),
-            None => url.path().to_string(),
-        });
-    }
-    if let Ok(url) = Url::parse(value)
-        && url.has_host()
-    {
-        return Some(match url.fragment() {
-            Some(fragment) => format!("{}#{fragment}", url.path()),
-            None => url.path().to_string(),
-        });
-    }
-    let (resource, fragment) = value
-        .split_once('#')
-        .map_or((value, None), |(resource, fragment)| {
-            (resource, Some(fragment))
-        });
-    let path = resource.split('?').next().unwrap_or_default();
-    if path.is_empty() && fragment.is_none() {
-        return None;
-    }
-    Some(match fragment {
-        Some(fragment) => format!("{path}#{fragment}"),
-        None => path.to_string(),
-    })
-}
-fn status_data(status: Option<&nv_redfish::schema::resource::Status>) -> Option<StatusData> {
-    status.map(|status| StatusData {
-        conditions: status
-            .conditions
-            .as_ref()
-            .and_then(Option::as_ref)
-            .map(|conditions| conditions.iter().map(map_condition).collect()),
-        health: status.health.flatten().and_then(redfish_health_string),
-        health_rollup: status
-            .health_rollup
-            .flatten()
-            .and_then(redfish_health_string),
-        state: status.state.flatten().and_then(redfish_state_string),
-    })
-}
-
-fn map_condition(condition: &nv_redfish::schema::resource::Condition) -> ConditionData {
-    ConditionData {
-        timestamp: condition.timestamp.map(|timestamp| timestamp.to_string()),
-        message_id: condition.message_id.clone(),
-        message_args: condition.message_args.clone(),
-        message: condition.message.clone(),
-        severity: condition.severity.and_then(redfish_health_string),
-        resolution: condition.resolution.clone(),
-        condition_type: condition
-            .condition_type
-            .flatten()
-            .and_then(redfish_condition_type_string),
-        origin_of_condition: condition
-            .origin_of_condition
-            .as_ref()
-            .map(|origin| origin.odata_id.to_string()),
-    }
-}
-
-fn redfish_condition_type_string(
-    condition_type: nv_redfish::schema::resource::ConditionType,
-) -> Option<String> {
-    match condition_type {
-        nv_redfish::schema::resource::ConditionType::Alert => Some("Alert".to_string()),
-        nv_redfish::schema::resource::ConditionType::Informational => {
-            Some("Informational".to_string())
-        }
-        nv_redfish::schema::resource::ConditionType::Subsystem => Some("Subsystem".to_string()),
-        nv_redfish::schema::resource::ConditionType::UnsupportedValue => None,
-    }
-}
-
-fn redfish_health_string(health: nv_redfish::schema::resource::Health) -> Option<String> {
-    match health {
-        nv_redfish::schema::resource::Health::Ok => Some("OK".to_string()),
-        nv_redfish::schema::resource::Health::Warning => Some("Warning".to_string()),
-        nv_redfish::schema::resource::Health::Critical => Some("Critical".to_string()),
-        nv_redfish::schema::resource::Health::UnsupportedValue => None,
-    }
-}
-
-fn redfish_state_string(state: nv_redfish::schema::resource::State) -> Option<String> {
-    match state {
-        nv_redfish::schema::resource::State::Enabled => Some("Enabled".to_string()),
-        nv_redfish::schema::resource::State::Disabled => Some("Disabled".to_string()),
-        nv_redfish::schema::resource::State::StandbyOffline => Some("StandbyOffline".to_string()),
-        nv_redfish::schema::resource::State::StandbySpare => Some("StandbySpare".to_string()),
-        nv_redfish::schema::resource::State::InTest => Some("InTest".to_string()),
-        nv_redfish::schema::resource::State::Starting => Some("Starting".to_string()),
-        nv_redfish::schema::resource::State::Absent => Some("Absent".to_string()),
-        nv_redfish::schema::resource::State::UnavailableOffline => {
-            Some("UnavailableOffline".to_string())
-        }
-        nv_redfish::schema::resource::State::Deferring => Some("Deferring".to_string()),
-        nv_redfish::schema::resource::State::Quiesced => Some("Quiesced".to_string()),
-        nv_redfish::schema::resource::State::Updating => Some("Updating".to_string()),
-        nv_redfish::schema::resource::State::Qualified => Some("Qualified".to_string()),
-        nv_redfish::schema::resource::State::Degraded => Some("Degraded".to_string()),
-        nv_redfish::schema::resource::State::UnsupportedValue => None,
-    }
-}
-
 fn push_inventory_error(
-    errors: &mut Vec<InventoryErrorData>,
+    errors: &mut Vec<DomainError>,
     domain: &str,
     resource: Option<String>,
     error: impl std::fmt::Display,
 ) {
-    errors.push(InventoryErrorData {
+    errors.push(DomainError {
         domain: domain.to_string(),
-        resource,
-        message: error.to_string(),
+        resource: resource.map(SanitizedUriReference::new),
+        message: SanitizedErrorMessage::new(error.to_string()),
     });
-}
-
-fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
-}
-
-fn bmc_url(address: &str) -> Result<Url, Box<dyn Error>> {
-    let url: Url = if address.starts_with("http://") || address.starts_with("https://") {
-        address.parse()?
-    } else {
-        format!("https://{address}").parse()?
-    };
-    if url.scheme() == "http" {
-        tracing::warn!(
-            address = %url,
-            "BMC target is configured with http://; Redfish credentials and inventory will not use TLS"
-        );
-    }
-    Ok(url)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::convert::Infallible;
+    use std::sync::Arc;
 
+    use super::super::links::link_reference;
     use super::*;
-    use bmc_dispatch::DispatcherConfig;
     use nv_redfish_bmc_mock::Expect;
 
-    fn test_dispatcher() -> Dispatcher {
-        Dispatcher::start(
-            DispatcherConfig {
-                global_max_in_flight: 1,
-                bmc_max_in_flight: 1,
-                bmc_requests_per_second: 100,
-                bmc_burst: 100,
-                workflow_queue_capacity: 8,
-            },
-            ["test".to_string()],
-        )
-        .expect("dispatcher")
+    struct MockBmcResponses {
+        manager: &'static str,
+        system: &'static str,
+        processors: bool,
+        secure_boot: Option<&'static str>,
+        pcie_collection: &'static str,
+        pcie_device: Option<&'static str>,
+        firmware: &'static str,
     }
 
-    #[tokio::test]
-    async fn redfish_source_builds_client() {
-        RedfishSource::new(true, Duration::from_secs(30), Arc::new(test_dispatcher()))
-            .expect("source");
+    impl Default for MockBmcResponses {
+        fn default() -> Self {
+            Self {
+                manager: MANAGER,
+                system: SYSTEM,
+                processors: false,
+                secure_boot: None,
+                pcie_collection: PCIE_DEVICES_COLLECTION,
+                pcie_device: Some(PCIE_DEVICE),
+                firmware: FIRMWARE,
+            }
+        }
     }
 
-    #[tokio::test]
-    async fn redfish_source_rejects_zero_timeout() {
-        let Err(error) = RedfishSource::new(true, Duration::ZERO, Arc::new(test_dispatcher()))
-        else {
-            panic!("zero timeout should fail");
-        };
+    async fn collect_mock_inventory(fixture: MockBmcResponses) -> RedfishReport {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
 
-        assert!(!error.to_string().is_empty());
-    }
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
+        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", fixture.manager));
+        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Systems/System", fixture.system));
+        if fixture.processors {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/Processors",
+                PROCESSORS_COLLECTION,
+            ));
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/Processors/CPU1",
+                PROCESSOR,
+            ));
+        }
+        if let Some(secure_boot) = fixture.secure_boot {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Systems/System/SecureBoot",
+                secure_boot,
+            ));
+        }
+        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
+        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
+        bmc.expect(Expect::get(
+            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
+            fixture.pcie_collection,
+        ));
+        if let Some(pcie_device) = fixture.pcie_device {
+            bmc.expect(Expect::get(
+                "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
+                pcie_device,
+            ));
+        }
+        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory",
+            FIRMWARE_COLLECTION,
+        ));
+        bmc.expect(Expect::get(
+            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
+            fixture.firmware,
+        ));
 
-    #[test]
-    fn location_keeps_nested_context_without_service_label() {
-        let raw = serde_json::from_value(serde_json::json!({
-            "PartLocation": {"LocationType": "Slot", "LocationOrdinalValue": 0, "Reference": "Front", "Orientation": "LeftToRight"},
-            "PartLocationContext": "Drawer 2",
-            "Placement": {"RackOffset": 3, "RackOffsetUnits": "OpenU", "FacilityName": "Test facility"}
-        })).unwrap();
-        let value = location_data(Some(&raw)).unwrap();
-        let part = value.part_location.unwrap();
-        assert_eq!(part.service_label, None);
-        assert_eq!(part.location_type.as_deref(), Some("Slot"));
-        assert_eq!(part.location_ordinal_value, Some(0));
-        assert_eq!(value.part_location_context.as_deref(), Some("Drawer 2"));
-        assert_eq!(
-            value.placement.unwrap().rack_offset_units.as_deref(),
-            Some("OpenU")
-        );
-        let raw = serde_json::from_value(serde_json::json!({"PartLocation": {}, "Placement": {}}))
-            .unwrap();
-        let value = location_data(Some(&raw)).unwrap();
-        assert!(value.part_location.is_some());
-        assert!(value.placement.is_some());
-        assert!(location_data(None).is_none());
+        let root = ServiceRoot::new(bmc).await.expect("service root wrapper");
+        collect_report_from_root(&root).await.expect("report")
     }
 
     #[test]
@@ -1096,35 +574,6 @@ mod tests {
     }
 
     #[test]
-    fn enum_values_keep_redfish_spelling() {
-        use nv_redfish::schema::{
-            chassis::ChassisType, manager::ManagerType, pcie_device::DeviceType,
-            processor::ProcessorType, resource::PowerState,
-        };
-        assert_eq!(
-            redfish_enum_string(ManagerType::Bmc).as_deref(),
-            Some("BMC")
-        );
-        assert_eq!(
-            redfish_enum_string(PowerState::PoweringOn).as_deref(),
-            Some("PoweringOn")
-        );
-        assert_eq!(
-            redfish_enum_string(ChassisType::RackMount).as_deref(),
-            Some("RackMount")
-        );
-        assert_eq!(
-            redfish_enum_string(ProcessorType::Cpu).as_deref(),
-            Some("CPU")
-        );
-        assert_eq!(
-            redfish_enum_string(DeviceType::SingleFunction).as_deref(),
-            Some("SingleFunction")
-        );
-        assert_eq!(redfish_enum_string(ManagerType::UnsupportedValue), None);
-    }
-
-    #[test]
     fn nvidia_gpu_is_absent_on_unsupported_processors() {
         let other_vendor = serde_json::from_value(serde_json::json!({
             "OtherVendor": {"Enabled": true}
@@ -1160,129 +609,35 @@ mod tests {
     }
 
     #[test]
-    fn bmc_url_adds_https_to_bare_address() {
-        let url = bmc_url("10.0.0.1").expect("url");
+    fn source_sanitizes_domain_errors() {
+        let url = "https://user:secret@bmc.example.com/redfish/v1/Chassis/A?token=secret#part";
+        let mut errors = Vec::new();
 
-        assert_eq!(url.as_str(), "https://10.0.0.1/");
-        assert_eq!(url.port_or_known_default(), Some(443));
-    }
-
-    #[test]
-    fn bmc_url_keeps_explicit_port() {
-        let url = bmc_url("https://bmc.example.com:8443").expect("url");
-
-        assert_eq!(url.as_str(), "https://bmc.example.com:8443/");
-    }
-
-    #[test]
-    fn bmc_url_uses_scheme_default_port_for_scheme_only_url() {
-        let url = bmc_url("http://bmc.example.com").expect("url");
-
-        assert_eq!(url.as_str(), "http://bmc.example.com/");
-        assert_eq!(url.port_or_known_default(), Some(80));
-    }
-
-    #[test]
-    fn bmc_url_rejects_invalid_explicit_url() {
-        let error = bmc_url("https://").expect_err("invalid url");
-
-        assert!(!error.to_string().is_empty());
-    }
-
-    #[test]
-    fn link_targets_preserve_fragments_and_normalize_relationships_to_arrays() {
-        assert_eq!(normalize_link_target("https://user:secret@bmc.example.com/redfish/v1/Systems/System?token=secret#/Processors/0").as_deref(),
-            Some("/redfish/v1/Systems/System#/Processors/0"));
-        assert_eq!(
-            normalize_link_target("/redfish/v1/Systems/System?token=secret#/Processors/0")
-                .as_deref(),
-            Some("/redfish/v1/Systems/System#/Processors/0")
+        push_inventory_error(
+            &mut errors,
+            inventory_domain::CHASSIS,
+            Some(url.to_string()),
+            format!("GET {url} failed"),
         );
+
+        assert_eq!(errors.len(), 1);
+        let error = &errors[0];
+        assert_eq!(error.domain, inventory_domain::CHASSIS);
+        assert_eq!(error.message.as_ref(), "GET [URL_REDACTED] failed");
         assert_eq!(
-            normalize_link_target(
-                "//user:secret@bmc.example.com/redfish/v1/Systems/System?token=secret#/Processors/0"
-            )
-            .as_deref(),
-            Some("/redfish/v1/Systems/System#/Processors/0")
+            error.resource.as_ref().map(AsRef::as_ref),
+            Some("/redfish/v1/Chassis/A#part")
         );
-        assert_eq!(
-            normalize_link_target("#/Processors/0").as_deref(),
-            Some("#/Processors/0")
-        );
-        assert_eq!(normalize_link_target("  "), None);
-        let raw: nv_redfish::schema::chassis::Links = serde_json::from_value(serde_json::json!({
-            "ContainedBy": {"@odata.id": "/redfish/v1/Chassis/Rack"},
-            "Contains": [
-                {"@odata.id": "/redfish/v1/Chassis/B"},
-                {"@odata.id": "/redfish/v1/Chassis/A"},
-                {"@odata.id": "/redfish/v1/Chassis/B"}
-            ],
-            "ManagedBy": []
-        }))
-        .unwrap();
-        let links = chassis_links(Some(&raw));
-        assert_eq!(
-            links["ContainedBy"],
-            vec!["/redfish/v1/Chassis/Rack".to_string()]
-        );
-        assert_eq!(
-            links["Contains"],
-            vec![
-                "/redfish/v1/Chassis/B".to_string(),
-                "/redfish/v1/Chassis/A".to_string(),
-                "/redfish/v1/Chassis/B".to_string()
-            ]
-        );
-        assert_eq!(links["ManagedBy"], Vec::<String>::new());
-        assert!(!links.contains_key("ComputerSystems"));
     }
 
     #[tokio::test]
     async fn collect_report_from_mock_bmc_traverses_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System",
-            SYSTEM_WITH_PROCESSORS,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors",
-            PROCESSORS_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/Processors/CPU1",
-            PROCESSOR,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_PROCESSORS,
+            processors: true,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(
             report.service_root.redfish_version.as_deref(),
@@ -1307,13 +662,22 @@ mod tests {
             report.managers[0].links,
             BTreeMap::from([(
                 "ManagerForServers".to_string(),
-                vec!["/redfish/v1/Systems/System#item".into()]
+                vec![link_reference(
+                    "/redfish/v1/Systems/System#item".to_string()
+                )]
             )])
         );
 
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.systems[0].id, "DGX");
-        assert_eq!(report.systems[0].uuid.as_deref(), Some(SYSTEM_UUID));
+        assert_eq!(
+            report.systems[0]
+                .uuid
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(SYSTEM_UUID)
+        );
         assert_eq!(report.systems[0].manufacturer.as_deref(), Some("NVIDIA"));
         assert_eq!(report.systems[0].model.as_deref(), Some("GB200"));
         assert_eq!(report.systems[0].sku.as_deref(), Some("SKU-GB200"));
@@ -1436,11 +800,13 @@ mod tests {
             BTreeMap::from([
                 (
                     "Chassis".into(),
-                    vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()]
+                    vec![link_reference(
+                        "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string()
+                    )]
                 ),
                 (
                     "ManagedBy".into(),
-                    vec!["/redfish/v1/Managers/BMC_0".into()]
+                    vec![link_reference("/redfish/v1/Managers/BMC_0".to_string())]
                 )
             ])
         );
@@ -1448,7 +814,9 @@ mod tests {
             processor.links,
             BTreeMap::from([(
                 "Chassis".to_string(),
-                vec!["/redfish/v1/Chassis/HGX_GPU_SXM_0".into()]
+                vec![link_reference(
+                    "/redfish/v1/Chassis/HGX_GPU_SXM_0".to_string()
+                )]
             )])
         );
 
@@ -1472,14 +840,11 @@ mod tests {
             "ResourceEvent.1.0.ResourceErrorsDetected"
         );
         assert_eq!(
-            condition.message_args.as_deref(),
-            Some(
-                [
-                    "CPU_1 Firmware".to_string(),
-                    "EC_STRAP_MISMATCH".to_string()
-                ]
-                .as_slice()
-            )
+            condition
+                .message_args
+                .as_ref()
+                .map(|args| args.iter().map(AsRef::as_ref).collect::<Vec<_>>()),
+            Some(vec!["CPU_1 Firmware", "EC_STRAP_MISMATCH"])
         );
         assert_eq!(
             condition.message.as_deref(),
@@ -1494,7 +859,10 @@ mod tests {
         );
         assert_eq!(condition.timestamp.as_deref(), Some("2026-08-25T20:51:47Z"));
         assert_eq!(
-            condition.origin_of_condition.as_deref(),
+            condition
+                .origin_of_condition
+                .as_ref()
+                .map(|origin| origin.odata_id.as_ref()),
             Some("/redfish/v1/Chassis/HGX_CPU_1")
         );
         let location = report.chassis[0]
@@ -1553,52 +921,20 @@ mod tests {
         assert_eq!(report.firmware[0].links.len(), 1);
         assert_eq!(
             report.firmware[0].related_item,
-            Some(vec!["/redfish/v1/Managers/BMC_0#/Firmware".into()])
+            Some(vec![link_reference(
+                "/redfish/v1/Managers/BMC_0#/Firmware".to_string()
+            )])
         );
     }
 
     #[tokio::test]
     async fn secure_boot_collection_failure_records_system_id_resource() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System",
-            SYSTEM_WITH_SECURE_BOOT,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Systems/System/SecureBoot",
-            MALFORMED_SECURE_BOOT,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_SECURE_BOOT,
+            secure_boot: Some(MALFORMED_SECURE_BOOT),
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.systems.len(), 1);
         assert_eq!(report.systems[0].id, "DGX");
@@ -1614,35 +950,12 @@ mod tests {
 
     #[tokio::test]
     async fn pcie_devices_collection_failure_records_chassis_id_resource() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            MALFORMED_PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            pcie_collection: MALFORMED_PCIE_DEVICES_COLLECTION,
+            pcie_device: None,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.chassis.len(), 1);
         assert_eq!(report.chassis[0].id, "HGX_GPU_SXM_0");
@@ -1658,39 +971,11 @@ mod tests {
 
     #[tokio::test]
     async fn manager_collection_failure_is_partial_and_keeps_other_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MALFORMED_MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            manager: MALFORMED_MANAGER,
+            ..Default::default()
+        })
+        .await;
 
         assert!(report.managers.is_empty());
         assert_eq!(report.systems.len(), 1);
@@ -1705,39 +990,11 @@ mod tests {
 
     #[tokio::test]
     async fn firmware_collection_failure_is_partial_and_keeps_other_inventory() {
-        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
-
-        let bmc = Arc::new(MockBmc::default());
-        bmc.expect(Expect::get("/redfish/v1", SERVICE_ROOT));
-        bmc.expect(Expect::get("/redfish/v1/Managers", MANAGERS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", MANAGER));
-        bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Systems/System", SYSTEM));
-        bmc.expect(Expect::get("/redfish/v1/Chassis", CHASSIS_COLLECTION));
-        bmc.expect(Expect::get("/redfish/v1/Chassis/HGX_GPU_SXM_0", CHASSIS));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices",
-            PCIE_DEVICES_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/Chassis/HGX_GPU_SXM_0/PCIeDevices/GPU1",
-            PCIE_DEVICE,
-        ));
-        bmc.expect(Expect::get("/redfish/v1/UpdateService", UPDATE_SERVICE));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory",
-            FIRMWARE_COLLECTION,
-        ));
-        bmc.expect(Expect::get(
-            "/redfish/v1/UpdateService/FirmwareInventory/BMC",
-            MALFORMED_FIRMWARE,
-        ));
-
-        let root = ServiceRoot::new(Arc::clone(&bmc))
-            .await
-            .expect("service root wrapper");
-
-        let report = collect_report_from_root(&root).await.expect("report");
+        let report = collect_mock_inventory(MockBmcResponses {
+            firmware: MALFORMED_FIRMWARE,
+            ..Default::default()
+        })
+        .await;
 
         assert_eq!(report.managers.len(), 1);
         assert_eq!(report.systems.len(), 1);

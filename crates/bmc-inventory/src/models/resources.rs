@@ -225,7 +225,7 @@ pub struct MemorySummary {
 /// regardless of whether Redfish represented the relationship as one or many.
 pub type InventoryLink = Vec<InventoryLinkReference>;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryLinkReference {
     pub odata_id: SanitizedUriReference,

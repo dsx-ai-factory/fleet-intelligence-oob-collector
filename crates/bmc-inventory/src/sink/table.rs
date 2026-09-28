@@ -984,19 +984,23 @@ mod tests {
     fn render_inventory_tables_includes_summary_only_when_detail_is_false() {
         let rendered = render_inventory_tables(&[full_inventory()], false);
 
-        assert!(rendered.contains("Address"));
-        assert!(rendered.contains("Host Name"));
-        assert!(rendered.contains("Source"));
-        assert!(rendered.contains("Redfish"));
-        assert!(rendered.contains("Service UUID"));
-        assert!(rendered.contains("Vendor"));
-        assert!(rendered.contains("10.0.0.1"));
-        assert!(rendered.contains("bmc-a.example.com"));
-        assert!(rendered.contains("redfish"));
-        assert!(rendered.contains("1.15.1"));
-        assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
-        assert!(rendered.contains("NVIDIA"));
-        assert!(rendered.contains("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
+        for expected in [
+            "Address",
+            "Host Name",
+            "Source",
+            "Redfish",
+            "Service UUID",
+            "Vendor",
+            "10.0.0.1",
+            "bmc-a.example.com",
+            "redfish",
+            "1.15.1",
+            "870155dd-d474-aca8-11ee-6e809af87c0c",
+            "NVIDIA",
+            "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
+        ] {
+            assert!(rendered.contains(expected), "missing {expected:?}");
+        }
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
     }
@@ -1005,38 +1009,42 @@ mod tests {
     fn render_inventory_tables_includes_node_chassis_and_firmware_details() {
         let rendered = render_inventory_tables(&[full_inventory()], true);
 
-        assert!(rendered.contains("Node: 10.0.0.1"));
-        assert!(rendered.contains("Source Information\n"));
-        assert!(rendered.contains("| Host Name       | bmc-a.example.com"));
-        assert!(rendered.contains("Redfish Version"));
-        assert!(rendered.contains("Service UUID"));
-        assert!(rendered.contains("870155dd-d474-aca8-11ee-6e809af87c0c"));
-        assert!(rendered.contains("Managers\n"));
-        assert!(rendered.contains("OpenBMC"));
-        assert!(rendered.contains("Systems\n"));
-        assert!(rendered.contains("Primary"));
-        assert!(rendered.contains("System"));
-        assert!(rendered.contains("CPU"));
-        assert!(rendered.contains("1/72"));
-        assert!(rendered.contains("CPU Model"));
-        assert!(rendered.contains("Grace CPU"));
-        assert!(rendered.contains("Secure Boot"));
-        assert!(rendered.contains("Processors\n"));
-        assert!(rendered.contains("22222222-3333-4444-5555-666666666666"));
-        assert!(rendered.contains("CPU Socket 1"));
-        assert!(rendered.contains("CPU-SN123"));
-        assert!(rendered.contains("Health Rollup"));
-        assert!(rendered.contains("Chassis\n"));
-        assert!(rendered.contains("| BMC_0 | module"));
-        assert!(rendered.contains("PCIe Devices\n"));
-        assert!(rendered.contains("| GPU1"));
-        assert!(rendered.contains("Firmware\n"));
-        assert!(rendered.contains("| FirmwareInventory | BMC"));
-        assert!(rendered.contains("StandbyOffline"));
-        assert!(rendered.contains("Critical"));
-        assert!(rendered.contains("Links\n"));
-        assert!(rendered.contains("ManagerForServers"));
-        assert!(rendered.contains("/redfish/v1/Systems/System"));
+        for expected in [
+            "Node: 10.0.0.1",
+            "Source Information\n",
+            "| Host Name       | bmc-a.example.com",
+            "Redfish Version",
+            "Service UUID",
+            "870155dd-d474-aca8-11ee-6e809af87c0c",
+            "Managers\n",
+            "OpenBMC",
+            "Systems\n",
+            "Primary",
+            "System",
+            "CPU",
+            "1/72",
+            "CPU Model",
+            "Grace CPU",
+            "Secure Boot",
+            "Processors\n",
+            "22222222-3333-4444-5555-666666666666",
+            "CPU Socket 1",
+            "CPU-SN123",
+            "Health Rollup",
+            "Chassis\n",
+            "| BMC_0 | module",
+            "PCIe Devices\n",
+            "| GPU1",
+            "Firmware\n",
+            "| FirmwareInventory | BMC",
+            "StandbyOffline",
+            "Critical",
+            "Links\n",
+            "ManagerForServers",
+            "/redfish/v1/Systems/System",
+        ] {
+            assert!(rendered.contains(expected), "missing {expected:?}");
+        }
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
