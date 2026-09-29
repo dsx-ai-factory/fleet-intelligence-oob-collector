@@ -4,8 +4,8 @@ use nv_redfish::oem::nvidia::schema::nvidia_processor::NvidiaGpu;
 use nv_redfish::{Bmc, ServiceRoot};
 
 use super::links::{
-    chassis_links, firmware_links, manager_links, pcie_device_links, processor_links,
-    reference_targets, system_links,
+    chassis_links, firmware_links, link_targets, manager_links, pcie_device_links, processor_links,
+    system_links,
 };
 use super::location::location_data;
 use super::status::{redfish_enum_string, status_data};
@@ -378,7 +378,7 @@ async fn collect_firmware<B: Bmc>(root: &ServiceRoot<B>) -> Result<Vec<FirmwareI
             let raw = inventory.raw();
             FirmwareInventory {
                 description: description(raw.description.as_ref()),
-                related_item: raw.related_item.as_deref().map(reference_targets),
+                related_item: raw.related_item.as_deref().map(link_targets),
                 service_id: "FirmwareInventory".to_string(),
                 id: raw.id.to_string(),
                 odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
