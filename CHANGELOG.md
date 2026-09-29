@@ -19,6 +19,10 @@ release and use the sections that apply.
 
 ### Changed
 
+- Upgrade nv-redfish to 0.18.0. NVIDIA GPU processor data is read through the
+  typed `Processor::oem_nvidia()` API, and Switch and Fabric resource links use
+  the new typed navigation properties. Upstream BMC quirk fixes for missing
+  member IDs and empty log references also apply to collection.
 - The rendered NICo configuration sets the logs collector to `mode = "sse"`
   instead of `"auto"`, so BMC log entries are only streamed over Redfish SSE
   and are no longer polled from LogService when an endpoint has no

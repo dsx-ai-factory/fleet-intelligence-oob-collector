@@ -1,6 +1,7 @@
 use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
+use nv_redfish::oem::nvidia::NvidiaProcessor;
+use nv_redfish::oem::nvidia::schema::nvidia_processor::NvidiaGpu;
 use nv_redfish::{Bmc, ServiceRoot};
-use serde::Deserialize as _;
 
 use super::links::{
     chassis_links, firmware_links, manager_links, pcie_device_links, processor_links,
@@ -234,8 +235,11 @@ async fn collect_processors<B: Bmc>(
     let mut out = Vec::with_capacity(processors.len());
     for processor in processors {
         let raw = processor.raw();
-        let nvidia_gpu = match nvidia_gpu_data(raw.oem.as_ref()) {
-            Ok(nvidia_gpu) => nvidia_gpu,
+        let nvidia_gpu = match processor.oem_nvidia() {
+            Ok(Some(NvidiaProcessor::Gpu(gpu))) => Some(nvidia_gpu_inventory(&gpu)),
+            // Absent NVIDIA OEM data, LPUs, and unknown NVIDIA processor types
+            // carry no GPU inventory.
+            Ok(_) => None,
             Err(error) => {
                 push_inventory_error(
                     errors,
@@ -277,36 +281,25 @@ async fn collect_processors<B: Bmc>(
     out
 }
 
-fn nvidia_gpu_data(
-    oem: Option<&nv_redfish::schema::resource::Oem>,
-) -> Result<Option<NvidiaGpuInventory>, serde_json::Error> {
-    let Some(nvidia) =
-        oem.and_then(|oem| nv_redfish::oem::oem_value(oem, nv_redfish::oem::nvidia::OEM_KEY))
-    else {
-        return Ok(None);
-    };
-    if !nv_redfish::oem::declares(nvidia, "NvidiaProcessor", "NvidiaGPU") {
-        return Ok(None);
-    }
+fn nvidia_gpu_inventory(gpu: &NvidiaGpu) -> NvidiaGpuInventory {
+    let nvlink_topology = gpu
+        .mnnv_link_topology
+        .as_ref()
+        .and_then(Option::as_ref)
+        .map(|topology| NvlinkTopologyInventory {
+            tray_serial_number: topology.tray_serial_number.clone().flatten(),
+            tray_slot_number: topology.tray_slot_number.flatten(),
+            tray_slot_index: topology.tray_slot_index.flatten(),
+            chassis_serial_number: topology.chassis_serial_number.clone().flatten(),
+            host_id: topology.host_id.flatten(),
+            module_id: topology.module_id.flatten(),
+            system_guid: topology.system_guid.clone().flatten(),
+            ib_guid: topology.ibguid.clone().flatten(),
+            lsb_ib_guid: topology.lsb_ibguid.clone().flatten(),
+            peer_type: topology.peer_type.flatten().and_then(redfish_enum_string),
+        });
 
-    let gpu = nv_redfish::oem::nvidia::schema::nvidia_processor::NvidiaGpu::deserialize(nvidia)?;
-    let nvlink_topology =
-        gpu.mnnv_link_topology
-            .flatten()
-            .map(|topology| NvlinkTopologyInventory {
-                tray_serial_number: topology.tray_serial_number.flatten(),
-                tray_slot_number: topology.tray_slot_number.flatten(),
-                tray_slot_index: topology.tray_slot_index.flatten(),
-                chassis_serial_number: topology.chassis_serial_number.flatten(),
-                host_id: topology.host_id.flatten(),
-                module_id: topology.module_id.flatten(),
-                system_guid: topology.system_guid.flatten(),
-                ib_guid: topology.ibguid.flatten(),
-                lsb_ib_guid: topology.lsb_ibguid.flatten(),
-                peer_type: topology.peer_type.flatten().and_then(redfish_enum_string),
-            });
-
-    Ok(Some(NvidiaGpuInventory {
+    NvidiaGpuInventory {
         mig_mode_enabled: gpu.mig_mode_enabled.flatten(),
         default_boost_clock_speed_mhz: gpu.default_boost_clock_speed_mhz.flatten(),
         max_boost_clock_speed_mhz: gpu.max_boost_clock_speed_mhz.flatten(),
@@ -316,7 +309,7 @@ fn nvidia_gpu_data(
         egm_mode_enabled: gpu.egm_mode_enabled.flatten(),
         total_nv_links: gpu.total_number_nv_links.flatten(),
         nvlink_topology,
-    }))
+    }
 }
 
 async fn collect_pcie_devices<B: Bmc>(
@@ -452,7 +445,7 @@ mod tests {
     struct MockBmcResponses {
         manager: &'static str,
         system: &'static str,
-        processors: bool,
+        processor: Option<&'static str>,
         secure_boot: Option<&'static str>,
         pcie_collection: &'static str,
         pcie_device: Option<&'static str>,
@@ -464,7 +457,7 @@ mod tests {
             Self {
                 manager: MANAGER,
                 system: SYSTEM,
-                processors: false,
+                processor: None,
                 secure_boot: None,
                 pcie_collection: PCIE_DEVICES_COLLECTION,
                 pcie_device: Some(PCIE_DEVICE),
@@ -482,14 +475,14 @@ mod tests {
         bmc.expect(Expect::get("/redfish/v1/Managers/BMC_0", fixture.manager));
         bmc.expect(Expect::get("/redfish/v1/Systems", SYSTEMS_COLLECTION));
         bmc.expect(Expect::get("/redfish/v1/Systems/System", fixture.system));
-        if fixture.processors {
+        if let Some(processor) = fixture.processor {
             bmc.expect(Expect::get(
                 "/redfish/v1/Systems/System/Processors",
                 PROCESSORS_COLLECTION,
             ));
             bmc.expect(Expect::get(
                 "/redfish/v1/Systems/System/Processors/CPU1",
-                PROCESSOR,
+                processor,
             ));
         }
         if let Some(secure_boot) = fixture.secure_boot {
@@ -573,39 +566,40 @@ mod tests {
         assert!(mapped.status.is_none());
     }
 
-    #[test]
-    fn nvidia_gpu_is_absent_on_unsupported_processors() {
-        let other_vendor = serde_json::from_value(serde_json::json!({
-            "OtherVendor": {"Enabled": true}
-        }))
-        .expect("resource OEM");
-        assert!(
-            nvidia_gpu_data(Some(&other_vendor))
-                .expect("unsupported OEM")
-                .is_none()
-        );
+    #[tokio::test]
+    async fn non_gpu_nvidia_processor_oem_has_no_gpu_inventory() {
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_PROCESSORS,
+            processor: Some(PROCESSOR_NON_GPU_OEM),
+            ..Default::default()
+        })
+        .await;
 
-        let null_nvidia =
-            serde_json::from_value(serde_json::json!({"Nvidia": null})).expect("resource OEM");
-        assert!(
-            nvidia_gpu_data(Some(&null_nvidia))
-                .expect("null NVIDIA OEM")
-                .is_none()
-        );
-        assert!(nvidia_gpu_data(None).expect("absent OEM").is_none());
+        let processor = &report.systems[0].processors[0];
+        assert_eq!(processor.id, "CPU1");
+        assert!(processor.nvidia_gpu.is_none());
+        assert!(report.errors.is_empty());
     }
 
-    #[test]
-    fn nvidia_gpu_rejects_malformed_declared_gpu_data() {
-        let malformed = serde_json::from_value(serde_json::json!({
-            "Nvidia": {
-                "@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaGPU",
-                "MIGModeEnabled": "not-a-boolean"
-            }
-        }))
-        .expect("resource OEM");
+    #[tokio::test]
+    async fn malformed_gpu_oem_keeps_processor_and_reports_domain_error() {
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_PROCESSORS,
+            processor: Some(PROCESSOR_MALFORMED_GPU_OEM),
+            ..Default::default()
+        })
+        .await;
 
-        assert!(nvidia_gpu_data(Some(&malformed)).is_err());
+        let processor = &report.systems[0].processors[0];
+        assert_eq!(processor.id, "CPU1");
+        assert!(processor.nvidia_gpu.is_none());
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(
+            report.errors[0].domain,
+            inventory_domain::SYSTEMS_PROCESSORS
+        );
+        assert_eq!(report.errors[0].resource.as_deref(), Some("CPU1"));
+        assert!(report.errors[0].message.contains("NVIDIA GPU OEM data"));
     }
 
     #[test]
@@ -634,7 +628,7 @@ mod tests {
     async fn collect_report_from_mock_bmc_traverses_inventory() {
         let report = collect_mock_inventory(MockBmcResponses {
             system: SYSTEM_WITH_PROCESSORS,
-            processors: true,
+            processor: Some(PROCESSOR),
             ..Default::default()
         })
         .await;
@@ -1141,6 +1135,30 @@ mod tests {
         "Name": "Processors",
         "Members@odata.count": 1,
         "Members": [{"@odata.id": "/redfish/v1/Systems/System/Processors/CPU1"}]
+    }"##;
+
+    const PROCESSOR_NON_GPU_OEM: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
+        "@odata.type": "#Processor.v1_20_0.Processor",
+        "Id": "CPU1",
+        "Name": "CPU 1",
+        "Oem": {
+            "Nvidia": {"@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaCPU"},
+            "OtherVendor": {"Ignored": true}
+        }
+    }"##;
+
+    const PROCESSOR_MALFORMED_GPU_OEM: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
+        "@odata.type": "#Processor.v1_20_0.Processor",
+        "Id": "CPU1",
+        "Name": "CPU 1",
+        "Oem": {
+            "Nvidia": {
+                "@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaGPU",
+                "MIGModeEnabled": "not-a-boolean"
+            }
+        }
     }"##;
 
     const PROCESSOR: &str = r##"{
