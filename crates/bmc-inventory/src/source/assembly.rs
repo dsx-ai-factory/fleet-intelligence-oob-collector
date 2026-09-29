@@ -37,6 +37,7 @@ pub(super) fn assemble(
         systems: Vec::new(),
         chassis: Vec::new(),
         firmware: Vec::new(),
+        fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: None,
     };
@@ -64,6 +65,7 @@ pub(super) fn assemble(
             }
             inventory.chassis = report.chassis;
             inventory.firmware = report.firmware;
+            inventory.fabrics = report.fabrics;
             inventory.domain_errors = report.errors;
         }
         Err(error) => inventory.target_error = Some(SanitizedErrorMessage::new(error)),
@@ -168,6 +170,7 @@ mod tests {
             systems,
             chassis: Vec::new(),
             firmware: Vec::new(),
+            fabrics: Vec::new(),
             errors: Vec::new(),
         }
     }

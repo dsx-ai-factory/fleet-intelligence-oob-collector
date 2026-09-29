@@ -57,6 +57,7 @@ mod tests {
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: Vec::new(),
+            fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
         }

@@ -218,6 +218,31 @@ pub(super) fn firmware_links(
     out
 }
 
+pub(super) fn fabric_links(
+    links: Option<&nv_redfish::schema::fabric::Links>,
+) -> BTreeMap<String, InventoryLink> {
+    let mut out = BTreeMap::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_links(&mut out, "ManagedBy", links.managed_by.as_deref());
+    out
+}
+
+pub(super) fn switch_links(
+    links: Option<&nv_redfish::schema::switch::Links>,
+) -> BTreeMap<String, InventoryLink> {
+    let mut out = BTreeMap::new();
+    let Some(links) = links else {
+        return out;
+    };
+    push_link(&mut out, "Chassis", links.chassis.as_ref());
+    push_links(&mut out, "ManagedBy", links.managed_by.as_deref());
+    push_links(&mut out, "Endpoints", links.endpoints.as_deref());
+    push_link(&mut out, "PCIeDevice", links.pcie_device.as_ref());
+    out
+}
+
 /// A Redfish link target. nv-redfish types a link as `NavProperty` when the
 /// target schema is compiled in and as a plain `ReferenceLeaf` otherwise, so
 /// the link form depends on enabled features; both carry an `@odata.id`.

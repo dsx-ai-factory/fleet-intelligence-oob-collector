@@ -173,6 +173,51 @@ pub struct FirmwareInventory {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FabricInventory {
+    pub name: String,
+    pub description: Option<String>,
+    pub id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub uuid: Option<String>,
+    pub fabric_type: Option<String>,
+    pub status: Option<InventoryStatus>,
+    pub switches: Vec<SwitchInventory>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchInventory {
+    pub name: String,
+    pub description: Option<String>,
+    pub id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub uuid: Option<String>,
+    pub switch_type: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub sku: Option<String>,
+    pub serial_number: Option<String>,
+    pub part_number: Option<String>,
+    pub firmware_version: Option<String>,
+    pub location: Option<InventoryLocation>,
+    pub nvidia_switch: Option<NvidiaSwitchInventory>,
+    pub status: Option<InventoryStatus>,
+    pub links: std::collections::BTreeMap<String, InventoryLink>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NvidiaSwitchInventory {
+    pub device_id: Option<String>,
+    pub vendor_id: Option<String>,
+    pub pcie_reference_clock_enabled: Option<bool>,
+    pub protected_pcie_mode_enabled: Option<bool>,
+    pub switch_isolation_mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InventoryStatus {
     pub conditions: Option<Vec<InventoryCondition>>,
     pub health: Option<String>,

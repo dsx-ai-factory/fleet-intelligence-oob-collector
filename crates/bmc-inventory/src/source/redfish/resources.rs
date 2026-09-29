@@ -1,18 +1,21 @@
 use bmc_error::{SanitizedErrorMessage, SanitizedUriReference};
+use nv_redfish::fabric::{Fabric, Switch};
 use nv_redfish::oem::nvidia::NvidiaProcessor;
 use nv_redfish::oem::nvidia::schema::nvidia_processor::NvidiaGpu;
+use nv_redfish::oem::nvidia::schema::nvidia_switch::NvidiaSwitch as NvidiaSwitchSchema;
 use nv_redfish::{Bmc, ServiceRoot};
 
 use super::links::{
-    chassis_links, firmware_links, link_targets, manager_links, pcie_device_links, processor_links,
-    system_links,
+    chassis_links, fabric_links, firmware_links, link_targets, manager_links, pcie_device_links,
+    processor_links, switch_links, system_links,
 };
 use super::location::location_data;
 use super::status::{redfish_enum_string, status_data};
 use crate::models::{
-    ChassisInventory, DomainError, FirmwareInventory, InventoryUuid, ManagerInventory,
-    MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PcieDeviceInventory,
-    ProcessorInventory, ProcessorSummary, SystemInventory,
+    ChassisInventory, DomainError, FabricInventory, FirmwareInventory, InventoryUuid,
+    ManagerInventory, MemorySummary, NvidiaGpuInventory, NvidiaSwitchInventory,
+    NvlinkTopologyInventory, PcieDeviceInventory, ProcessorInventory, ProcessorSummary,
+    SwitchInventory, SystemInventory,
 };
 use crate::source::{RedfishReport, ServiceRootData, inventory_domain};
 
@@ -42,6 +45,8 @@ pub(super) async fn collect_report_from_root<B: Bmc>(
         inventory_domain::FIRMWARE,
         collect_firmware(root).await,
     );
+    let fabrics_result = collect_fabrics(root, &mut errors).await;
+    let fabrics = collect_domain(&mut errors, inventory_domain::FABRICS, fabrics_result);
 
     Ok(RedfishReport {
         service_root,
@@ -49,6 +54,7 @@ pub(super) async fn collect_report_from_root<B: Bmc>(
         systems,
         chassis,
         firmware,
+        fabrics,
         errors,
     })
 }
@@ -426,6 +432,134 @@ fn memory_summary_data(
             .flatten()
             .and_then(redfish_enum_string),
         status: status_data(summary.status.as_ref()),
+    }
+}
+
+/// Fetches each fabric and switch independently: one unreadable member is
+/// recorded as a scoped domain error and does not discard its siblings.
+async fn collect_fabrics<B: Bmc>(
+    root: &ServiceRoot<B>,
+    errors: &mut Vec<DomainError>,
+) -> Result<Vec<FabricInventory>, String> {
+    let Some(collection) = root
+        .fabrics()
+        .await
+        .map_err(|err| format!("fabrics collection: {err}"))?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let links = collection.member_links();
+    let mut out = Vec::with_capacity(links.len());
+    for link in links {
+        let fabric: Fabric<B> = match link.upgrade().await {
+            Ok(fabric) => fabric,
+            Err(err) => {
+                push_inventory_error(
+                    errors,
+                    inventory_domain::FABRICS,
+                    link.odata_id().last_segment().map(ToString::to_string),
+                    err,
+                );
+                continue;
+            }
+        };
+        let raw = fabric.raw();
+        let fabric_id = raw.id.to_string();
+        out.push(FabricInventory {
+            name: raw.name.to_string(),
+            description: description(raw.description.as_ref()),
+            id: fabric_id.clone(),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
+            uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
+            fabric_type: raw.fabric_type.flatten().and_then(redfish_enum_string),
+            status: status_data(raw.status.as_ref()),
+            switches: collect_switches(&fabric, &fabric_id, errors).await,
+            links: fabric_links(raw.links.as_ref()),
+        });
+    }
+    Ok(out)
+}
+
+async fn collect_switches<B: Bmc>(
+    fabric: &Fabric<B>,
+    fabric_id: &str,
+    errors: &mut Vec<DomainError>,
+) -> Vec<SwitchInventory> {
+    let collection = match fabric.switches().await {
+        Ok(Some(collection)) => collection,
+        Ok(None) => return Vec::new(),
+        Err(err) => {
+            push_inventory_error(
+                errors,
+                inventory_domain::FABRICS_SWITCHES,
+                Some(fabric_id.to_string()),
+                err,
+            );
+            return Vec::new();
+        }
+    };
+
+    let links = collection.member_links();
+    let mut out = Vec::with_capacity(links.len());
+    for link in links {
+        let switch: Switch<B> = match link.upgrade().await {
+            Ok(switch) => switch,
+            Err(err) => {
+                push_inventory_error(
+                    errors,
+                    inventory_domain::FABRICS_SWITCHES,
+                    link.odata_id().last_segment().map(ToString::to_string),
+                    err,
+                );
+                continue;
+            }
+        };
+        let raw = switch.raw();
+        let nvidia_switch = match switch.oem_nvidia() {
+            Ok(nvidia) => nvidia.map(|nvidia| nvidia_switch_inventory(&nvidia.raw())),
+            Err(err) => {
+                push_inventory_error(
+                    errors,
+                    inventory_domain::FABRICS_SWITCHES,
+                    Some(raw.id.to_string()),
+                    format!("NVIDIA switch OEM data: {err}"),
+                );
+                None
+            }
+        };
+        out.push(SwitchInventory {
+            name: raw.name.to_string(),
+            description: description(raw.description.as_ref()),
+            id: raw.id.to_string(),
+            odata_id: Some(SanitizedUriReference::new(raw.odata_id.to_string())),
+            uuid: raw.uuid.flatten().map(|uuid| uuid.to_string()),
+            switch_type: raw.switch_type.flatten().and_then(redfish_enum_string),
+            manufacturer: raw.manufacturer.clone().flatten(),
+            model: raw.model.clone().flatten(),
+            sku: raw.sku.clone().flatten(),
+            serial_number: raw.serial_number.clone().flatten(),
+            part_number: raw.part_number.clone().flatten(),
+            firmware_version: raw.firmware_version.clone().flatten(),
+            location: location_data(raw.location.as_ref()),
+            nvidia_switch,
+            status: status_data(raw.status.as_ref()),
+            links: switch_links(raw.links.as_ref()),
+        });
+    }
+    out
+}
+
+fn nvidia_switch_inventory(switch: &NvidiaSwitchSchema) -> NvidiaSwitchInventory {
+    NvidiaSwitchInventory {
+        device_id: switch.device_id.clone().flatten(),
+        vendor_id: switch.vendor_id.clone().flatten(),
+        pcie_reference_clock_enabled: switch.pcie_reference_clock_enabled.flatten(),
+        protected_pcie_mode_enabled: switch.ppcie_mode_enabled.flatten(),
+        switch_isolation_mode: switch
+            .switch_isolation_mode
+            .flatten()
+            .and_then(redfish_enum_string),
     }
 }
 
@@ -1028,6 +1162,223 @@ mod tests {
 
     const SERVICE_UUID: &str = "870155dd-d474-aca8-11ee-6e809af87c0c";
     const SYSTEM_UUID: &str = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
+
+    async fn collect_mock_fabrics(
+        responses: &[(&'static str, &'static str)],
+    ) -> (Vec<FabricInventory>, Vec<DomainError>) {
+        type MockBmc = nv_redfish_bmc_mock::Bmc<Infallible>;
+
+        let bmc = Arc::new(MockBmc::default());
+        bmc.expect(Expect::get("/redfish/v1", FABRIC_SERVICE_ROOT));
+        for (uri, body) in responses {
+            bmc.expect(Expect::get(uri, body));
+        }
+        let root = ServiceRoot::new(bmc).await.expect("service root wrapper");
+        let mut errors = Vec::new();
+        let result = collect_fabrics(&root, &mut errors).await;
+        let fabrics = collect_domain(&mut errors, inventory_domain::FABRICS, result);
+        (fabrics, errors)
+    }
+
+    const FABRICS_COLLECTION: (&str, &str) = (
+        "/redfish/v1/Fabrics",
+        r##"{"@odata.id":"/redfish/v1/Fabrics","@odata.type":"#FabricCollection.FabricCollection","Name":"Fabrics","Members":[{"@odata.id":"/redfish/v1/Fabrics/NVLink"}]}"##,
+    );
+    const NVLINK_FABRIC: (&str, &str) = (
+        "/redfish/v1/Fabrics/NVLink",
+        r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink","@odata.type":"#Fabric.v1_3_0.Fabric","Id":"NVLink","Name":"NVLink Fabric","FabricType":"NVLink","UUID":"33333333-4444-5555-6666-777777777777","Status":{"State":"Enabled","Health":"OK"},"Switches":{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches"},"Links":{"ManagedBy":[{"@odata.id":"/redfish/v1/Managers/BMC_0"}]}}"##,
+    );
+    const SWITCHES_COLLECTION: (&str, &str) = (
+        "/redfish/v1/Fabrics/NVLink/Switches",
+        r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches","@odata.type":"#SwitchCollection.SwitchCollection","Name":"Switches","Members":[{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0"}]}"##,
+    );
+
+    #[tokio::test]
+    async fn collects_fabric_and_nvswitch_inventory() {
+        let (fabrics, errors) = collect_mock_fabrics(&[
+            FABRICS_COLLECTION,
+            NVLINK_FABRIC,
+            SWITCHES_COLLECTION,
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0","@odata.type":"#Switch.v1_9_0.Switch","Id":"NVSwitch_0","Name":"NVSwitch 0","UUID":"44444444-5555-6666-7777-888888888888","SwitchType":"NVLink","Manufacturer":"NVIDIA","Model":"NVSwitch","SKU":"NVL-SKU","SerialNumber":"SW-SERIAL","PartNumber":"SW-PART","FirmwareVersion":"1.2.3","Location":{"PartLocation":{"ServiceLabel":"NVSwitch_0","LocationType":"Slot","LocationOrdinalValue":0}},"Oem":{"Nvidia":{"@odata.type":"#NvidiaSwitch.v1_4_0.NvidiaSwitch","DeviceId":"0x22A3","VendorId":"0x10DE","PCIeReferenceClockEnabled":true,"PPCIeModeEnabled":false,"SwitchIsolationMode":"SwitchCommunicationEnabled"}},"Status":{"State":"Enabled","Health":"OK"},"Links":{"Chassis":{"@odata.id":"/redfish/v1/Chassis/SwitchTray"}}}"##,
+            ),
+        ])
+        .await;
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(fabrics.len(), 1);
+        let fabric = &fabrics[0];
+        assert_eq!(fabric.id, "NVLink");
+        assert_eq!(fabric.fabric_type.as_deref(), Some("NVLink"));
+        assert_eq!(
+            fabric.uuid.as_deref(),
+            Some("33333333-4444-5555-6666-777777777777")
+        );
+        assert_eq!(
+            fabric.status.as_ref().and_then(|s| s.state.as_deref()),
+            Some("Enabled")
+        );
+        assert_eq!(
+            fabric.links["ManagedBy"],
+            vec![link_reference("/redfish/v1/Managers/BMC_0".to_string())]
+        );
+
+        assert_eq!(fabric.switches.len(), 1);
+        let switch = &fabric.switches[0];
+        assert_eq!(switch.id, "NVSwitch_0");
+        assert_eq!(switch.switch_type.as_deref(), Some("NVLink"));
+        assert_eq!(switch.sku.as_deref(), Some("NVL-SKU"));
+        assert_eq!(switch.serial_number.as_deref(), Some("SW-SERIAL"));
+        assert_eq!(switch.part_number.as_deref(), Some("SW-PART"));
+        assert_eq!(switch.firmware_version.as_deref(), Some("1.2.3"));
+        assert_eq!(
+            switch
+                .location
+                .as_ref()
+                .and_then(|location| location.part_location.as_ref())
+                .and_then(|part| part.service_label.as_deref()),
+            Some("NVSwitch_0")
+        );
+        assert_eq!(
+            switch.links["Chassis"],
+            vec![link_reference("/redfish/v1/Chassis/SwitchTray".to_string())]
+        );
+        let nvidia = switch.nvidia_switch.as_ref().expect("NVIDIA switch OEM");
+        assert_eq!(nvidia.device_id.as_deref(), Some("0x22A3"));
+        assert_eq!(nvidia.vendor_id.as_deref(), Some("0x10DE"));
+        assert_eq!(nvidia.pcie_reference_clock_enabled, Some(true));
+        assert_eq!(nvidia.protected_pcie_mode_enabled, Some(false));
+        assert_eq!(
+            nvidia.switch_isolation_mode.as_deref(),
+            Some("SwitchCommunicationEnabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_failure_is_isolated_to_its_switch() {
+        let (fabrics, errors) = collect_mock_fabrics(&[
+            FABRICS_COLLECTION,
+            NVLINK_FABRIC,
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches","@odata.type":"#SwitchCollection.SwitchCollection","Name":"Switches","Members":[{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/bad"},{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_1"}]}"##,
+            ),
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches/bad",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/bad","@odata.type":"#Switch.v1_9_0.Switch","Name":"missing id"}"##,
+            ),
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_1",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_1","@odata.type":"#Switch.v1_9_0.Switch","Id":"NVSwitch_1","Name":"NVSwitch 1"}"##,
+            ),
+        ])
+        .await;
+
+        assert_eq!(fabrics.len(), 1);
+        assert_eq!(fabrics[0].switches.len(), 1);
+        assert_eq!(fabrics[0].switches[0].id, "NVSwitch_1");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].domain, inventory_domain::FABRICS_SWITCHES);
+        assert_eq!(errors[0].resource.as_deref(), Some("bad"));
+    }
+
+    #[tokio::test]
+    async fn malformed_fabric_skips_only_that_fabric() {
+        let (fabrics, errors) = collect_mock_fabrics(&[
+            (
+                "/redfish/v1/Fabrics",
+                r##"{"@odata.id":"/redfish/v1/Fabrics","@odata.type":"#FabricCollection.FabricCollection","Name":"Fabrics","Members":[{"@odata.id":"/redfish/v1/Fabrics/Bad"},{"@odata.id":"/redfish/v1/Fabrics/NVLink"}]}"##,
+            ),
+            (
+                "/redfish/v1/Fabrics/Bad",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/Bad","@odata.type":"#Fabric.v1_3_0.Fabric","Id":"Bad","Name":"Bad Fabric","FabricType":42}"##,
+            ),
+            (
+                "/redfish/v1/Fabrics/NVLink",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink","@odata.type":"#Fabric.v1_3_0.Fabric","Id":"NVLink","Name":"NVLink Fabric"}"##,
+            ),
+        ])
+        .await;
+
+        assert_eq!(fabrics.len(), 1);
+        assert_eq!(fabrics[0].id, "NVLink");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].domain, inventory_domain::FABRICS);
+        assert_eq!(errors[0].resource.as_deref(), Some("Bad"));
+    }
+
+    #[tokio::test]
+    async fn malformed_switch_type_is_a_switch_error() {
+        let (fabrics, errors) = collect_mock_fabrics(&[
+            FABRICS_COLLECTION,
+            NVLINK_FABRIC,
+            SWITCHES_COLLECTION,
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0","@odata.type":"#Switch.v1_9_0.Switch","Id":"NVSwitch_0","Name":"NVSwitch 0","SwitchType":{"unexpected":true}}"##,
+            ),
+        ])
+        .await;
+
+        assert_eq!(fabrics.len(), 1);
+        assert!(fabrics[0].switches.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].domain, inventory_domain::FABRICS_SWITCHES);
+        assert_eq!(errors[0].resource.as_deref(), Some("NVSwitch_0"));
+    }
+
+    #[tokio::test]
+    async fn fabric_collection_without_members_is_a_domain_error() {
+        let (fabrics, errors) = collect_mock_fabrics(&[(
+            "/redfish/v1/Fabrics",
+            r##"{"@odata.id":"/redfish/v1/Fabrics","@odata.type":"#FabricCollection.FabricCollection","Name":"Fabrics"}"##,
+        )])
+        .await;
+
+        assert!(fabrics.is_empty());
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].domain, inventory_domain::FABRICS);
+        assert!(errors[0].resource.is_none());
+        assert!(errors[0].message.contains("Members"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn malformed_nvidia_switch_oem_keeps_standard_inventory() {
+        let (fabrics, errors) = collect_mock_fabrics(&[
+            FABRICS_COLLECTION,
+            NVLINK_FABRIC,
+            SWITCHES_COLLECTION,
+            (
+                "/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0",
+                r##"{"@odata.id":"/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0","@odata.type":"#Switch.v1_9_0.Switch","Id":"NVSwitch_0","Name":"NVSwitch 0","SerialNumber":"SW-SERIAL","Oem":{"Nvidia":{"@odata.type":"#NvidiaSwitch.v1_4_0.NvidiaSwitch","PPCIeModeEnabled":"invalid"}}}"##,
+            ),
+        ])
+        .await;
+
+        assert_eq!(fabrics[0].switches.len(), 1);
+        let switch = &fabrics[0].switches[0];
+        assert_eq!(switch.serial_number.as_deref(), Some("SW-SERIAL"));
+        assert!(switch.nvidia_switch.is_none());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].domain, inventory_domain::FABRICS_SWITCHES);
+        assert_eq!(errors[0].resource.as_deref(), Some("NVSwitch_0"));
+        assert!(errors[0].message.starts_with("NVIDIA switch OEM data:"));
+    }
+
+    const FABRIC_SERVICE_ROOT: &str = r##"{
+        "@odata.id": "/redfish/v1",
+        "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
+        "Id": "RootService",
+        "Name": "Root Service",
+        "RedfishVersion": "1.15.1",
+        "Links": {
+            "Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}
+        },
+        "Vendor": "AMI",
+        "Product": "Mock BMC",
+        "Fabrics": {"@odata.id": "/redfish/v1/Fabrics"}
+    }"##;
 
     const SERVICE_ROOT: &str = r##"{
         "@odata.id": "/redfish/v1",

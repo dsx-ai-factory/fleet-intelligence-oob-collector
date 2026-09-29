@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use uuid::Uuid;
 
 use super::{
-    ChassisInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory, SystemInventory,
+    ChassisInventory, FabricInventory, FirmwareInventory, InventorySourceInfo, ManagerInventory,
+    SystemInventory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,6 +40,7 @@ pub struct NodeInventory {
     pub systems: Vec<SystemInventory>,
     pub chassis: Vec<ChassisInventory>,
     pub firmware: Vec<FirmwareInventory>,
+    pub fabrics: Vec<FabricInventory>,
     pub domain_errors: Vec<DomainError>,
     pub target_error: Option<SanitizedErrorMessage>,
 }
