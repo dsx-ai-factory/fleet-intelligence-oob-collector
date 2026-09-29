@@ -401,9 +401,7 @@ impl Serialize for BackendInventory<'_> {
         map.serialize_entry("domainErrors", domain_errors)?;
         map.serialize_entry("targetError", target_error)?;
         // Top-level request field, not part of the stored inventory snapshot.
-        if !latency.is_empty() {
-            map.serialize_entry("latency", latency)?;
-        }
+        map.serialize_entry("latency", latency)?;
         map.end()
     }
 }
@@ -493,7 +491,7 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
-        assert!(value["data"][0].get("latency").is_none());
+        assert_eq!(value["data"][0]["latency"], serde_json::json!([]));
     }
 
     #[test]

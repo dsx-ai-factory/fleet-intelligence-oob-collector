@@ -45,7 +45,6 @@ pub struct NodeInventory {
     pub target_error: Option<SanitizedErrorMessage>,
     /// Collector-to-BMC network measurements. Not part of the inventory
     /// snapshot: the backend stores them separately from `oobInventory`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub latency: Vec<LatencyMeasurement>,
 }
 

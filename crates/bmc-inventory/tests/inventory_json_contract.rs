@@ -97,7 +97,8 @@ fn target_error_inventory_serializes_absent_uuid() {
             "firmware": [],
             "fabrics": [],
             "domainErrors": [],
-            "targetError": "connection refused"
+            "targetError": "connection refused",
+            "latency": []
         })
     );
 }
