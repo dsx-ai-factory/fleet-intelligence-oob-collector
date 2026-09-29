@@ -25,6 +25,8 @@ release and use the sections that apply.
 - Compile only the nv-redfish schema features inventory collection uses instead
   of `std-redfish`, cutting the release rebuild of nv-redfish and its dependents
   from 77 s to 31 s and the release binary from 21.0 MB to 14.9 MB.
+- Redfish and attestation requests identify themselves to BMCs with the
+  `fleet-intelligence-oob-collector` user agent.
 - The rendered NICo configuration sets the logs collector to `mode = "sse"`
   instead of `"auto"`, so BMC log entries are only streamed over Redfish SSE
   and are no longer polled from LogService when an endpoint has no
