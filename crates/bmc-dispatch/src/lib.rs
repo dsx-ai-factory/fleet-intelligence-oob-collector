@@ -15,7 +15,8 @@ use nv_redfish::bmc_http::{
     RequestError,
 };
 use nv_redfish::core::{
-    BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse, UploadReader,
+    BmcError, BmcErrorClass, BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse,
+    UploadReader,
 };
 use nv_redfish_dispatcher::{
     BoundedConcurrency, ClockConfig, Completion, CostUnits, FixedCost, FutureWork, Readiness,
@@ -400,6 +401,16 @@ impl<E: StdError + 'static> StdError for DispatchError<E> {
     }
 }
 
+impl<E: BmcError + 'static> BmcError for DispatchError<E> {
+    fn error_class(&self) -> BmcErrorClass {
+        match self {
+            Self::Transport(error) => error.error_class(),
+            // Local admission failures never reached the BMC.
+            Self::QueueFull | Self::Unavailable | Self::Unsupported => BmcErrorClass::Other,
+        }
+    }
+}
+
 impl<E: CacheableError> CacheableError for DispatchError<E> {
     fn is_cached(&self) -> bool {
         matches!(self, Self::Transport(error) if error.is_cached())
@@ -453,6 +464,20 @@ where
     {
         self.gate
             .execute(self.inner.get(url, credentials, etag, custom_headers))
+            .await
+    }
+
+    async fn poll<T>(
+        &self,
+        url: Url,
+        credentials: &BmcCredentials,
+        custom_headers: &HeaderMap,
+    ) -> Result<ModificationResponse<T>, Self::Error>
+    where
+        T: DeserializeOwned + Send + Sync,
+    {
+        self.gate
+            .execute(self.inner.poll(url, credentials, custom_headers))
             .await
     }
 

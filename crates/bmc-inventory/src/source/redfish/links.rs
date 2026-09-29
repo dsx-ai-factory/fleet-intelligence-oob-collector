@@ -28,7 +28,7 @@ pub(super) fn manager_links(
         "ManagerInChassis",
         links.manager_in_chassis.as_ref(),
     );
-    push_reference_links(
+    push_nav_links(
         &mut out,
         "ManagerForSwitches",
         links.manager_for_switches.as_deref(),
@@ -50,7 +50,7 @@ pub(super) fn manager_links(
         "SelectedNetworkPort",
         links.selected_network_port.as_ref(),
     );
-    push_reference_links(
+    push_nav_links(
         &mut out,
         "ManagerForFabrics",
         links.manager_for_fabrics.as_deref(),
@@ -130,7 +130,7 @@ pub(super) fn chassis_links(
     push_nav_links(&mut out, "Storage", links.storage.as_deref());
     push_nav_links(&mut out, "PCIeDevices", links.pcie_devices.as_deref());
     push_reference_links(&mut out, "ResourceBlocks", links.resource_blocks.as_deref());
-    push_reference_links(&mut out, "Switches", links.switches.as_deref());
+    push_nav_links(&mut out, "Switches", links.switches.as_deref());
     push_nav_links(&mut out, "Processors", links.processors.as_deref());
     push_reference_link(&mut out, "Facility", links.facility.as_ref());
     push_reference_links(&mut out, "Cables", links.cables.as_deref());
@@ -196,7 +196,7 @@ pub(super) fn pcie_device_links(
     };
     push_nav_links(&mut out, "Chassis", links.chassis.as_deref());
     push_reference_links(&mut out, "PCIeFunctions", links.pcie_functions.as_deref());
-    push_reference_link(&mut out, "Switch", links.switch.as_ref());
+    push_nav_link(&mut out, "Switch", links.switch.as_ref());
     push_nav_links(&mut out, "Processors", links.processors.as_deref());
     push_nav_links(
         &mut out,

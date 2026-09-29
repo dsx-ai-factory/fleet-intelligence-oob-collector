@@ -103,7 +103,7 @@ Collect PCIe devices from each chassis’s advertised `PCIeDevices` collection.
   references as the camelCase `odataId` field; the wire-level `@odata.id` key
   remains confined to Redfish parsing. Resource IDs and names are not synthesized
   or normalized.
-- Individual-resource `@odata.type` is not exposed by nv-redfish 0.15.1. Recovering
+- Individual-resource `@odata.type` is not exposed by nv-redfish 0.18.0. Recovering
   the original type/version requires dependency support or a separately designed
   raw-response capture path; the collector does not fabricate a schema version.
 - The inventory schema remains `inventory.v1alpha1`; legacy aliases are not populated.
