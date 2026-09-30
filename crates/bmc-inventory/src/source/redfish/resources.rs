@@ -235,20 +235,25 @@ async fn collect_processors<B: Bmc>(
     let mut out = Vec::with_capacity(processors.len());
     for processor in processors {
         let raw = processor.raw();
-        let nvidia_gpu = match processor.oem_nvidia() {
-            Ok(Some(NvidiaProcessor::Gpu(gpu))) => Some(nvidia_gpu_inventory(&gpu)),
-            // Absent NVIDIA OEM data, LPUs, and unknown NVIDIA processor types
-            // carry no GPU inventory.
-            Ok(_) => None,
-            Err(error) => {
-                push_inventory_error(
-                    errors,
-                    inventory_domain::SYSTEMS_PROCESSORS,
-                    Some(raw.id.to_string()),
-                    format!("NVIDIA GPU OEM data: {error}"),
-                );
-                None
+        // Decode only processors that declare NVIDIA GPU OEM data. Other NVIDIA
+        // processor types carry no GPU inventory, so their OEM data is not
+        // parsed and cannot produce a processor domain error.
+        let nvidia_gpu = if declares_nvidia_gpu(raw.oem.as_ref()) {
+            match processor.oem_nvidia() {
+                Ok(Some(NvidiaProcessor::Gpu(gpu))) => Some(nvidia_gpu_inventory(&gpu)),
+                Ok(_) => None,
+                Err(error) => {
+                    push_inventory_error(
+                        errors,
+                        inventory_domain::SYSTEMS_PROCESSORS,
+                        Some(raw.id.to_string()),
+                        format!("NVIDIA GPU OEM data: {error}"),
+                    );
+                    None
+                }
             }
+        } else {
+            None
         };
 
         out.push(ProcessorInventory {
@@ -279,6 +284,11 @@ async fn collect_processors<B: Bmc>(
         });
     }
     out
+}
+
+fn declares_nvidia_gpu(oem: Option<&nv_redfish::schema::resource::Oem>) -> bool {
+    oem.and_then(|oem| nv_redfish::oem::oem_value(oem, nv_redfish::oem::nvidia::OEM_KEY))
+        .is_some_and(|nvidia| nv_redfish::oem::declares(nvidia, "NvidiaProcessor", "NvidiaGPU"))
 }
 
 fn nvidia_gpu_inventory(gpu: &NvidiaGpu) -> NvidiaGpuInventory {
@@ -579,6 +589,21 @@ mod tests {
         assert_eq!(processor.id, "CPU1");
         assert!(processor.nvidia_gpu.is_none());
         assert!(report.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_non_gpu_nvidia_oem_is_not_decoded() {
+        let report = collect_mock_inventory(MockBmcResponses {
+            system: SYSTEM_WITH_PROCESSORS,
+            processor: Some(PROCESSOR_MALFORMED_LPU_OEM),
+            ..Default::default()
+        })
+        .await;
+
+        let processor = &report.systems[0].processors[0];
+        assert_eq!(processor.id, "CPU1");
+        assert!(processor.nvidia_gpu.is_none());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
     }
 
     #[tokio::test]
@@ -1145,6 +1170,19 @@ mod tests {
         "Oem": {
             "Nvidia": {"@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaCPU"},
             "OtherVendor": {"Ignored": true}
+        }
+    }"##;
+
+    const PROCESSOR_MALFORMED_LPU_OEM: &str = r##"{
+        "@odata.id": "/redfish/v1/Systems/System/Processors/CPU1",
+        "@odata.type": "#Processor.v1_20_0.Processor",
+        "Id": "CPU1",
+        "Name": "CPU 1",
+        "Oem": {
+            "Nvidia": {
+                "@odata.type": "#NvidiaProcessor.v1_7_0.NvidiaLPU",
+                "BootStatusCode": "something"
+            }
         }
     }"##;
 
