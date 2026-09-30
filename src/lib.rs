@@ -17,7 +17,7 @@ use bmc_inventory::sink::{
     BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
     JsonSink, TableSink,
 };
-use bmc_inventory::source::{InventorySource, RedfishSource};
+use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
 
 use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
@@ -48,6 +48,7 @@ pub struct InventoryOptions {
     pub bmc_requests_per_second: u64,
     pub bmc_burst: u64,
     pub timeout_seconds: u64,
+    pub latency_probe: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -407,7 +408,9 @@ async fn collect_and_upload_inventory(
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
     let producer = tokio::spawn(async move {
@@ -734,7 +737,9 @@ async fn collect_inventory_targets(
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
 
     Ok(inventory_collections(
         &source,
@@ -915,6 +920,7 @@ mod tests {
             bmc_requests_per_second: 1,
             bmc_burst: 1,
             timeout_seconds: 1,
+            latency_probe: false,
         };
 
         assert!(build_attestation_targets(&options, &[]).is_err());
@@ -993,6 +999,7 @@ mod tests {
             fabrics: Vec::new(),
             domain_errors: vec![],
             target_error: None,
+            latency: Vec::new(),
         }
     }
 }

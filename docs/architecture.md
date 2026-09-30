@@ -36,6 +36,13 @@ Redfish structures inside the source.
 Inventory and attestation use the same dispatcher so their requests share
 per-BMC concurrency and rate limits.
 
+After each target's Redfish collection, the source measures TCP connect time to
+the BMC to record collector-to-BMC network latency. The probe round uses one
+inventory dispatcher admission, and a once-per-run check against an unroutable
+address detects local TCP interception. Measurements are uploaded with each
+node's inventory; see the
+[inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
+
 The configured BMC MAC correlates targets across workflows. Inventory normally
 uses `ComputerSystem.UUID` for node identity and provides deterministic
 fallbacks when it is missing. Completed inventories flow through a bounded

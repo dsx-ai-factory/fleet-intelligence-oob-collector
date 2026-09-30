@@ -19,6 +19,13 @@ release and use the sections that apply.
 - NVLink fabric and NVSwitch inventory: fabrics, their switches, and NVIDIA
   switch OEM data (device and vendor IDs, reference clock, protected PCIe mode,
   isolation mode), with `fabrics` and `fabrics.switches` domain errors.
+- Collector-to-BMC network latency measurement: after each inventory collection, the
+  collector times TCP connects to the BMC's Redfish port and uploads the round
+  minimum and median as a top-level `latency` field. A once-per-run check
+  marks measurements `intercepted` when a local component such as a service mesh
+  sidecar terminates outbound TCP. Disable with `--disable-latency-probe` or
+  the Helm value `bmcCollector.latencyProbe: false`; disabled probes report
+  `status: disabled`.
 
 ### Changed
 

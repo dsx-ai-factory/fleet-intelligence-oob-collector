@@ -32,6 +32,7 @@ fn failed_inventory() -> NodeInventory {
         fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: Some("connection refused".into()),
+        latency: Vec::new(),
     }
 }
 
@@ -96,7 +97,8 @@ fn target_error_inventory_serializes_absent_uuid() {
             "firmware": [],
             "fabrics": [],
             "domainErrors": [],
-            "targetError": "connection refused"
+            "targetError": "connection refused",
+            "latency": []
         })
     );
 }

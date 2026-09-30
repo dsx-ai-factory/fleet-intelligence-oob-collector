@@ -162,6 +162,7 @@
     }
   ],
   "kind": "nvswitch",
+  "latency": [],
   "managers": [
     {
       "description": "Baseboard Management Controller",

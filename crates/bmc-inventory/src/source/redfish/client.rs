@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,29 +7,30 @@ use async_trait::async_trait;
 use bmc_dispatch::{Dispatcher, DispatchingHttpClient};
 use nv_redfish::ServiceRoot;
 use nv_redfish::bmc_http::{BmcCredentials, CacheSettings, HttpBmc};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 use super::resources::collect_report_from_root;
 use crate::config::Target;
-use crate::models::NodeInventory;
+use crate::models::{LatencyMeasurement, NodeInventory};
 use crate::source::assembly::assemble;
 use crate::source::reverse_dns::{
     DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname,
 };
-use crate::source::{InventorySource, RedfishReport};
+use crate::source::tcp_probe::{self, LatencyProbe};
+use crate::source::{InventorySource, RedfishReport, now_rfc3339};
 
 type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
 const MAX_REDIRECTS: usize = 3;
 /// Identifies collector traffic in BMC access logs.
 const USER_AGENT: &str = "fleet-intelligence-oob-collector";
+const DEFAULT_REDFISH_PORT: u16 = 443;
 
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
     dispatcher: Arc<Dispatcher>,
     reverse_dns: Option<ReverseDnsResolver>,
+    latency_probe: LatencyProbe,
 }
 
 impl RedfishSource {
@@ -63,7 +65,40 @@ impl RedfishSource {
             client,
             dispatcher,
             reverse_dns,
+            latency_probe: LatencyProbe::Disabled,
         })
+    }
+
+    /// Measure collector-to-BMC latency after each target's Redfish
+    /// collection.
+    #[must_use]
+    pub fn with_latency_probe(mut self, latency_probe: LatencyProbe) -> Self {
+        self.latency_probe = latency_probe;
+        self
+    }
+
+    async fn measure_latency(&self, target: &Target) -> Vec<LatencyMeasurement> {
+        let destination = SocketAddr::new(target.ip, target.port.unwrap_or(DEFAULT_REDFISH_PORT));
+        let config = match self.latency_probe {
+            LatencyProbe::Disabled => return vec![tcp_probe::disabled(destination)],
+            LatencyProbe::Intercepted => return vec![tcp_probe::intercepted(destination)],
+            LatencyProbe::Enabled(config) => config,
+        };
+        let Some(gate) = self.dispatcher.inventory_gate(&target.mac) else {
+            return vec![tcp_probe::unavailable(
+                destination,
+                format!("no dispatcher endpoint for target {:?}", target.mac),
+            )];
+        };
+        // One admission covers the whole round so the probe respects per-BMC
+        // rate and concurrency limits without spending a token per connect.
+        let measurement = gate
+            .execute(async {
+                Ok::<_, std::convert::Infallible>(tcp_probe::probe(destination, config).await)
+            })
+            .await
+            .unwrap_or_else(|error| tcp_probe::unavailable(destination, error.to_string()));
+        vec![measurement]
     }
 
     async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
@@ -97,22 +132,27 @@ impl RedfishSource {
 impl InventorySource for RedfishSource {
     async fn collect(&self, target: Target) -> NodeInventory {
         let collected_at = now_rfc3339();
-        let (result, host_name) = tokio::join!(
-            self.collect_report(&target),
+        let redfish_then_probe = async {
+            let result = self.collect_report(&target).await;
+            // A target-level Redfish failure leaves the node without identity,
+            // so it is not uploaded and a probe result would be discarded.
+            let latency = if result.is_ok() {
+                self.measure_latency(&target).await
+            } else {
+                Vec::new()
+            };
+            (result, latency)
+        };
+        let ((result, latency), host_name) = tokio::join!(
+            redfish_then_probe,
             resolve_hostname(
                 self.reverse_dns.as_ref(),
                 target.ip,
                 DEFAULT_REVERSE_DNS_TIMEOUT,
             )
         );
-        assemble(target, collected_at, host_name, result)
+        assemble(target, collected_at, host_name, result, latency)
     }
-}
-
-fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn bmc_url(address: &str) -> Result<Url, Box<dyn Error>> {
@@ -147,6 +187,66 @@ mod tests {
             ["test".to_string()],
         )
         .expect("dispatcher")
+    }
+
+    #[tokio::test]
+    async fn redfish_failure_skips_latency_probe() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        let source = RedfishSource::new(true, Duration::from_secs(5), Arc::new(test_dispatcher()))
+            .expect("source")
+            .with_latency_probe(LatencyProbe::Enabled(tcp_probe::TcpProbeConfig::default()));
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().expect("ip"),
+            port: Some(port),
+            mac: "test".to_string(),
+            address: format!("127.0.0.1:{port}"),
+            username: "user".to_string(),
+            password: "password".to_string(),
+            labels: Default::default(),
+        };
+
+        let inventory = source.collect(target).await;
+
+        assert!(inventory.target_error.is_some());
+        assert!(inventory.latency.is_empty());
+    }
+
+    #[tokio::test]
+    async fn disabled_probe_reports_disabled_status() {
+        let source = RedfishSource::new(true, Duration::from_secs(5), Arc::new(test_dispatcher()))
+            .expect("source")
+            .with_latency_probe(LatencyProbe::Disabled);
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "10.0.0.1".parse().expect("ip"),
+            port: None,
+            mac: "test".to_string(),
+            address: "10.0.0.1".to_string(),
+            username: "user".to_string(),
+            password: "password".to_string(),
+            labels: Default::default(),
+        };
+
+        let latency = source.measure_latency(&target).await;
+
+        assert_eq!(latency.len(), 1);
+        assert_eq!(latency[0].status, crate::models::LatencyStatus::Disabled);
+        assert_eq!(latency[0].destination, "10.0.0.1:443");
+        assert_eq!(latency[0].attempts, 0);
+        assert!(latency[0].min_us.is_none());
+        assert_eq!(
+            serde_json::to_value(&latency[0]).expect("serialize")["status"],
+            "disabled"
+        );
     }
 
     #[tokio::test]

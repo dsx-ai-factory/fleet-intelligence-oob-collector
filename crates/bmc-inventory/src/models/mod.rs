@@ -1,6 +1,8 @@
+mod latency;
 mod node;
 mod resources;
 
+pub use latency::{LatencyMeasurement, LatencyMethod, LatencyStatus};
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 pub use resources::{
     ChassisInventory, FabricInventory, FirmwareInventory, InventoryCondition, InventoryLink,

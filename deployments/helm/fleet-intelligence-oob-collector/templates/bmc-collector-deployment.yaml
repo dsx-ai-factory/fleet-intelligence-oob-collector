@@ -57,6 +57,9 @@ spec:
             {{- if .Values.bmcCollector.insecureTls }}
             - --insecure-tls
             {{- end }}
+            {{- if not .Values.bmcCollector.latencyProbe }}
+            - --disable-latency-probe
+            {{- end }}
           env:
             - name: RUST_LOG
               value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}

@@ -374,8 +374,9 @@ impl Serialize for BackendInventory<'_> {
             fabrics,
             domain_errors,
             target_error,
+            latency,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(17))?;
+        let mut map = serializer.serialize_map(Some(18))?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
@@ -399,6 +400,7 @@ impl Serialize for BackendInventory<'_> {
         map.serialize_entry("fabrics", fabrics)?;
         map.serialize_entry("domainErrors", domain_errors)?;
         map.serialize_entry("targetError", target_error)?;
+        map.serialize_entry("latency", latency)?;
         map.end()
     }
 }
@@ -488,6 +490,36 @@ mod tests {
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
+        assert_eq!(value["data"][0]["latency"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn batch_request_exports_latency_as_top_level_item_field() {
+        use crate::models::{LatencyMeasurement, LatencyMethod, LatencyStatus};
+
+        let mut inventory = inventory("10.0.0.1");
+        inventory.latency.push(LatencyMeasurement {
+            method: LatencyMethod::TcpConnect,
+            status: LatencyStatus::Ok,
+            destination: "10.0.0.1:443".to_string(),
+            measured_at: "2026-01-01T00:00:00Z".to_string(),
+            attempts: 5,
+            successes: 5,
+            min_us: Some(412),
+            median_us: Some(455),
+            error: None,
+        });
+        let inventories = [inventory];
+        let request = build_batch_upsert_request(&inventories);
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        let latency = &value["data"][0]["latency"][0];
+        assert_eq!(latency["method"], "tcp_connect");
+        assert_eq!(latency["status"], "ok");
+        assert_eq!(latency["destination"], "10.0.0.1:443");
+        assert_eq!(latency["minUs"], 412);
+        assert_eq!(latency["medianUs"], 455);
+        assert!(latency["error"].is_null());
     }
 
     #[test]
@@ -642,6 +674,7 @@ mod tests {
             fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
+            latency: Vec::new(),
         }
     }
 }

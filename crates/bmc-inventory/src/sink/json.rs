@@ -60,6 +60,7 @@ mod tests {
             fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
+            latency: Vec::new(),
         }
     }
 }

@@ -4,8 +4,8 @@ use std::fmt;
 use super::InventorySink;
 use crate::models::{
     ChassisInventory, FirmwareInventory, InventoryLink, InventoryLocation, InventoryStatus,
-    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SwitchInventory,
-    SystemInventory,
+    LatencyStatus, ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory,
+    SwitchInventory, SystemInventory,
 };
 
 #[derive(Default)]
@@ -21,6 +21,7 @@ struct SummaryRow {
     mac: String,
     address: String,
     host_name: String,
+    tcp_rtt: String,
     source_type: String,
     redfish_version: String,
     service_uuid: String,
@@ -206,6 +207,7 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "MAC",
             "Address",
             "Host Name",
+            "TCP RTT",
             "Source",
             "Redfish",
             "Service UUID",
@@ -242,6 +244,7 @@ impl From<&NodeInventory> for SummaryRow {
             mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
             host_name: inventory.source.host_name.clone().unwrap_or_default(),
+            tcp_rtt: format_tcp_rtt(inventory),
             source_type: inventory.source.source_type.clone(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
             service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
@@ -274,7 +277,7 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 20] {
+    fn values(&self) -> [String; 21] {
         [
             self.name.clone(),
             self.compute_zone.clone(),
@@ -282,6 +285,7 @@ impl SummaryRow {
             self.mac.clone(),
             self.address.clone(),
             self.host_name.clone(),
+            self.tcp_rtt.clone(),
             self.source_type.clone(),
             self.redfish_version.clone(),
             self.service_uuid.clone(),
@@ -297,6 +301,19 @@ impl SummaryRow {
             self.domain_errors.clone(),
             self.error.clone(),
         ]
+    }
+}
+
+/// Round-minimum TCP connect time, or the reason it is missing.
+fn format_tcp_rtt(inventory: &NodeInventory) -> String {
+    let Some(measurement) = inventory.latency.first() else {
+        return String::new();
+    };
+    match (measurement.status, measurement.min_us) {
+        (LatencyStatus::Ok, Some(min_us)) => format!("{:.2} ms", min_us as f64 / 1_000.0),
+        (LatencyStatus::Intercepted, _) => "intercepted".to_string(),
+        (LatencyStatus::Disabled, _) => "disabled".to_string(),
+        _ => "unavailable".to_string(),
     }
 }
 
@@ -1082,6 +1099,34 @@ mod tests {
         assert_eq!(row.firmware, "1");
         assert_eq!(row.domain_errors, "0");
         assert_eq!(row.error, "timeout");
+        assert_eq!(row.tcp_rtt, "");
+    }
+
+    #[test]
+    fn summary_row_formats_tcp_rtt_by_status() {
+        use crate::models::{LatencyMeasurement, LatencyMethod};
+
+        let measurement = |status, min_us| LatencyMeasurement {
+            method: LatencyMethod::TcpConnect,
+            status,
+            destination: "10.0.0.1:443".to_string(),
+            measured_at: "2026-01-01T00:00:00Z".to_string(),
+            attempts: 5,
+            successes: 5,
+            min_us,
+            median_us: min_us,
+            error: None,
+        };
+        let mut inventory = full_inventory();
+        for (status, min_us, expected) in [
+            (LatencyStatus::Ok, Some(412), "0.41 ms"),
+            (LatencyStatus::Unavailable, None, "unavailable"),
+            (LatencyStatus::Intercepted, None, "intercepted"),
+            (LatencyStatus::Disabled, None, "disabled"),
+        ] {
+            inventory.latency = vec![measurement(status, min_us)];
+            assert_eq!(SummaryRow::from(&inventory).tcp_rtt, expected);
+        }
     }
 
     #[test]
@@ -1387,6 +1432,7 @@ mod tests {
             fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
+            latency: Vec::new(),
         }
     }
 

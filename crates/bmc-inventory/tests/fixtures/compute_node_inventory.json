@@ -93,6 +93,7 @@
     }
   ],
   "kind": "compute",
+  "latency": [],
   "managers": [
     {
       "description": null,
