@@ -19,7 +19,7 @@ release and use the sections that apply.
 
 ### Changed
 
-- Upgrade nv-redfish to 0.18.0. NVIDIA GPU processor data is read through the
+- Upgrade nv-redfish to 0.18.1. NVIDIA GPU processor data is read through the
   typed `Processor::oem_nvidia()` API. Upstream BMC quirk fixes for missing
   member IDs and empty log references also apply to collection.
 - Compile only the nv-redfish schema features inventory collection uses instead
