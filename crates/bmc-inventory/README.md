@@ -128,6 +128,8 @@ collection run. The list is empty when the probe is disabled.
   TEST-NET-1). A successful connect means a local component, such as a service
   mesh sidecar, terminates outbound TCP. Every target is then reported with
   `status: intercepted` and no probe traffic is sent.
+- Targets whose Redfish collection fails at the target level (`targetError`)
+  are not probed.
 - Probe failures never populate `domainErrors` or `targetError`.
 
 ## PCIe Device Traversal

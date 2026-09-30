@@ -134,7 +134,14 @@ impl InventorySource for RedfishSource {
         let collected_at = now_rfc3339();
         let redfish_then_probe = async {
             let result = self.collect_report(&target).await;
-            (result, self.measure_latency(&target).await)
+            // A target-level Redfish failure leaves the node without identity,
+            // so it is not uploaded and a probe result would be discarded.
+            let latency = if result.is_ok() {
+                self.measure_latency(&target).await
+            } else {
+                Vec::new()
+            };
+            (result, latency)
         };
         let ((result, latency), host_name) = tokio::join!(
             redfish_then_probe,
@@ -180,6 +187,34 @@ mod tests {
             ["test".to_string()],
         )
         .expect("dispatcher")
+    }
+
+    #[tokio::test]
+    async fn redfish_failure_skips_latency_probe() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        let source = RedfishSource::new(true, Duration::from_secs(5), Arc::new(test_dispatcher()))
+            .expect("source")
+            .with_latency_probe(LatencyProbe::Enabled(tcp_probe::TcpProbeConfig::default()));
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().expect("ip"),
+            port: Some(port),
+            mac: "test".to_string(),
+            address: format!("127.0.0.1:{port}"),
+            username: "user".to_string(),
+            password: "password".to_string(),
+            labels: Default::default(),
+        };
+
+        let inventory = source.collect(target).await;
+
+        assert!(inventory.target_error.is_some());
+        assert!(inventory.latency.is_empty());
     }
 
     #[tokio::test]
