@@ -24,7 +24,8 @@ release and use the sections that apply.
   minimum and median as a top-level `latency` field. A once-per-run check
   marks measurements `intercepted` when a local component such as a service mesh
   sidecar terminates outbound TCP. Disable with `--disable-latency-probe` or
-  the Helm value `bmcCollector.latencyProbe: false`.
+  the Helm value `bmcCollector.latencyProbe: false`; disabled probes report
+  `status: disabled`.
 
 ### Changed
 

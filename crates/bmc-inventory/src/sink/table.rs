@@ -312,6 +312,7 @@ fn format_tcp_rtt(inventory: &NodeInventory) -> String {
     match (measurement.status, measurement.min_us) {
         (LatencyStatus::Ok, Some(min_us)) => format!("{:.2} ms", min_us as f64 / 1_000.0),
         (LatencyStatus::Intercepted, _) => "intercepted".to_string(),
+        (LatencyStatus::Disabled, _) => "disabled".to_string(),
         _ => "unavailable".to_string(),
     }
 }
@@ -1121,6 +1122,7 @@ mod tests {
             (LatencyStatus::Ok, Some(412), "0.41 ms"),
             (LatencyStatus::Unavailable, None, "unavailable"),
             (LatencyStatus::Intercepted, None, "intercepted"),
+            (LatencyStatus::Disabled, None, "disabled"),
         ] {
             inventory.latency = vec![measurement(status, min_us)];
             assert_eq!(SummaryRow::from(&inventory).tcp_rtt, expected);

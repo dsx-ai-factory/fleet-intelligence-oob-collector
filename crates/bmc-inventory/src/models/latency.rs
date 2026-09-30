@@ -19,6 +19,8 @@ pub enum LatencyStatus {
     /// A local component answered TCP for an unroutable address, so connect
     /// timing does not reflect the BMC path and the round was skipped.
     Intercepted,
+    /// The probe is turned off; no probe traffic was sent.
+    Disabled,
 }
 
 /// One measurement round from this collector to one BMC.

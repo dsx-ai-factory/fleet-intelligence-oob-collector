@@ -80,7 +80,7 @@ impl RedfishSource {
     async fn measure_latency(&self, target: &Target) -> Vec<LatencyMeasurement> {
         let destination = SocketAddr::new(target.ip, target.port.unwrap_or(DEFAULT_REDFISH_PORT));
         let config = match self.latency_probe {
-            LatencyProbe::Disabled => return Vec::new(),
+            LatencyProbe::Disabled => return vec![tcp_probe::disabled(destination)],
             LatencyProbe::Intercepted => return vec![tcp_probe::intercepted(destination)],
             LatencyProbe::Enabled(config) => config,
         };
@@ -215,6 +215,38 @@ mod tests {
 
         assert!(inventory.target_error.is_some());
         assert!(inventory.latency.is_empty());
+    }
+
+    #[tokio::test]
+    async fn disabled_probe_reports_disabled_status() {
+        let source = RedfishSource::new(true, Duration::from_secs(5), Arc::new(test_dispatcher()))
+            .expect("source")
+            .with_latency_probe(LatencyProbe::Disabled);
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "10.0.0.1".parse().expect("ip"),
+            port: None,
+            mac: "test".to_string(),
+            address: "10.0.0.1".to_string(),
+            username: "user".to_string(),
+            password: "password".to_string(),
+            labels: Default::default(),
+        };
+
+        let latency = source.measure_latency(&target).await;
+
+        assert_eq!(latency.len(), 1);
+        assert_eq!(latency[0].status, crate::models::LatencyStatus::Disabled);
+        assert_eq!(latency[0].destination, "10.0.0.1:443");
+        assert_eq!(latency[0].attempts, 0);
+        assert!(latency[0].min_us.is_none());
+        assert_eq!(
+            serde_json::to_value(&latency[0]).expect("serialize")["status"],
+            "disabled"
+        );
     }
 
     #[tokio::test]

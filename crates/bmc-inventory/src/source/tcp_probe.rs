@@ -80,9 +80,18 @@ pub(crate) async fn tcp_is_intercepted(canary: SocketAddr, timeout: Duration) ->
 }
 
 pub(crate) fn intercepted(destination: SocketAddr) -> LatencyMeasurement {
+    not_measured(destination, LatencyStatus::Intercepted)
+}
+
+pub(crate) fn disabled(destination: SocketAddr) -> LatencyMeasurement {
+    not_measured(destination, LatencyStatus::Disabled)
+}
+
+/// A round that sent no probe traffic, reported with the reason as its status.
+fn not_measured(destination: SocketAddr, status: LatencyStatus) -> LatencyMeasurement {
     LatencyMeasurement {
         method: LatencyMethod::TcpConnect,
-        status: LatencyStatus::Intercepted,
+        status,
         destination: destination.to_string(),
         measured_at: now_rfc3339(),
         attempts: 0,

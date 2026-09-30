@@ -111,7 +111,7 @@ standard inventory and records a `fabrics.switches` error.
 ## Network Latency Measurement
 
 `latency[]` carries collector-to-BMC network latency measurements from the
-collection run. The list is empty when the probe is disabled.
+collection run.
 
 - Method `tcp_connect` times TCP connection establishment to the target IP and
   Redfish port (443 unless configured). The stream is closed without sending
@@ -128,6 +128,9 @@ collection run. The list is empty when the probe is disabled.
   TEST-NET-1). A successful connect means a local component, such as a service
   mesh sidecar, terminates outbound TCP. Every target is then reported with
   `status: intercepted` and no probe traffic is sent.
+- `status: disabled` means the probe is turned off with
+  `--disable-latency-probe` or `bmcCollector.latencyProbe: false`; no probe
+  traffic is sent.
 - Targets whose Redfish collection fails at the target level (`targetError`)
   are not probed.
 - Probe failures never populate `domainErrors` or `targetError`.
