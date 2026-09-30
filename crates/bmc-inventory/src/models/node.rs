@@ -43,8 +43,6 @@ pub struct NodeInventory {
     pub fabrics: Vec<FabricInventory>,
     pub domain_errors: Vec<DomainError>,
     pub target_error: Option<SanitizedErrorMessage>,
-    /// Collector-to-BMC network measurements. Not part of the inventory
-    /// snapshot: the backend stores them separately from `oobInventory`.
     pub latency: Vec<LatencyMeasurement>,
 }
 

@@ -110,10 +110,8 @@ standard inventory and records a `fabrics.switches` error.
 
 ## Network Latency Measurement
 
-`latency[]` carries collector-to-BMC network latency measurements. It is not
-part of the inventory snapshot: the backend
-receives it as a top-level upsert field and stores it outside `oobInventory`.
-The list is empty when the probe is disabled.
+`latency[]` carries collector-to-BMC network latency measurements from the
+collection run. The list is empty when the probe is disabled.
 
 - Method `tcp_connect` times TCP connection establishment to the target IP and
   Redfish port (443 unless configured). The stream is closed without sending

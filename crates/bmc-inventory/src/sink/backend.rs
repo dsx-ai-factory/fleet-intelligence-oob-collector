@@ -400,7 +400,6 @@ impl Serialize for BackendInventory<'_> {
         map.serialize_entry("fabrics", fabrics)?;
         map.serialize_entry("domainErrors", domain_errors)?;
         map.serialize_entry("targetError", target_error)?;
-        // Top-level request field, not part of the stored inventory snapshot.
         map.serialize_entry("latency", latency)?;
         map.end()
     }
