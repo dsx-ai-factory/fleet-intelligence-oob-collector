@@ -4,7 +4,8 @@ use std::fmt;
 use super::InventorySink;
 use crate::models::{
     ChassisInventory, FirmwareInventory, InventoryLink, InventoryLocation, InventoryStatus,
-    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SystemInventory,
+    ManagerInventory, NodeInventory, PcieDeviceInventory, ProcessorInventory, SwitchInventory,
+    SystemInventory,
 };
 
 #[derive(Default)]
@@ -30,8 +31,26 @@ struct SummaryRow {
     systems: String,
     chassis: String,
     firmware: String,
+    fabrics: String,
+    switches: String,
     domain_errors: String,
     error: String,
+}
+
+#[derive(Debug)]
+struct SwitchDetailRow {
+    fabric_id: String,
+    id: String,
+    uuid: String,
+    manufacturer: String,
+    model: String,
+    sku: String,
+    serial: String,
+    part: String,
+    firmware: String,
+    switch_type: String,
+    status: String,
+    health: String,
 }
 
 #[derive(Debug)]
@@ -197,6 +216,8 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "Systems",
             "Chassis",
             "Firmware",
+            "Fabrics",
+            "Switches",
             "Domain Errors",
             "Target Error",
         ],
@@ -235,6 +256,13 @@ impl From<&NodeInventory> for SummaryRow {
             systems: inventory.systems.len().to_string(),
             chassis: inventory.chassis.len().to_string(),
             firmware: inventory.firmware.len().to_string(),
+            fabrics: inventory.fabrics.len().to_string(),
+            switches: inventory
+                .fabrics
+                .iter()
+                .map(|fabric| fabric.switches.len())
+                .sum::<usize>()
+                .to_string(),
             domain_errors: inventory.domain_errors.len().to_string(),
             error: inventory
                 .target_error
@@ -246,7 +274,7 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 18] {
+    fn values(&self) -> [String; 20] {
         [
             self.name.clone(),
             self.compute_zone.clone(),
@@ -264,6 +292,8 @@ impl SummaryRow {
             self.systems.clone(),
             self.chassis.clone(),
             self.firmware.clone(),
+            self.fabrics.clone(),
+            self.switches.clone(),
             self.domain_errors.clone(),
             self.error.clone(),
         ]
@@ -564,6 +594,42 @@ impl ProcessorDetailRow {
     }
 }
 
+impl SwitchDetailRow {
+    fn from_switch(fabric_id: &str, switch: &SwitchInventory) -> Self {
+        Self {
+            fabric_id: fabric_id.to_string(),
+            id: switch.id.clone(),
+            uuid: switch.uuid.clone().unwrap_or_default(),
+            manufacturer: switch.manufacturer.clone().unwrap_or_default(),
+            model: switch.model.clone().unwrap_or_default(),
+            sku: switch.sku.clone().unwrap_or_default(),
+            serial: switch.serial_number.clone().unwrap_or_default(),
+            part: switch.part_number.clone().unwrap_or_default(),
+            firmware: switch.firmware_version.clone().unwrap_or_default(),
+            switch_type: switch.switch_type.clone().unwrap_or_default(),
+            status: status_state(switch.status.as_ref()),
+            health: status_health(switch.status.as_ref()),
+        }
+    }
+
+    fn values(&self) -> [String; 12] {
+        [
+            self.fabric_id.clone(),
+            self.id.clone(),
+            self.uuid.clone(),
+            self.manufacturer.clone(),
+            self.model.clone(),
+            self.sku.clone(),
+            self.serial.clone(),
+            self.part.clone(),
+            self.firmware.clone(),
+            self.switch_type.clone(),
+            self.status.clone(),
+            self.health.clone(),
+        ]
+    }
+}
+
 impl From<&FirmwareInventory> for FirmwareDetailRow {
     fn from(firmware: &FirmwareInventory) -> Self {
         Self {
@@ -757,6 +823,35 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         firmware_rows,
     ));
 
+    let switch_rows = inventory
+        .fabrics
+        .iter()
+        .flat_map(|fabric| {
+            fabric
+                .switches
+                .iter()
+                .map(move |switch| SwitchDetailRow::from_switch(&fabric.id, switch))
+        })
+        .map(|row| row.values());
+    out.push_str("NVSwitches\n");
+    out.push_str(&render_table(
+        &[
+            "Fabric",
+            "ID",
+            "UUID",
+            "Manufacturer",
+            "Model",
+            "SKU",
+            "Serial",
+            "Part",
+            "Firmware",
+            "Type",
+            "Status",
+            "Health",
+        ],
+        switch_rows,
+    ));
+
     out.push_str("Links\n");
     out.push_str(&render_table(
         &["Resource Type", "Source", "Relation", "Target"],
@@ -813,6 +908,22 @@ fn link_detail_rows(inventory: &NodeInventory) -> Vec<[String; 4]> {
             firmware.odata_id.as_deref().unwrap_or(&firmware.id),
             &firmware.links,
         );
+    }
+    for fabric in &inventory.fabrics {
+        push_link_detail_rows(
+            &mut rows,
+            "fabric",
+            fabric.odata_id.as_deref().unwrap_or(&fabric.id),
+            &fabric.links,
+        );
+        for switch in &fabric.switches {
+            push_link_detail_rows(
+                &mut rows,
+                "switch",
+                switch.odata_id.as_deref().unwrap_or(&switch.id),
+                &switch.links,
+            );
+        }
     }
     rows
 }
@@ -897,8 +1008,8 @@ fn write_row<T: fmt::Display>(out: &mut String, values: &[T], widths: &[usize]) 
 mod tests {
     use super::*;
     use crate::models::{
-        INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid, ManagerInventory,
-        PcieDeviceInventory, SystemInventory,
+        FabricInventory, INVENTORY_SCHEMA_VERSION, InventorySourceInfo, InventoryUuid,
+        ManagerInventory, PcieDeviceInventory, SystemInventory,
     };
 
     #[test]
@@ -978,6 +1089,48 @@ mod tests {
         let row = SummaryRow::from(&full_inventory());
 
         assert_eq!(row.error, "");
+    }
+
+    #[test]
+    fn fabrics_render_counts_and_switch_details() {
+        let switch = |id: &str| SwitchInventory {
+            name: id.to_string(),
+            description: None,
+            id: id.to_string(),
+            odata_id: Some(format!("/redfish/v1/Fabrics/NVLink/Switches/{id}").into()),
+            uuid: None,
+            switch_type: Some("NVLink".to_string()),
+            manufacturer: Some("NVIDIA".to_string()),
+            model: Some("NVSwitch".to_string()),
+            sku: None,
+            serial_number: Some(format!("{id}-SERIAL")),
+            part_number: None,
+            firmware_version: Some("1.2.3".to_string()),
+            location: None,
+            nvidia_switch: None,
+            status: Some(inventory_status("Enabled", "OK", "OK")),
+            links: Default::default(),
+        };
+        let mut inventory = full_inventory();
+        inventory.fabrics = vec![FabricInventory {
+            name: "NVLink Fabric".to_string(),
+            description: None,
+            id: "NVLink".to_string(),
+            odata_id: Some("/redfish/v1/Fabrics/NVLink".into()),
+            uuid: None,
+            fabric_type: Some("NVLink".to_string()),
+            status: None,
+            switches: vec![switch("NVSwitch_0"), switch("NVSwitch_1")],
+            links: Default::default(),
+        }];
+
+        let row = SummaryRow::from(&inventory);
+        assert_eq!(row.fabrics, "1");
+        assert_eq!(row.switches, "2");
+
+        let rendered = render_inventory_tables(&[inventory], true);
+        assert!(rendered.contains("NVSwitches"));
+        assert!(rendered.contains("NVSwitch_1-SERIAL"));
     }
 
     #[test]
@@ -1231,6 +1384,7 @@ mod tests {
                 status: Some(inventory_status("StandbyOffline", "Critical", "Warning")),
                 links: Default::default(),
             }],
+            fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
         }

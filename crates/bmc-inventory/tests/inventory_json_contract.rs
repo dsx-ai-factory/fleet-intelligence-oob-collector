@@ -1,6 +1,7 @@
 use bmc_inventory::models::{
-    INVENTORY_SCHEMA_VERSION, InventoryCondition, InventoryReference, InventorySourceInfo,
-    NodeInventory, TargetKind,
+    FabricInventory, INVENTORY_SCHEMA_VERSION, InventoryCondition, InventoryReference,
+    InventorySourceInfo, InventoryStatus, NodeInventory, NvidiaSwitchInventory, SwitchInventory,
+    TargetKind,
 };
 use serde_json::json;
 
@@ -28,6 +29,7 @@ fn failed_inventory() -> NodeInventory {
         systems: Vec::new(),
         chassis: Vec::new(),
         firmware: Vec::new(),
+        fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: Some("connection refused".into()),
     }
@@ -92,8 +94,99 @@ fn target_error_inventory_serializes_absent_uuid() {
             "systems": [],
             "chassis": [],
             "firmware": [],
+            "fabrics": [],
             "domainErrors": [],
             "targetError": "connection refused"
+        })
+    );
+}
+
+#[test]
+fn fabric_serializes_backend_switch_contract() {
+    let status = || {
+        Some(InventoryStatus {
+            conditions: None,
+            health: Some("OK".to_string()),
+            health_rollup: Some("OK".to_string()),
+            state: Some("Enabled".to_string()),
+        })
+    };
+    let fabric = FabricInventory {
+        name: "NVLink Fabric".to_string(),
+        description: None,
+        id: "NVLink".to_string(),
+        odata_id: Some("/redfish/v1/Fabrics/NVLink".into()),
+        uuid: None,
+        fabric_type: Some("NVLink".to_string()),
+        status: status(),
+        switches: vec![SwitchInventory {
+            name: "NVSwitch 0".to_string(),
+            description: None,
+            id: "NVSwitch_0".to_string(),
+            odata_id: Some("/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0".into()),
+            uuid: None,
+            switch_type: Some("NVLink".to_string()),
+            manufacturer: Some("NVIDIA".to_string()),
+            model: Some("NVSwitch".to_string()),
+            sku: None,
+            serial_number: Some("SW-SERIAL".to_string()),
+            part_number: None,
+            firmware_version: Some("1.2.3".to_string()),
+            location: None,
+            nvidia_switch: Some(NvidiaSwitchInventory {
+                device_id: Some("0x22A3".to_string()),
+                vendor_id: Some("0x10DE".to_string()),
+                pcie_reference_clock_enabled: Some(true),
+                protected_pcie_mode_enabled: Some(false),
+                switch_isolation_mode: Some("SwitchCommunicationEnabled".to_string()),
+            }),
+            status: status(),
+            links: Default::default(),
+        }],
+        links: Default::default(),
+    };
+
+    let status_json = json!({
+        "conditions": null,
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+    });
+    assert_eq!(
+        serde_json::to_value(fabric).expect("serialize fabric"),
+        json!({
+            "name": "NVLink Fabric",
+            "description": null,
+            "id": "NVLink",
+            "odataId": "/redfish/v1/Fabrics/NVLink",
+            "uuid": null,
+            "fabricType": "NVLink",
+            "status": status_json,
+            "switches": [{
+                "name": "NVSwitch 0",
+                "description": null,
+                "id": "NVSwitch_0",
+                "odataId": "/redfish/v1/Fabrics/NVLink/Switches/NVSwitch_0",
+                "uuid": null,
+                "switchType": "NVLink",
+                "manufacturer": "NVIDIA",
+                "model": "NVSwitch",
+                "sku": null,
+                "serialNumber": "SW-SERIAL",
+                "partNumber": null,
+                "firmwareVersion": "1.2.3",
+                "location": null,
+                "nvidiaSwitch": {
+                    "deviceId": "0x22A3",
+                    "vendorId": "0x10DE",
+                    "pcieReferenceClockEnabled": true,
+                    "protectedPcieModeEnabled": false,
+                    "switchIsolationMode": "SwitchCommunicationEnabled"
+                },
+                "status": status_json,
+                "links": {}
+            }],
+            "links": {}
         })
     );
 }

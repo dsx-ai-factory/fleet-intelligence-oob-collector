@@ -371,10 +371,11 @@ impl Serialize for BackendInventory<'_> {
             systems,
             chassis,
             firmware,
+            fabrics,
             domain_errors,
             target_error,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(16))?;
+        let mut map = serializer.serialize_map(Some(17))?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
@@ -395,6 +396,7 @@ impl Serialize for BackendInventory<'_> {
         map.serialize_entry("systems", systems)?;
         map.serialize_entry("chassis", chassis)?;
         map.serialize_entry("firmware", firmware)?;
+        map.serialize_entry("fabrics", fabrics)?;
         map.serialize_entry("domainErrors", domain_errors)?;
         map.serialize_entry("targetError", target_error)?;
         map.end()
@@ -637,6 +639,7 @@ mod tests {
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: Vec::new(),
+            fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
         }

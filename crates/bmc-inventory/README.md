@@ -58,6 +58,8 @@ Collection is split by inventory domain:
 - chassis
 - chassis.pcieDevices
 - firmware
+- fabrics
+- fabrics.switches
 
 A domain failure is recorded in `domainErrors` and does not discard other
 domains. For example, a firmware inventory failure should still preserve manager,
@@ -81,9 +83,29 @@ should key off `domain`, optionally scoped by `resource`; it should not parse
 | `chassis` | `null` | Do not write or clear chassis data for the target, including PCIe devices. |
 | `chassis.pcieDevices` | chassis ID | Write the chassis data, but do not replace PCIe devices for that chassis with an empty list. |
 | `firmware` | `null` | Do not write or clear firmware data for the target. |
+| `fabrics` | `null` or fabric ID | Preserve the entire previously stored `fabrics` section for the target. |
+| `fabrics.switches` | fabric or switch ID | Preserve the entire previously stored `fabrics` section for the target, including all switches. |
+
+Any `fabrics` or `fabrics.switches` error skips replacement of the whole stored
+section, regardless of `resource`. Successful fabric and switch results from the
+same collection do not update an existing snapshot until a collection completes
+without either error. This prevents a partial payload from clearing sibling
+fabrics or switches; other inventory domains can still update independently.
+On first ingest, when no prior snapshot exists, the backend stores the submitted
+partial payload together with its domain errors.
 
 When `targetError` is present, backend ingestion should skip all inventory writes
 for that target and record the collection failure instead.
+
+## Fabric and Switch Collection
+
+Fabrics come from the service root `Fabrics` collection, and switches from each
+fabric's `Switches` collection. Each fabric and switch is fetched independently,
+so one unreadable member is recorded as a scoped domain error without discarding
+its siblings. A collection missing `Members` is an error, not an empty list, so
+it cannot clear stored fabrics. NVIDIA switch OEM data is decoded through
+nv-redfish's typed `Switch::oem_nvidia()`; malformed OEM data keeps the switch's
+standard inventory and records a `fabrics.switches` error.
 
 ## PCIe Device Traversal
 

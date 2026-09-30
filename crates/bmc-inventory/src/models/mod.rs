@@ -3,10 +3,11 @@ mod resources;
 
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
 pub use resources::{
-    ChassisInventory, FirmwareInventory, InventoryCondition, InventoryLink, InventoryLinkReference,
-    InventoryLocation, InventoryReference, InventorySourceInfo, InventoryStatus, ManagerInventory,
-    MemorySummary, NvidiaGpuInventory, NvlinkTopologyInventory, PartLocation, PcieDeviceInventory,
-    Placement, ProcessorInventory, ProcessorSummary, SystemInventory,
+    ChassisInventory, FabricInventory, FirmwareInventory, InventoryCondition, InventoryLink,
+    InventoryLinkReference, InventoryLocation, InventoryReference, InventorySourceInfo,
+    InventoryStatus, ManagerInventory, MemorySummary, NvidiaGpuInventory, NvidiaSwitchInventory,
+    NvlinkTopologyInventory, PartLocation, PcieDeviceInventory, Placement, ProcessorInventory,
+    ProcessorSummary, SwitchInventory, SystemInventory,
 };
 
 pub const INVENTORY_SCHEMA_VERSION: &str = "inventory.v1alpha1";

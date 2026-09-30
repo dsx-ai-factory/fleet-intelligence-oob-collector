@@ -29,6 +29,7 @@ nv-redfish = { version = "0.18.1", features = [
     "oem-nvidia",
     "chassis",
     "computer-systems",
+    "fabrics",
     "managers",
     "processors",
     "secure-boot",

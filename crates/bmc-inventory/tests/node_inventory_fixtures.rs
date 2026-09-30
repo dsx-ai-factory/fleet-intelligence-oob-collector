@@ -9,6 +9,31 @@ fn ok_status(health_rollup: Option<&str>) -> InventoryStatus {
     }
 }
 
+/// OpenBMC-based NVIDIA BMCs report `"Conditions": []` rather than omitting it.
+fn ok_status_with_conditions(health_rollup: Option<&str>) -> InventoryStatus {
+    InventoryStatus {
+        conditions: Some(Vec::new()),
+        ..ok_status(health_rollup)
+    }
+}
+
+fn links<const N: usize>(
+    relations: [(&str, &[&str]); N],
+) -> std::collections::BTreeMap<String, InventoryLink> {
+    relations
+        .into_iter()
+        .map(|(relation, targets)| {
+            let targets = targets
+                .iter()
+                .map(|target| InventoryLinkReference {
+                    odata_id: (*target).into(),
+                })
+                .collect();
+            (relation.to_string(), targets)
+        })
+        .collect()
+}
+
 #[test]
 fn compute_node_inventory_serializes_expected_json() {
     // Representative compute BMC shape with synthetic identifiers.
@@ -35,6 +60,7 @@ fn compute_node_inventory_serializes_expected_json() {
         systems: Vec::new(),
         chassis: Vec::new(),
         firmware: Vec::new(),
+        fabrics: Vec::new(),
         domain_errors: Vec::new(),
         target_error: None,
     };
@@ -228,6 +254,188 @@ fn compute_node_inventory_serializes_expected_json() {
     let actual = serde_json::to_value(inventory).expect("serialize inventory");
     let expected: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/compute_node_inventory.json"))
+            .expect("inventory contract example");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn nvswitch_node_inventory_serializes_expected_json() {
+    // Shape and non-identifying values from a captured NVIDIA NVSwitch tray BMC;
+    // serial numbers, SKUs, UUIDs, and addresses are synthetic.
+    let node_uuid = "5B1E2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";
+    let switch = |index: u8, uuid: &str| SwitchInventory {
+        name: format!("NVSwitch_{index} Resource"),
+        description: None,
+        id: format!("NVSwitch_{index}"),
+        odata_id: Some(
+            format!("/redfish/v1/Fabrics/MGX_NVLinkFabric_0/Switches/NVSwitch_{index}").into(),
+        ),
+        uuid: Some(uuid.to_string()),
+        switch_type: Some("NVLink".to_string()),
+        manufacturer: Some("NVIDIA".to_string()),
+        // The captured BMC reports "NA" placeholders for these fields.
+        model: Some("NA".to_string()),
+        sku: None,
+        serial_number: Some("NA".to_string()),
+        part_number: Some("NA".to_string()),
+        firmware_version: Some("35_2014_2184".to_string()),
+        location: None,
+        nvidia_switch: Some(NvidiaSwitchInventory {
+            device_id: None,
+            vendor_id: None,
+            pcie_reference_clock_enabled: None,
+            protected_pcie_mode_enabled: None,
+            switch_isolation_mode: Some("SwitchCommunicationEnabled".to_string()),
+        }),
+        status: Some(ok_status_with_conditions(Some("OK"))),
+        links: links([(
+            "Chassis",
+            &[&format!("/redfish/v1/Chassis/MGX_NVSwitch_{index}")],
+        )]),
+    };
+
+    let inventory = NodeInventory {
+        schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
+        collected_at: "2026-01-01T00:00:00Z".to_string(),
+        enrolled_at: Some("2026-01-02T00:00:00Z".to_string()),
+        kind: TargetKind::NvSwitch,
+        name: Some("nvswitch-01".to_string()),
+        compute_zone: Some("us-west-dc1".to_string()),
+        node_group: Some("gb200-training".to_string()),
+        uuid: InventoryUuid::parse(node_uuid),
+        source: InventorySourceInfo {
+            source_type: "redfish".to_string(),
+            mac: "00:11:22:33:44:66".to_string(),
+            address: "10.0.0.2".to_string(),
+            host_name: Some("bmc-nvswitch-a.example.com".to_string()),
+            redfish_version: Some("1.17.0".to_string()),
+            service_uuid: Some("6c2f3d4e-5f60-4b7c-9d8e-0f1a2b3c4d5e".to_string()),
+            vendor: Some("NVIDIA".to_string()),
+        },
+        primary_system_id: Some("System_0".to_string()),
+        managers: vec![ManagerInventory {
+            name: "OpenBmc Manager".to_string(),
+            description: Some("Baseboard Management Controller".to_string()),
+            id: "BMC_0".to_string(),
+            odata_id: Some("/redfish/v1/Managers/BMC_0".into()),
+            uuid: Some("7d304e5f-6071-4c8d-ae9f-1a2b3c4d5e6f".to_string()),
+            manager_type: Some("BMC".to_string()),
+            model: Some("OpenBmc".to_string()),
+            firmware_version: Some("88.0002.1336".to_string()),
+            status: Some(ok_status_with_conditions(Some("OK"))),
+            links: links([
+                (
+                    "ActiveSoftwareImage",
+                    &["/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_BMC_0"],
+                ),
+                ("ManagerForChassis", &["/redfish/v1/Chassis/BMC_eeprom"]),
+                ("ManagerForServers", &["/redfish/v1/Systems/System_0"]),
+                ("ManagerInChassis", &["/redfish/v1/Chassis/BMC_eeprom"]),
+                (
+                    "SoftwareImages",
+                    &["/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_BMC_0"],
+                ),
+            ]),
+        }],
+        systems: vec![SystemInventory {
+            name: "System_0".to_string(),
+            description: Some("Computer System".to_string()),
+            id: "System_0".to_string(),
+            odata_id: Some("/redfish/v1/Systems/System_0".into()),
+            // The tray's system reports no UUID, so it carries the node UUID.
+            uuid: InventoryUuid::parse(node_uuid),
+            manufacturer: None,
+            model: None,
+            sku: None,
+            serial_number: None,
+            bios_version: None,
+            host_name: None,
+            asset_tag: None,
+            power_state: Some("On".to_string()),
+            status: Some(ok_status_with_conditions(None)),
+            processor_summary: Some(ProcessorSummary {
+                count: Some(0),
+                ..Default::default()
+            }),
+            memory_summary: Some(MemorySummary {
+                total_system_memory_gib: Some(0.0),
+                ..Default::default()
+            }),
+            secure_boot_enabled: None,
+            processors: Vec::new(),
+            links: links([
+                ("Chassis", &["/redfish/v1/Chassis/BMC_eeprom"]),
+                ("ManagedBy", &["/redfish/v1/Managers/BMC_0"]),
+            ]),
+        }],
+        chassis: vec![ChassisInventory {
+            name: "MGX_NVSwitch_0".to_string(),
+            description: None,
+            id: "MGX_NVSwitch_0".to_string(),
+            odata_id: Some("/redfish/v1/Chassis/MGX_NVSwitch_0".into()),
+            chassis_type: Some("Component".to_string()),
+            manufacturer: Some("NVIDIA".to_string()),
+            model: Some("N5400_LD".to_string()),
+            sku: Some("SKU-NVS-01".to_string()),
+            serial_number: Some("NVS-SN-0001".to_string()),
+            part_number: Some("NVS-PN-0001".to_string()),
+            asset_tag: None,
+            power_state: Some("On".to_string()),
+            status: Some(ok_status_with_conditions(Some("OK"))),
+            location: Some(InventoryLocation {
+                part_location: Some(PartLocation {
+                    location_type: Some("Embedded".to_string()),
+                    ..Default::default()
+                }),
+                placement: None,
+                part_location_context: None,
+            }),
+            pcie_devices: Vec::new(),
+            links: links([
+                ("ComputerSystems", &["/redfish/v1/Systems/System_0"]),
+                ("ManagedBy", &["/redfish/v1/Managers/BMC_0"]),
+                (
+                    "Switches",
+                    &["/redfish/v1/Fabrics/MGX_NVLinkFabric_0/Switches/NVSwitch_0"],
+                ),
+            ]),
+        }],
+        firmware: vec![FirmwareInventory {
+            description: Some("Other image".to_string()),
+            related_item: Some(vec![InventoryLinkReference {
+                odata_id: "/redfish/v1/Chassis/MGX_NVSwitch_0".into(),
+            }]),
+            service_id: "FirmwareInventory".to_string(),
+            id: "MGX_FW_NVSwitch_0".to_string(),
+            odata_id: Some("/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_NVSwitch_0".into()),
+            name: "Software Inventory".to_string(),
+            version: Some("35_2014_2184".to_string()),
+            release_date: None,
+            status: Some(ok_status_with_conditions(Some("OK"))),
+            links: Default::default(),
+        }],
+        fabrics: vec![FabricInventory {
+            name: "MGX_NVLinkFabric_0 Resource".to_string(),
+            description: None,
+            id: "MGX_NVLinkFabric_0".to_string(),
+            odata_id: Some("/redfish/v1/Fabrics/MGX_NVLinkFabric_0".into()),
+            // The captured fabric reports no UUID, status, or links.
+            uuid: None,
+            fabric_type: Some("NVLink".to_string()),
+            status: None,
+            switches: vec![
+                switch(0, "8e415f60-7182-4d9e-bf0a-2b3c4d5e6f70"),
+                switch(1, "9f526071-8293-4eaf-8a1b-3c4d5e6f7081"),
+            ],
+            links: Default::default(),
+        }],
+        domain_errors: Vec::new(),
+        target_error: None,
+    };
+
+    let actual = serde_json::to_value(inventory).expect("serialize inventory");
+    let expected: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/nvswitch_node_inventory.json"))
             .expect("inventory contract example");
     assert_eq!(actual, expected);
 }

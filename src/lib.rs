@@ -990,6 +990,7 @@ mod tests {
             systems: vec![],
             chassis: vec![],
             firmware: vec![],
+            fabrics: Vec::new(),
             domain_errors: vec![],
             target_error: None,
         }

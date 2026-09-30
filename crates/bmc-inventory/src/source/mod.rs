@@ -6,8 +6,8 @@ use async_trait::async_trait;
 
 use crate::config::Target;
 use crate::models::{
-    ChassisInventory, DomainError, FirmwareInventory, ManagerInventory, NodeInventory,
-    SystemInventory,
+    ChassisInventory, DomainError, FabricInventory, FirmwareInventory, ManagerInventory,
+    NodeInventory, SystemInventory,
 };
 
 pub use redfish::RedfishSource;
@@ -20,6 +20,8 @@ pub mod inventory_domain {
     pub const CHASSIS: &str = "chassis";
     pub const CHASSIS_PCIE_DEVICES: &str = "chassis.pcieDevices";
     pub const FIRMWARE: &str = "firmware";
+    pub const FABRICS: &str = "fabrics";
+    pub const FABRICS_SWITCHES: &str = "fabrics.switches";
 }
 
 #[async_trait]
@@ -35,6 +37,7 @@ struct RedfishReport {
     systems: Vec<SystemInventory>,
     chassis: Vec<ChassisInventory>,
     firmware: Vec<FirmwareInventory>,
+    fabrics: Vec<FabricInventory>,
     errors: Vec<DomainError>,
 }
 
