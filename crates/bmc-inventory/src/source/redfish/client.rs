@@ -22,6 +22,8 @@ use crate::source::{InventorySource, RedfishReport};
 type RedfishBmc = HttpBmc<DispatchingHttpClient<nv_redfish::bmc_http::reqwest::Client>>;
 
 const MAX_REDIRECTS: usize = 3;
+/// Identifies collector traffic in BMC access logs.
+const USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
@@ -44,6 +46,7 @@ impl RedfishSource {
                 .timeout(request_timeout)
                 .connect_timeout(connect_timeout)
                 .accept_invalid_certs(insecure_tls)
+                .user_agent(USER_AGENT)
                 // Some BMCs canonicalize the service root (for example,
                 // /redfish/v1 -> /redfish/v1/). Keep redirects bounded while
                 // allowing those standards-compatible endpoints to work.

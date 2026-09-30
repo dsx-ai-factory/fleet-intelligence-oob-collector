@@ -10,6 +10,8 @@ use tokio::time::sleep;
 use url::Url;
 
 const DEFAULT_SPDM_SLOT_ID: u8 = 0;
+/// Identifies collector traffic in BMC access logs.
+const USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 #[derive(Clone)]
 pub struct RedfishAttestationSource {
@@ -105,6 +107,7 @@ impl RedfishAttestationSource {
             return Err("task poll interval must be greater than zero".into());
         }
         let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(request_timeout)
             .connect_timeout(request_timeout.min(Duration::from_secs(10)))
             .danger_accept_invalid_certs(insecure_tls)
