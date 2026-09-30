@@ -405,8 +405,10 @@ impl<E: BmcError + 'static> BmcError for DispatchError<E> {
     fn error_class(&self) -> BmcErrorClass {
         match self {
             Self::Transport(error) => error.error_class(),
-            // Local admission failures never reached the BMC.
-            Self::QueueFull | Self::Unavailable | Self::Unsupported => BmcErrorClass::Other,
+            // A rejected admission failed before any response was received.
+            // `Other` would let callers treat it as skippable resource data.
+            Self::QueueFull | Self::Unavailable => BmcErrorClass::Transport,
+            Self::Unsupported => BmcErrorClass::Other,
         }
     }
 }
@@ -612,7 +614,39 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use nv_redfish::core::{BmcError, BmcErrorClass};
+
     use super::{DispatchError, Dispatcher, DispatcherConfig};
+
+    #[derive(Debug)]
+    struct UnavailableResponse;
+
+    impl std::fmt::Display for UnavailableResponse {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("503 Service Unavailable")
+        }
+    }
+
+    impl std::error::Error for UnavailableResponse {}
+
+    impl BmcError for UnavailableResponse {
+        fn error_class(&self) -> BmcErrorClass {
+            BmcErrorClass::HttpResponse { status: 503 }
+        }
+    }
+
+    #[test]
+    fn admission_failures_classify_as_transport() {
+        type Error = DispatchError<UnavailableResponse>;
+
+        assert_eq!(
+            Error::Transport(UnavailableResponse).error_class(),
+            BmcErrorClass::HttpResponse { status: 503 }
+        );
+        assert_eq!(Error::QueueFull.error_class(), BmcErrorClass::Transport);
+        assert_eq!(Error::Unavailable.error_class(), BmcErrorClass::Transport);
+        assert_eq!(Error::Unsupported.error_class(), BmcErrorClass::Other);
+    }
 
     fn config() -> DispatcherConfig {
         DispatcherConfig {
