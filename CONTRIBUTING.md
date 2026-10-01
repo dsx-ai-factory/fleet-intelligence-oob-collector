@@ -93,6 +93,56 @@ When opening a pull request:
   change.
 - Keep unrelated refactors out of feature and bug fix PRs.
 
+## Commit and Pull Request Conventions
+
+Use the same format for commit subjects and pull request titles:
+
+```text
+<type>(<scope>): <description>
+```
+
+- Allowed types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`, `revert`.
+- Scope is optional and lowercase, for example `cli`, `inventory`, or `deps`.
+- Write a concise, imperative description, for example `fix(inventory): handle missing chassis`.
+- For breaking changes, add `!` after the type/scope, for example `feat(cli)!: remove deprecated flag`, and explain the impact and migration in the PR body.
+- Sign off every commit with `git commit -s`, using your real name and a valid email address, to comply with the DCO.
+- Name branches `<type>/<short-dash-separated-name>`, for example `fix/missing-chassis` or `docs/configuration-guide`. Use one of the allowed types above.
+- Target `main` unless maintainers specify a release branch.
+
+PR descriptions must explain the behavior change, link related GitHub issues
+(use `Closes #123` when appropriate), report validation and remaining limitations,
+and highlight breaking changes. Add relevant tests and documentation, follow the
+PR template, and ensure CI passes. PR titles describe the final user-visible
+result and may appear in release notes.
+
+Maintainers should **squash merge** each focused PR, using the PR title as the
+final commit subject. Contributors may keep separate review commits; they do not
+need to squash before review. Preserve all contributors' DCO `Signed-off-by:`
+trailers in the final squash commit and verify the final message before merging.
+
+### Local validation
+
+Install the optional commit-format hook from the repository root:
+
+```bash
+make setup-git-hooks
+```
+
+Run the shared subject-validation tests or check a proposed PR title:
+
+```bash
+make test-commit-conventions
+sh .git-hooks/commit-msg --subject "fix(inventory): handle missing chassis"
+```
+
+The hook allows Git-generated merge/revert subjects and temporary
+`fixup!`, `squash!`, and `amend!` commits locally. PR titles must always follow
+the format above. The **Contribution conventions / PR title** GitHub Actions check
+runs when a PR is opened, edited, or updated. Maintainers should require that
+check in branch protection and enable squash merging in repository settings.
+The hook checks subject formatting; contributors remain responsible for DCO
+sign-offs.
+
 ## Release Process
 
 Pushing a semantic version tag such as `v0.1.0` runs the release validation,

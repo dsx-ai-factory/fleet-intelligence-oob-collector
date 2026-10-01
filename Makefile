@@ -37,3 +37,12 @@ coverage-html:
 		exit 1; \
 	}
 	cargo llvm-cov --workspace --html --open
+
+.PHONY: setup-git-hooks
+setup-git-hooks: ## Configure the local commit-format hook
+	git config core.hooksPath .git-hooks
+	chmod +x .git-hooks/commit-msg
+
+.PHONY: test-commit-conventions
+test-commit-conventions: ## Validate commit subjects and PR titles
+	sh scripts/test-commit-conventions.sh
