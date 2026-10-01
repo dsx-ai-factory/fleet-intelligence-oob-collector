@@ -5,12 +5,12 @@ use std::time::Duration;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
+use crate::COLLECTOR_VERSION;
 use crate::models::NodeInventory;
 
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
-const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
 pub struct BackendSink<C = HttpBackendClient> {
@@ -256,7 +256,7 @@ fn build_batch_upsert_request(inventories: &[NodeInventory]) -> BatchUpsertReque
         .collect();
     BatchUpsertRequest {
         agent: AgentInfo {
-            version: AGENT_VERSION,
+            version: COLLECTOR_VERSION,
         },
         data,
     }
@@ -473,7 +473,10 @@ mod tests {
         let request = build_batch_upsert_request(&inventories);
 
         let value = serde_json::to_value(request).expect("serialize request");
-        assert_eq!(value["agent"]["version"], env!("CARGO_PKG_VERSION"));
+        let expected_version = option_env!("FLEETINT_BUILD_VERSION")
+            .filter(|version| !version.is_empty())
+            .unwrap_or(env!("CARGO_PKG_VERSION"));
+        assert_eq!(value["agent"]["version"], expected_version);
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
         assert_eq!(value["data"][0]["kind"], "nvswitch");
         assert_eq!(value["data"][0]["name"], "node-01");

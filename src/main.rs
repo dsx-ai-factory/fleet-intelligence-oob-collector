@@ -14,7 +14,7 @@ use fleet_intelligence_oob::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "fleet-intelligence-oob")]
+#[command(name = "fleet-intelligence-oob", version = bmc_inventory::COLLECTOR_VERSION)]
 #[command(about = "Fleet Intelligence out-of-band collector")]
 struct Cli {
     #[command(subcommand)]

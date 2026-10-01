@@ -100,6 +100,20 @@ publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm
 chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are
 supported and do not update the collector image's `latest` tag.
 
+The release Git tag is the source of truth. CI strips its leading `v`, embeds
+that version in the collector at compile time, and packages the Helm chart with
+matching `version` and `appVersion`. Collector and NICo image tags share this
+release version; NICo's upstream source and the OpenTelemetry gateway retain
+their independently pinned versions. The checked-in Cargo and chart versions
+remain development defaults and do not need a manual bump before tagging.
+
+The collector reports the embedded version through `bmc-collector --version`
+and inventory uploads. Local Cargo builds fall back to the package version;
+set `FLEETINT_BUILD_VERSION=0.3.0-rc.1` when compiling to test a release version.
+Docker builds accept `--build-arg VERSION=v0.3.0-rc.1` and embed the version
+without the leading `v`. After an upgrade, the backend updates a node's
+displayed collector version on its next inventory upload.
+
 ## Developer Certificate of Origin (DCO)
 
 ```text

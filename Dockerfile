@@ -2,6 +2,8 @@
 
 FROM --platform=$TARGETPLATFORM rust:1.95.0-alpine AS builder
 
+ARG VERSION
+
 WORKDIR /src
 RUN apk add --no-cache build-base file
 COPY Cargo.toml Cargo.lock ./
@@ -11,7 +13,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target \
-    cargo build --locked --release --bin bmc-collector && \
+    FLEETINT_BUILD_VERSION="${VERSION#v}" cargo build --locked --release --bin bmc-collector && \
     cp target/release/bmc-collector /bmc-collector && \
     strip /bmc-collector && \
     file /bmc-collector | tee /tmp/bmc-collector.file && \
