@@ -1,0 +1,35 @@
+name: Rescan released containers
+
+on:
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: pulse-rescan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: vars.PULSE_ENABLED == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector:latest
+          - ghcr.io/dsx-ai-factory/nico-hardware-health:latest
+        platform:
+          - linux/amd64
+          - linux/arm64
+    uses: ./.github/workflows/pulse-scan.yml
+    with:
+      image: ${{ matrix.image }}
+      platform: ${{ matrix.platform }}
+    secrets:
+      NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+      SSA_CLIENT_ID: ${{ secrets.SSA_CLIENT_ID }}
+      SSA_CLIENT_SECRET: ${{ secrets.SSA_CLIENT_SECRET }}

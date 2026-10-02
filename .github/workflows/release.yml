@@ -109,9 +109,46 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  pulse-scan:
+    name: Pulse scan (${{ matrix.digest_artifact }})
+    if: vars.PULSE_ENABLED == 'true'
+    needs: [build-image, build-nico-image]
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
+            platform: linux/amd64
+            digest_artifact: image-digest-amd64
+          - image: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
+            platform: linux/arm64
+            digest_artifact: image-digest-arm64
+          - image: ghcr.io/dsx-ai-factory/nico-hardware-health
+            platform: linux/amd64
+            digest_artifact: nico-image-digest-amd64
+          - image: ghcr.io/dsx-ai-factory/nico-hardware-health
+            platform: linux/arm64
+            digest_artifact: nico-image-digest-arm64
+    uses: ./.github/workflows/pulse-scan.yml
+    with:
+      image: ${{ matrix.image }}
+      platform: ${{ matrix.platform }}
+      digest_artifact: ${{ matrix.digest_artifact }}
+    secrets:
+      NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+      SSA_CLIENT_ID: ${{ secrets.SSA_CLIENT_ID }}
+      SSA_CLIENT_SECRET: ${{ secrets.SSA_CLIENT_SECRET }}
+
   publish-image:
     name: Publish image
-    needs: build-image
+    needs: [build-image, pulse-scan]
+    if: >-
+      ${{ always() && !cancelled() && needs.build-image.result == 'success' &&
+          (needs.pulse-scan.result == 'success' ||
+           (vars.PULSE_ENABLED != 'true' && needs.pulse-scan.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -229,7 +266,11 @@ jobs:
 
   publish-nico-image:
     name: Publish NICo health image
-    needs: build-nico-image
+    needs: [build-nico-image, pulse-scan]
+    if: >-
+      ${{ always() && !cancelled() && needs.build-nico-image.result == 'success' &&
+          (needs.pulse-scan.result == 'success' ||
+           (vars.PULSE_ENABLED != 'true' && needs.pulse-scan.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read

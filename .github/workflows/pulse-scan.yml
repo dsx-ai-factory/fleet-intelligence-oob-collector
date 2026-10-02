@@ -1,0 +1,94 @@
+name: Pulse container scan
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        type: string
+        required: true
+      platform:
+        type: string
+        required: true
+      digest_artifact:
+        type: string
+        default: ''
+    secrets:
+      NGC_API_KEY:
+        required: true
+      SSA_CLIENT_ID:
+        required: true
+      SSA_CLIENT_SECRET:
+        required: true
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image reference to scan (prefer an immutable digest)
+        required: true
+        type: string
+      platform:
+        description: Image platform
+        required: true
+        type: choice
+        options:
+          - linux/amd64
+          - linux/arm64
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  NSPECT_ID: ${{ vars.NSPECT_ID || 'NSPECT-48VE-47RP' }}
+
+jobs:
+  scan:
+    runs-on: ${{ vars.PULSE_RUNNER || fromJSON('["self-hosted", "rocky8"]') }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Pulse configuration
+        env:
+          PULSE_RUNNER: ${{ vars.PULSE_RUNNER || 'self-hosted, rocky8' }}
+        run: |
+          : "${NSPECT_ID:?set the nSpect program ID in NSPECT_ID}"
+          echo "Pulse runner selector: $PULSE_RUNNER"
+          for tool in docker bash python3 curl; do
+            command -v "$tool" >/dev/null || { echo "Missing required runner tool: $tool" >&2; exit 1; }
+          done
+      - name: Download release digest
+        if: inputs.digest_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.digest_artifact }}
+          path: pulse-digest
+      - name: Scan image
+        env:
+          IMAGE: ${{ inputs.image }}
+          PLATFORM: ${{ inputs.platform }}
+          DIGEST_ARTIFACT: ${{ inputs.digest_artifact }}
+          PULSE_SCANNER_IMAGE: ${{ vars.PULSE_SCANNER_IMAGE }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
+          SSA_CLIENT_ID: ${{ secrets.SSA_CLIENT_ID }}
+          SSA_CLIENT_SECRET: ${{ secrets.SSA_CLIENT_SECRET }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "$DIGEST_ARTIFACT" ]]; then
+            mapfile -t digests < <(find pulse-digest -maxdepth 1 -type f -printf '%f\n')
+            if [[ ${#digests[@]} != 1 || ! "${digests[0]}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Expected exactly one SHA-256 release digest" >&2
+              exit 1
+            fi
+            IMAGE="$IMAGE@sha256:${digests[0]}"
+          fi
+          bash scripts/pulse-scan.sh "$IMAGE" "$PLATFORM" pulse-reports
+      - name: Save scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-reports-${{ inputs.digest_artifact || github.run_id }}-${{ inputs.platform == 'linux/arm64' && 'arm64' || 'amd64' }}-${{ contains(inputs.image, 'nico-hardware-health') && 'nico' || 'collector' }}
+          path: pulse-reports/
+          if-no-files-found: warn
+          retention-days: 30
