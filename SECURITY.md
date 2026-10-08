@@ -35,3 +35,7 @@ for more information.
 
 For all security-related concerns, visit NVIDIA's Product Security portal:
 https://www.nvidia.com/en-us/security
+
+## Supported Versions
+
+Security updates are provided for the latest released version only.
