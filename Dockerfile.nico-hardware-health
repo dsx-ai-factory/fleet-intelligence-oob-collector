@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Build context: a versioned checkout of NVIDIA/infra-controller. The release
 # workflow supplies VERSION and REVISION from the Fleet Intelligence release.
 FROM --platform=$TARGETPLATFORM rust:1.96.0-slim-bookworm AS builder
