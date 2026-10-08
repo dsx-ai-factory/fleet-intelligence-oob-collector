@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Fleet Intelligence placement; inherited by targets and mirrored to telemetry.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
