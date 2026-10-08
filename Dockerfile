@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 FROM --platform=$TARGETPLATFORM rust:1.95.0-alpine AS builder
 
 ARG VERSION

@@ -4,6 +4,9 @@ Thank you for your interest in contributing to Fleet Intelligence Out-of-Band
 Collector. This project is a Rust workspace for collecting Fleet Intelligence
 data from server BMC interfaces through out-of-band management paths.
 
+Participation in this project is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Ways to Contribute
 
 You can help by:
