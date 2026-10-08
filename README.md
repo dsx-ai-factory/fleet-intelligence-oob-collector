@@ -45,6 +45,7 @@ unavailable Redfish domains do not erase otherwise valid data.
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 Component-specific details are available in the
 [inventory collection notes](crates/bmc-inventory/README.md),
@@ -58,4 +59,5 @@ Do not report vulnerabilities in public issues. Follow
 
 ## License
 
-This project is licensed under Apache-2.0. See [LICENSE](LICENSE).
+This project is licensed under the Apache License 2.0. See the
+[LICENSE](LICENSE) file for details.

@@ -23,6 +23,17 @@ problem, scope, and expected design. This is especially important for changes to
 Fleet Intelligence data models, backend API behavior, Redfish traversal, or
 collector runtime semantics.
 
+## Contribution Workflow
+
+1. Fork this repository on GitHub.
+2. Create a branch from `main` named `<type>/<short-dash-separated-name>`, for example `git checkout -b feat/my-feature`.
+3. Commit your changes with a DCO sign-off, for example `git commit -s -m "feat(cli): add my feature"`.
+4. Push the branch to your fork, for example `git push origin feat/my-feature`.
+5. Open a pull request against `main`.
+
+Report bugs and request features through
+[GitHub Issues](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/issues).
+
 ## Development Setup
 
 Install the Rust toolchain configured by this repository:
@@ -43,7 +54,8 @@ Run tests:
 cargo test --workspace
 ```
 
-Run formatting and lint checks before opening a pull request:
+Code style follows standard Rust formatting. Run formatting and lint checks,
+and add tests for new functionality, before opening a pull request:
 
 ```bash
 cargo fmt --all --check
@@ -200,3 +212,8 @@ git commit --amend --signoff
 ```
 
 For more information about the DCO, see https://developercertificate.org/.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the
+[Apache License 2.0](LICENSE).
