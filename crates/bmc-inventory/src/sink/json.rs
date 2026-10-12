@@ -58,7 +58,6 @@ mod tests {
             name: None,
             compute_zone: None,
             node_group: None,
-            uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
@@ -68,7 +67,6 @@ mod tests {
                 service_uuid: None,
                 vendor: None,
             },
-            primary_system_id: None,
             managers: Vec::new(),
             systems: Vec::new(),
             chassis: Vec::new(),

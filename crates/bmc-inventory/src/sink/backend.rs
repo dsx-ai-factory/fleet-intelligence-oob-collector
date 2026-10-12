@@ -219,25 +219,21 @@ impl BackendClient for HttpBackendClient {
 }
 
 /// Itemized response from a successful backend batch request.
-#[derive(Debug)]
+#[derive(Debug, serde::Deserialize)]
 pub struct BackendBatchOutcome {
     results: Vec<NodeUpsertResult>,
 }
 
 impl BackendBatchOutcome {
-    /// Return the backend result for a submitted node UUID.
-    pub fn node_outcome(&self, node_uuid: &str) -> BackendNodeOutcome<'_> {
-        let Some(result) = self.results.iter().find(|result| {
-            result
-                .node_uuid
-                .as_deref()
-                .is_some_and(|result_uuid| result_uuid.eq_ignore_ascii_case(node_uuid))
-        }) else {
+    /// Results correspond by position to submitted inventory observations.
+    pub fn item_outcome(&self, index: usize) -> BackendNodeOutcome<'_> {
+        let Some(result) = self.results.get(index) else {
             return BackendNodeOutcome::Missing;
         };
-
         if result.status.eq_ignore_ascii_case("OK") {
-            BackendNodeOutcome::Succeeded
+            BackendNodeOutcome::Succeeded {
+                node_uuid: result.node_uuid.as_deref(),
+            }
         } else {
             BackendNodeOutcome::Rejected {
                 status: &result.status,
@@ -245,17 +241,14 @@ impl BackendBatchOutcome {
             }
         }
     }
-
-    /// Whether the backend accepted the node with the supplied UUID.
-    pub fn node_succeeded(&self, node_uuid: &str) -> bool {
-        self.node_outcome(node_uuid) == BackendNodeOutcome::Succeeded
-    }
 }
 
-/// Result reported by the backend for one submitted node UUID.
+/// Result for one submitted observation. An accepted observation may be unresolved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendNodeOutcome<'a> {
-    Succeeded,
+    Succeeded {
+        node_uuid: Option<&'a str>,
+    },
     Rejected {
         status: &'a str,
         message: Option<&'a str>,
@@ -380,9 +373,7 @@ impl Serialize for BackendInventory<'_> {
             name,
             compute_zone,
             node_group,
-            uuid,
             source,
-            primary_system_id,
             managers,
             systems,
             chassis,
@@ -392,7 +383,7 @@ impl Serialize for BackendInventory<'_> {
             target_error,
             latency,
         } = self.0;
-        let mut map = serializer.serialize_map(Some(18))?;
+        let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("schemaVersion", schema_version)?;
         map.serialize_entry("collectedAt", collected_at)?;
         map.serialize_entry("enrolledAt", enrolled_at)?;
@@ -406,9 +397,7 @@ impl Serialize for BackendInventory<'_> {
         if let Some(node_group) = node_group {
             map.serialize_entry("nodeGroup", node_group)?;
         }
-        map.serialize_entry("uuid", uuid)?;
         map.serialize_entry("source", source)?;
-        map.serialize_entry("primarySystemId", primary_system_id)?;
         map.serialize_entry("managers", managers)?;
         map.serialize_entry("systems", systems)?;
         map.serialize_entry("chassis", chassis)?;
@@ -421,11 +410,7 @@ impl Serialize for BackendInventory<'_> {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchUpsertResponse {
-    results: Vec<NodeUpsertResult>,
-}
+type BatchUpsertResponse = BackendBatchOutcome;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -495,6 +480,9 @@ mod tests {
         assert_eq!(value["agent"]["version"], expected_version);
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
         assert_eq!(value["data"][0]["kind"], "nvswitch");
+        assert_eq!(value["data"][0]["source"]["mac"], "00:11:22:33:44:55");
+        assert!(value["data"][0].get("uuid").is_none());
+        assert!(value["data"][0].get("primarySystemId").is_none());
         assert_eq!(value["data"][0]["name"], "node-01");
         assert_eq!(value["data"][0]["computeZone"], "us-west-dc1");
         assert_eq!(value["data"][0]["nodeGroup"], "gb200-training");
@@ -558,17 +546,20 @@ mod tests {
             ],
         };
 
-        assert!(outcome.node_succeeded("NODE-1"));
-        assert!(!outcome.node_succeeded("node-2"));
-        assert!(!outcome.node_succeeded("missing"));
         assert_eq!(
-            outcome.node_outcome("NODE-2"),
-            BackendNodeOutcome::Rejected {
-                status: "INVALID",
-                message: Some("rejected"),
+            outcome.item_outcome(0),
+            BackendNodeOutcome::Succeeded {
+                node_uuid: Some("node-1")
             }
         );
-        assert_eq!(outcome.node_outcome("missing"), BackendNodeOutcome::Missing);
+        assert_eq!(
+            outcome.item_outcome(1),
+            BackendNodeOutcome::Rejected {
+                status: "INVALID",
+                message: Some("rejected")
+            }
+        );
+        assert_eq!(outcome.item_outcome(2), BackendNodeOutcome::Missing);
     }
 
     #[test]
@@ -585,7 +576,24 @@ mod tests {
             results: response.results,
         };
 
-        assert!(outcome.node_succeeded("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
+        assert_eq!(
+            outcome.item_outcome(0),
+            BackendNodeOutcome::Succeeded {
+                node_uuid: Some("9aee71e4-6e80-11ee-a8ac-74d4dd550187")
+            }
+        );
+    }
+
+    #[test]
+    fn accepted_observation_can_have_no_resolved_node() {
+        let outcome: BackendBatchOutcome = serde_json::from_value(serde_json::json!({
+            "results": [{"status": "OK"}]
+        }))
+        .expect("accepted unresolved observation");
+        assert_eq!(
+            outcome.item_outcome(0),
+            BackendNodeOutcome::Succeeded { node_uuid: None }
+        );
     }
 
     #[test]
@@ -656,8 +664,8 @@ mod tests {
             Ok(BackendBatchOutcome {
                 results: inventories
                     .iter()
-                    .map(|inventory| NodeUpsertResult {
-                        node_uuid: inventory.uuid.as_ref().map(ToString::to_string),
+                    .map(|_| NodeUpsertResult {
+                        node_uuid: Some("9aee71e4-6e80-11ee-a8ac-74d4dd550187".to_string()),
                         status: "OK".to_string(),
                         message: None,
                     })
@@ -675,7 +683,6 @@ mod tests {
             name: None,
             compute_zone: None,
             node_group: None,
-            uuid: None,
             source: crate::models::InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
@@ -685,7 +692,6 @@ mod tests {
                 service_uuid: None,
                 vendor: None,
             },
-            primary_system_id: None,
             managers: Vec::new(),
             systems: Vec::new(),
             chassis: Vec::new(),

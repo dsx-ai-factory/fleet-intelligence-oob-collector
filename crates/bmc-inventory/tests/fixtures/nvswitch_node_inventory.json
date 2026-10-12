@@ -210,7 +210,6 @@
   ],
   "name": "nvswitch-01",
   "nodeGroup": "gb200-training",
-  "primarySystemId": "System_0",
   "schemaVersion": "inventory.v1alpha1",
   "source": {
     "address": "10.0.0.2",
@@ -272,6 +271,5 @@
       "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
     }
   ],
-  "targetError": null,
-  "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+  "targetError": null
 }

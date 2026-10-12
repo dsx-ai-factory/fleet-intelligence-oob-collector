@@ -123,6 +123,7 @@ labels = { site = "dev", environment = "development" }
 kind = "nvswitch"
 name = "switch-tray-01"
 ip = "10.0.0.11"
+mac = "02:00:0a:00:00:0b"
 username_file = "/run/secrets/bmc/switch-tray-01/username"
 password_file = "/run/secrets/bmc/switch-tray-01/password"
 ```

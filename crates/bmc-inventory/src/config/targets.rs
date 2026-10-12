@@ -308,13 +308,14 @@ impl RawTargetConfig {
             self.node_group
                 .or_else(|| default_node_group.map(str::to_string)),
         )?;
-        let mac = match self.mac {
-            Some(mac) if mac.trim().is_empty() => {
-                return Err(format!("{context}.mac cannot be blank").into());
-            }
-            Some(mac) => mac,
-            None => derive_mac_from_ip(self.ip),
-        };
+        let mac = self
+            .mac
+            .ok_or_else(|| format!("{context}.mac is required"))?;
+        if mac.trim().is_empty() {
+            return Err(format!("{context}.mac cannot be blank").into());
+        }
+        let mac = normalize_mac(&mac)
+            .ok_or_else(|| format!("{context}.mac must contain six hexadecimal octets"))?;
         let address = match (self.ip, self.port) {
             (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
             (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
@@ -464,18 +465,18 @@ fn validate_credentials(
     })
 }
 
-fn derive_mac_from_ip(ip: IpAddr) -> String {
-    let ip_bytes = match ip {
-        IpAddr::V4(ip) => ip.octets(),
-        IpAddr::V6(ip) => {
-            let octets = ip.octets();
-            [octets[12], octets[13], octets[14], octets[15]]
-        }
-    };
-    format!(
-        "02:00:{:02x}:{:02x}:{:02x}:{:02x}",
-        ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
-    )
+fn normalize_mac(mac: &str) -> Option<String> {
+    let mac = mac.trim();
+    let separator = if mac.contains(':') { ':' } else { '-' };
+    let octets = mac.split(separator).collect::<Vec<_>>();
+    if octets.len() != 6
+        || octets
+            .iter()
+            .any(|octet| octet.len() != 2 || !octet.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return None;
+    }
+    Some(octets.join(":").to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -488,24 +489,28 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "compute"
             ip = "10.0.0.2"
+            mac = "02:00:0a:00:00:02"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "nvswitch"
             ip = "10.0.0.3"
+            mac = "02:00:0a:00:00:03"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "power_shelf"
             ip = "10.0.0.4"
+            mac = "02:00:0a:00:00:04"
             username = "admin"
             password = "secret"
             "#,
@@ -534,6 +539,7 @@ mod tests {
             r#"
             [[targets]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -547,6 +553,7 @@ mod tests {
             [[machines]]
             kind = "nvswitch"
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -645,26 +652,51 @@ mod tests {
     }
 
     #[test]
-    fn derives_mac_from_last_four_ip_bytes_when_omitted() {
-        let path = write_config(
-            "derived-mac",
+    fn requires_mac_for_targets_and_legacy_machines() {
+        for collection in ["targets", "machines"] {
+            for ip in ["10.0.0.10", "2001:db8::102:304"] {
+                let input = format!(
+                    r#"
+                    [[{collection}]]
+                    ip = "{ip}"
+                    username = "admin"
+                    password = "secret"
+                "#
+                );
+                let error = parse_config(&input, "test.toml").expect_err("MAC is required");
+                assert!(error.to_string().contains("mac is required"));
+            }
+        }
+    }
+
+    #[test]
+    fn validates_and_normalizes_mac_octets() {
+        for mac in ["AA:BB:CC:DD:EE:FF", " aa-bb-cc-dd-ee-ff "] {
+            assert_eq!(normalize_mac(mac).as_deref(), Some("aa:bb:cc:dd:ee:ff"));
+        }
+        for mac in [
+            "",
+            "aa:bb:cc:dd:ee",
+            "aa:bb:cc:dd:ee:ff:00",
+            "a:bb:cc:dd:ee:ff",
+            "gg:bb:cc:dd:ee:ff",
+            "aa:bb:cc-dd:ee:ff",
+            "aabbccddeeff",
+        ] {
+            assert_eq!(normalize_mac(mac), None, "{mac}");
+        }
+        let error = parse_config(
             r#"
-            [[machines]]
+            [[targets]]
             ip = "10.0.0.10"
+            mac = "not-a-mac"
             username = "admin"
             password = "secret"
-
-            [[machines]]
-            ip = "2001:db8::102:304"
-            username = "admin"
-            password = "secret"
-            "#,
-        );
-
-        let config = load_config(path.to_str().expect("path")).expect("config");
-
-        assert_eq!(config.targets[0].mac, "02:00:0a:00:00:0a");
-        assert_eq!(config.targets[1].mac, "02:00:01:02:03:04");
+        "#,
+            "test.toml",
+        )
+        .expect_err("malformed MAC");
+        assert!(error.to_string().contains("six hexadecimal octets"));
     }
 
     #[test]
@@ -683,9 +715,11 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
 
                 [[machines]]
                 ip = "10.0.0.2"
+                mac = "02:00:0a:00:00:02"
                 username_file = "{}"
                 password_file = "{}"
                 "#,
@@ -725,6 +759,7 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 "#,
             ),
         )
@@ -737,12 +772,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_mac_takes_precedence_and_blank_mac_is_rejected() {
+    fn explicit_mac_is_preserved_and_blank_mac_is_rejected() {
         let explicit = parse_config(
             r#"
             [[machines]]
             ip = "10.0.0.10"
-            mac = "aa:bb:cc:dd:ee:ff"
+            mac = " AA-BB-CC-DD-EE-FF "
             username = "admin"
             password = "secret"
             "#,
@@ -777,6 +812,7 @@ mod tests {
             name = "  node-01  "
             node_group = "  gb200-training  "
             ip = "10.0.0.10"
+            mac = "02:00:0a:00:00:0a"
             username = "admin"
             password = "secret"
             "#,
@@ -805,6 +841,7 @@ mod tests {
             [[machines]]
             name = "   "
             ip = "10.0.0.10"
+            mac = "02:00:0a:00:00:0a"
             username = "admin"
             password = "secret"
             "#,
@@ -822,6 +859,7 @@ mod tests {
 
                     [[machines]]
                     ip = "10.0.0.10"
+                    mac = "02:00:0a:00:00:0a"
                     username = "admin"
                     password = "secret"
                     "#
@@ -920,6 +958,7 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 "#,
                 "credentials.password_file is required",
             ),
@@ -928,6 +967,7 @@ mod tests {
                 r#"
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 username_file = "/run/secrets/bmc/username"
                 "#,
                 "machines[0].password_file is required",
@@ -937,6 +977,7 @@ mod tests {
                 r#"
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 username = "admin"
                 password_file = "/run/secrets/bmc/password"
                 "#,
@@ -989,7 +1030,7 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
-            mac = "AA:BB:CC:DD:EE:FF"
+            mac = "AA-BB-CC-DD-EE-FF"
             username = "admin"
             password = "secret"
 

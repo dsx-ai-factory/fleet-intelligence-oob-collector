@@ -121,7 +121,6 @@
   ],
   "name": "node-01",
   "nodeGroup": "gb200-training",
-  "primarySystemId": "System",
   "schemaVersion": "inventory.v1alpha1",
   "source": {
     "address": "10.0.0.1",
@@ -268,6 +267,5 @@
       "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
     }
   ],
-  "targetError": null,
-  "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187"
+  "targetError": null
 }

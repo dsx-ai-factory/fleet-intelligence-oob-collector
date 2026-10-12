@@ -18,35 +18,33 @@ Target
 ```
 
 `RedfishSource` converts Redfish resources directly into the inventory model. It
-resolves source metadata with best-effort reverse DNS and assigns node identity
-after collecting canonical resource models. When enabled, it also measures
+resolves source metadata with best-effort reverse DNS and preserves reported
+resource identities without selecting a primary system. When enabled, it also measures
 collector-to-BMC latency after the Redfish collection completes.
 
-## Node Identity
+## Observation Identity
 
-- The primary node UUID comes from the selected Redfish `ComputerSystem.UUID`.
-- The selected system is the first system with a non-empty BIOS version.
-- If no system has a BIOS version, the source falls back to the first system in
-  the Redfish systems collection.
-- If the selected system has a missing, empty, or malformed UUID, the source
-  derives a stable UUID from the Redfish service root UUID when present, or the
-  target address otherwise.
-- `NodeInventory.primarySystemId` records the selected system ID used for node
-  identity.
-- `InventorySourceInfo.serviceUuid` keeps the Redfish service root UUID. It is
-  not used as the node UUID.
-- `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then falls
-  back to `Product`.
-- `InventorySourceInfo.hostName` is populated from a best-effort reverse DNS
-  lookup of the configured BMC IP. A missing PTR record, resolver error, or
-  lookup timeout does not fail inventory collection.
+- Each observation is identified by the required configured BMC MAC in
+  `source.mac`, normalized to lowercase colon-separated form.
+- Inventory has no top-level `uuid` or `primarySystemId`. Every reported
+  `ComputerSystem.UUID` stays on its system resource; missing UUIDs stay missing.
+- BIOS presence, collection order, service UUID, and target address do not select
+  or generate a node identity.
+- `InventorySourceInfo.serviceUuid` retains the Redfish service root UUID.
+- `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then `Product`.
+- `InventorySourceInfo.hostName` comes from best-effort reverse DNS. Lookup
+  failures do not fail collection.
 
-The BIOS-based selection is a host-system heuristic. Some BMCs expose auxiliary
-systems, such as BMC, DPU, or baseboard systems, in the same collection as the
-host. The host system is the one expected to carry BIOS data and the stable node
-UUID. The source still preserves every collected Redfish manager and system in
-`managers[]` and `systems[]`; selection only determines the top-level node UUID
-and primary marker.
+All observations, including target failures, are sent to the backend so it can
+record collection status. Batch results correspond by position to submitted
+observations. The backend owns identity resolution and returns `nodeUUID` when
+resolved. Only accepted observations with a valid returned node UUID are used
+for attestation, associated with the configured target through BMC MAC. A
+successful response without a node UUID does not enable attestation.
+
+This is a breaking change to the unshipped inventory contract. Backend ingestion
+must accept MAC-identified observations without a top-level UUID and return
+canonical node IDs. Existing configurations must provide a MAC for every target.
 
 ## Partial Collection
 

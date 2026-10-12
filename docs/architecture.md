@@ -43,14 +43,15 @@ address detects local TCP interception. Measurements are uploaded with each
 node's inventory; see the
 [inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
 
-The configured BMC MAC correlates targets across workflows. Inventory normally
-uses `ComputerSystem.UUID` for node identity and provides deterministic
-fallbacks when it is missing. Completed inventories flow through a bounded
-channel to a backend worker, which flushes small batches by size, time, or the
+The required configured BMC MAC identifies observations and correlates targets
+across workflows. Inventory preserves every reported system UUID without
+selecting or generating a top-level node UUID. The backend resolves canonical
+node identity and returns the node UUID used for attestation. Completed
+inventories flow through a bounded channel to a backend worker, which flushes small batches by size, time, or the
 end of the collection cycle. The current worker flushes when the batch reaches
 the configured target concurrency or after 30 seconds, and the channel holds
-at most twice that concurrency. Backend item results are evaluated per node, so
-one rejected item does not hide accepted nodes in the same batch. Attestation
+at most twice that concurrency. Backend item results are matched to submitted
+observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
 runs only for successfully exported records with a resolved node UUID. After
 concurrent nonce and evidence collection completes, attestation results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
