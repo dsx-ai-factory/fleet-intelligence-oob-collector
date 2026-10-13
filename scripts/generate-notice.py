@@ -40,15 +40,38 @@ The following sets forth attribution notices for third-party
 software that may be contained in this product.
 """
 
-LICENSE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "UNLICENSE", "NOTICE")
+LICENSE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "UNLICENSE", "NOTICE", "AUTHORS")
 
 
-def is_standard_apache(text):
-    # Standard Apache-2.0 text is reproduced once in the appendix, not per crate.
-    return "Apache License" in text and "Version 2.0, January 2004" in text and len(text) > 9000
+def normalize(text):
+    """Collapse whitespace so equal license texts compare equal."""
+    return " ".join(text.split())
+
+
+APACHE_START = "Apache License"
+APACHE_END = "END OF TERMS AND CONDITIONS"
+
+
+def split_apache(text, apache_text):
+    """Split an Apache-2.0 file into (before, after) the standard terms, or None.
+
+    The terms are kept once in the appendix. Text before them and the appendix
+    section after them (where crates put their own copyright line) stay per crate.
+    The first Apache-2.0 file seen is the canonical terms. A file whose terms
+    differ from it is not split and is embedded in full.
+    """
+    start = text.find(APACHE_START)
+    end = text.find(APACHE_END)
+    if start < 0 or end < start or "Version 2.0, January 2004" not in text[start:end]:
+        return None
+    terms = text[start : end + len(APACHE_END)]
+    if normalize(apache_text.setdefault("text", terms)) != normalize(terms):
+        return None
+    return text[:start].strip(), text[end + len(APACHE_END) :].strip()
 
 
 def license_files(crate_dir):
+    """Return the license, copyright, notice and authors files in a crate directory."""
     names = sorted(
         n
         for n in os.listdir(crate_dir)
@@ -58,6 +81,7 @@ def license_files(crate_dir):
 
 
 def crate_entry(pkg, apache_text):
+    """Build the NOTICE section for one crate."""
     crate_dir = os.path.dirname(pkg["manifest_path"])
     lines = [
         f"{pkg['name']} ({pkg['version']})",
@@ -72,9 +96,10 @@ def crate_entry(pkg, apache_text):
         if not text:
             continue
         found = True
-        if is_standard_apache(text):
-            apache_text.setdefault("text", text)
-            lines.append(f"[{name}: Apache License 2.0, full text in the appendix below]")
+        parts = split_apache(text, apache_text)
+        if parts:
+            lines.append(f"[{name}: Apache License 2.0, terms in the appendix below]")
+            lines.extend(t for t in parts if t)
         else:
             lines.append(f"[{name}]")
             lines.append(text)
@@ -87,6 +112,7 @@ def crate_entry(pkg, apache_text):
 
 
 def generate():
+    """Return the full NOTICE text for the crates in Cargo.lock."""
     out = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--locked"],
         cwd=ROOT,
@@ -108,6 +134,7 @@ def generate():
 
 
 def main():
+    """Rewrite NOTICE, or with --check verify it is current."""
     new = generate()
     if "--check" in sys.argv:
         with open(NOTICE, encoding="utf-8") as f:
