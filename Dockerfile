@@ -35,6 +35,7 @@ LABEL org.opencontainers.image.title="Fleet Intelligence OOB Collector" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /bmc-collector /bmc-collector
+COPY NOTICE /NOTICE
 
 USER 65532:65532
 ENTRYPOINT ["/bmc-collector"]
