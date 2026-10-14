@@ -1,9 +1,9 @@
 # Inventory Collection Notes
 
-This package keeps a Fleet Intelligence inventory model between Redfish sources
-and output sinks. The goal is to keep Redfish and vendor-specific behavior out of
-the product schema where possible, while still documenting the assumptions used
-to make one node inventory record from a BMC endpoint.
+This package collects inventory from BMC Redfish endpoints and exports it through
+table, JSON, and backend sinks. Each configured target produces a
+`NodeInventory` observation containing source metadata, collected resources,
+and collection errors.
 
 For the repository-level component and runtime view, see the
 [architecture guide](../../docs/architecture.md).
@@ -18,18 +18,19 @@ Target
 ```
 
 `RedfishSource` converts Redfish resources directly into the inventory model. It
-resolves source metadata with best-effort reverse DNS. When enabled, it also measures
-collector-to-BMC latency after the Redfish collection completes.
+resolves source metadata with best-effort reverse DNS. When enabled, it also
+measures collector-to-BMC latency after the Redfish collection completes.
 
-## Observation Identity
+## Source Metadata
 
 - Each observation is identified by the required configured BMC MAC in
   `source.mac`, normalized to lowercase colon-separated form.
-- Inventory has no top-level `uuid` or `primarySystemId`.
 - `InventorySourceInfo.serviceUuid` retains the Redfish service root UUID.
 - `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then `Product`.
 - `InventorySourceInfo.hostName` comes from best-effort reverse DNS. Lookup
   failures do not fail collection.
+
+## Backend Integration
 
 All observations, including target failures, are sent to the backend so it can
 record collection status. Batch results correspond by position to submitted
@@ -37,10 +38,6 @@ observations. The backend owns identity resolution and returns `nodeUUID` when
 resolved. Only accepted observations with a valid returned node UUID are used
 for attestation, associated with the configured target through BMC MAC. A
 successful response without a node UUID does not enable attestation.
-
-This is a breaking change to the unshipped inventory contract. Backend ingestion
-must accept MAC-identified observations without a top-level UUID and return
-canonical node IDs. Existing configurations must provide a MAC for every target.
 
 ## Partial Collection
 
@@ -150,16 +147,12 @@ Collect PCIe devices from each chassis’s advertised `PCIeDevices` collection.
 - Individual-resource `@odata.type` is not exposed by nv-redfish 0.18.1. Recovering
   the original type/version requires dependency support or a separately designed
   raw-response capture path; the collector does not fabricate a schema version.
-- The inventory schema remains `inventory.v1alpha1`; legacy aliases are not populated.
+- The inventory schema is `inventory.v1alpha1`.
 - System `processorSummary` and `memorySummary` retain nested counts, capacity,
   processor model/threading, memory mirroring, and their own `status`/conditions.
-  They replace `cpuCount`, `cpuCoreCount`, `cpuModel`, and `memoryGib` in JSON;
-  table columns remain available.
-- Summary status is preserved when supplied, never synthesized. DMTF deprecated
-  it in ComputerSystem v1.16 in favor of root status conditions, but older BMCs
-  can still provide diagnostic information there.
-- Summary metrics links are outside this change; no new resource fetches, OEM
-  collection, or inventory schema-version bump are introduced.
+  The table sink presents selected summary values as columns.
+- Summary status is included when supplied and is not synthesized.
+- Summary metrics links do not trigger additional resource fetches.
 - Redfish enum values retain their canonical spelling (for example `BMC`, `On`,
   `CPU`, and `SingleFunction`), rather than being converted to snake_case.
   Unknown values discarded by the dependency parser remain unavailable and are
