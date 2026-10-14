@@ -44,8 +44,7 @@ node's inventory; see the
 [inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
 
 The required configured BMC MAC identifies observations and correlates targets
-across workflows. Inventory preserves every reported system UUID without
-selecting or generating a top-level node UUID. The backend resolves canonical
+across workflows. The backend resolves canonical
 node identity and returns the node UUID used for attestation. Completed
 inventories flow through a bounded channel to a backend worker, which flushes small batches by size, time, or the
 end of the collection cycle. The current worker flushes when the batch reaches

@@ -18,18 +18,14 @@ Target
 ```
 
 `RedfishSource` converts Redfish resources directly into the inventory model. It
-resolves source metadata with best-effort reverse DNS and preserves reported
-resource identities without selecting a primary system. When enabled, it also measures
+resolves source metadata with best-effort reverse DNS. When enabled, it also measures
 collector-to-BMC latency after the Redfish collection completes.
 
 ## Observation Identity
 
 - Each observation is identified by the required configured BMC MAC in
   `source.mac`, normalized to lowercase colon-separated form.
-- Inventory has no top-level `uuid` or `primarySystemId`. Every reported
-  `ComputerSystem.UUID` stays on its system resource; missing UUIDs stay missing.
-- BIOS presence, collection order, service UUID, and target address do not select
-  or generate a node identity.
+- Inventory has no top-level `uuid` or `primarySystemId`.
 - `InventorySourceInfo.serviceUuid` retains the Redfish service root UUID.
 - `InventorySourceInfo.vendor` prefers Redfish service root `Vendor`, then `Product`.
 - `InventorySourceInfo.hostName` comes from best-effort reverse DNS. Lookup
