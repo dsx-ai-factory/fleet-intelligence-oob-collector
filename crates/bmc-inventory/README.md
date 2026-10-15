@@ -21,6 +21,9 @@ Each observation is identified by its required configured BMC MAC in
 managers, systems, processors, secure boot, chassis, PCIe devices, firmware,
 fabrics, and switches.
 
+A configured target name provides a display label. System hostnames come from
+the Redfish ComputerSystem resource.
+
 ## Backend Integration
 
 All observations, including collection failures, are sent to the backend.

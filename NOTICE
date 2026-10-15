@@ -109,12 +109,6 @@ URL: https://crates.io/crates/cfg_aliases
 
 =========================================================
 
-chacha20 (0.10.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/chacha20
-
-=========================================================
-
 clap (4.6.1)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/clap
@@ -145,12 +139,6 @@ URL: https://crates.io/crates/colorchoice
 
 =========================================================
 
-combine (4.6.7)
-License: MIT
-URL: https://crates.io/crates/combine
-
-=========================================================
-
 core-foundation (0.10.1)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/core-foundation
@@ -169,42 +157,6 @@ URL: https://crates.io/crates/core-foundation-sys
 
 =========================================================
 
-cpufeatures (0.3.0)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/cpufeatures
-
-=========================================================
-
-critical-section (1.2.0)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/critical-section
-
-=========================================================
-
-crossbeam-channel (0.5.16)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/crossbeam-channel
-
-=========================================================
-
-crossbeam-epoch (0.9.20)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/crossbeam-epoch
-
-=========================================================
-
-crossbeam-utils (0.8.22)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/crossbeam-utils
-
-=========================================================
-
-data-encoding (2.11.0)
-License: MIT
-URL: https://crates.io/crates/data-encoding
-
-=========================================================
-
 deranged (0.5.8)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/deranged
@@ -214,12 +166,6 @@ URL: https://crates.io/crates/deranged
 displaydoc (0.2.6)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/displaydoc
-
-=========================================================
-
-either (1.16.0)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/either
 
 =========================================================
 
@@ -313,12 +259,6 @@ URL: https://crates.io/crates/getrandom
 
 =========================================================
 
-getrandom (0.4.3)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/getrandom
-
-=========================================================
-
 glob (0.3.3)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/glob
@@ -334,24 +274,6 @@ URL: https://crates.io/crates/hashbrown
 heck (0.5.0)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/heck
-
-=========================================================
-
-hickory-net (0.26.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/hickory-net
-
-=========================================================
-
-hickory-proto (0.26.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/hickory-proto
-
-=========================================================
-
-hickory-resolver (0.26.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/hickory-resolver
 
 =========================================================
 
@@ -457,12 +379,6 @@ URL: https://crates.io/crates/indexmap
 
 =========================================================
 
-ipconfig (0.3.4)
-License: MIT/Apache-2.0
-URL: https://crates.io/crates/ipconfig
-
-=========================================================
-
 ipnet (2.12.0)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/ipnet
@@ -478,30 +394,6 @@ URL: https://crates.io/crates/is_terminal_polyfill
 itoa (1.0.18)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/itoa
-
-=========================================================
-
-jni (0.22.4)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/jni
-
-=========================================================
-
-jni-macros (0.22.4)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/jni-macros
-
-=========================================================
-
-jni-sys (0.4.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/jni-sys
-
-=========================================================
-
-jni-sys-macros (0.4.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/jni-sys-macros
 
 =========================================================
 
@@ -574,18 +466,6 @@ URL: https://crates.io/crates/mime_guess
 mio (1.2.1)
 License: MIT
 URL: https://crates.io/crates/mio
-
-=========================================================
-
-moka (0.12.15)
-License: (MIT OR Apache-2.0) AND Apache-2.0
-URL: https://crates.io/crates/moka
-
-=========================================================
-
-ndk-context (0.1.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/ndk-context
 
 =========================================================
 
@@ -691,12 +571,6 @@ URL: https://crates.io/crates/pin-project-lite
 
 =========================================================
 
-portable-atomic (1.13.1)
-License: Apache-2.0 OR MIT
-URL: https://crates.io/crates/portable-atomic
-
-=========================================================
-
 potential_utf (0.1.5)
 License: Unicode-3.0
 URL: https://crates.io/crates/potential_utf
@@ -712,12 +586,6 @@ URL: https://crates.io/crates/powerfmt
 ppv-lite86 (0.2.21)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/ppv-lite86
-
-=========================================================
-
-prefix-trie (0.8.4)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/prefix-trie
 
 =========================================================
 
@@ -775,18 +643,6 @@ URL: https://crates.io/crates/r-efi
 
 =========================================================
 
-r-efi (6.0.0)
-License: MIT OR Apache-2.0 OR LGPL-2.1-or-later
-URL: https://crates.io/crates/r-efi
-
-=========================================================
-
-rand (0.10.2)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/rand
-
-=========================================================
-
 rand (0.9.4)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/rand
@@ -796,12 +652,6 @@ URL: https://crates.io/crates/rand
 rand_chacha (0.9.0)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/rand_chacha
-
-=========================================================
-
-rand_core (0.10.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/rand_core
 
 =========================================================
 
@@ -835,12 +685,6 @@ URL: https://crates.io/crates/reqwest
 
 =========================================================
 
-resolv-conf (0.7.6)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/resolv-conf
-
-=========================================================
-
 ring (0.17.14)
 License: Apache-2.0 AND ISC
 URL: https://crates.io/crates/ring
@@ -856,12 +700,6 @@ URL: https://crates.io/crates/rust_decimal
 rustc-hash (2.1.2)
 License: Apache-2.0 OR MIT
 URL: https://crates.io/crates/rustc-hash
-
-=========================================================
-
-rustc_version (0.4.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/rustc_version
 
 =========================================================
 
@@ -901,12 +739,6 @@ URL: https://crates.io/crates/ryu
 
 =========================================================
 
-same-file (1.0.6)
-License: Unlicense/MIT
-URL: https://crates.io/crates/same-file
-
-=========================================================
-
 schannel (0.1.29)
 License: MIT
 URL: https://crates.io/crates/schannel
@@ -928,12 +760,6 @@ URL: https://crates.io/crates/security-framework
 security-framework-sys (2.17.0)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/security-framework-sys
-
-=========================================================
-
-semver (1.0.28)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/semver
 
 =========================================================
 
@@ -1006,18 +832,6 @@ URL: https://crates.io/crates/shlex
 signal-hook-registry (1.4.8)
 License: MIT OR Apache-2.0
 URL: https://crates.io/crates/signal-hook-registry
-
-=========================================================
-
-simd_cesu8 (1.2.0)
-License: Apache-2.0 OR MIT
-URL: https://crates.io/crates/simd_cesu8
-
-=========================================================
-
-simdutf8 (0.1.5)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/simdutf8
 
 =========================================================
 
@@ -1102,12 +916,6 @@ URL: https://crates.io/crates/tagged-types
 tagged-types-derive (0.2.4)
 License: MIT
 URL: https://crates.io/crates/tagged-types-derive
-
-=========================================================
-
-tagptr (0.2.0)
-License: MIT/Apache-2.0
-URL: https://crates.io/crates/tagptr
 
 =========================================================
 
@@ -1351,12 +1159,6 @@ URL: https://crates.io/crates/valuable
 
 =========================================================
 
-walkdir (2.5.0)
-License: Unlicense/MIT
-URL: https://crates.io/crates/walkdir
-
-=========================================================
-
 want (0.3.1)
 License: MIT
 URL: https://crates.io/crates/want
@@ -1426,18 +1228,6 @@ URL: https://crates.io/crates/web-time
 webpki-roots (1.0.7)
 License: CDLA-Permissive-2.0
 URL: https://crates.io/crates/webpki-roots
-
-=========================================================
-
-widestring (1.2.1)
-License: MIT OR Apache-2.0
-URL: https://crates.io/crates/widestring
-
-=========================================================
-
-winapi-util (0.1.11)
-License: Unlicense OR MIT
-URL: https://crates.io/crates/winapi-util
 
 =========================================================
 

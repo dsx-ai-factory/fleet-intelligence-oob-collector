@@ -16,7 +16,6 @@
 
 mod assembly;
 mod redfish;
-mod reverse_dns;
 mod tcp_probe;
 
 use async_trait::async_trait;
@@ -49,8 +48,7 @@ pub trait InventorySource {
     async fn collect(&self, target: Target) -> NodeInventory;
 }
 
-/// Groups canonical resources with service metadata and recoverable failures
-/// until node identity can be assigned.
+/// Groups collected resources with service metadata and recoverable failures.
 struct RedfishReport {
     service_root: ServiceRootData,
     managers: Vec<ManagerInventory>,

@@ -29,9 +29,6 @@ use super::resources::collect_report_from_root;
 use crate::config::Target;
 use crate::models::{LatencyMeasurement, NodeInventory};
 use crate::source::assembly::assemble;
-use crate::source::reverse_dns::{
-    DEFAULT_REVERSE_DNS_TIMEOUT, ReverseDnsResolver, resolve_hostname,
-};
 use crate::source::tcp_probe::{self, LatencyProbe};
 use crate::source::{InventorySource, RedfishReport, now_rfc3339};
 
@@ -45,7 +42,6 @@ const DEFAULT_REDFISH_PORT: u16 = 443;
 pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
     dispatcher: Arc<Dispatcher>,
-    reverse_dns: Option<ReverseDnsResolver>,
     latency_probe: LatencyProbe,
 }
 
@@ -70,17 +66,9 @@ impl RedfishSource {
                 // allowing those standards-compatible endpoints to work.
                 .max_redirects(MAX_REDIRECTS),
         )?;
-        let reverse_dns = match ReverseDnsResolver::new() {
-            Ok(resolver) => Some(resolver),
-            Err(error) => {
-                tracing::warn!(%error, "reverse DNS is unavailable; BMC source host names will be omitted");
-                None
-            }
-        };
         Ok(Self {
             client,
             dispatcher,
-            reverse_dns,
             latency_probe: LatencyProbe::Disabled,
         })
     }
@@ -148,26 +136,14 @@ impl RedfishSource {
 impl InventorySource for RedfishSource {
     async fn collect(&self, target: Target) -> NodeInventory {
         let collected_at = now_rfc3339();
-        let redfish_then_probe = async {
-            let result = self.collect_report(&target).await;
-            // A target-level Redfish failure leaves the node without identity,
-            // so it is not uploaded and a probe result would be discarded.
-            let latency = if result.is_ok() {
-                self.measure_latency(&target).await
-            } else {
-                Vec::new()
-            };
-            (result, latency)
+        let result = self.collect_report(&target).await;
+        // Probe only targets whose Redfish collection completed.
+        let latency = if result.is_ok() {
+            self.measure_latency(&target).await
+        } else {
+            Vec::new()
         };
-        let ((result, latency), host_name) = tokio::join!(
-            redfish_then_probe,
-            resolve_hostname(
-                self.reverse_dns.as_ref(),
-                target.ip,
-                DEFAULT_REVERSE_DNS_TIMEOUT,
-            )
-        );
-        assemble(target, collected_at, host_name, result, latency)
+        assemble(target, collected_at, result, latency)
     }
 }
 

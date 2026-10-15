@@ -34,7 +34,6 @@ fn failed_inventory() -> NodeInventory {
             source_type: "redfish".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
-            host_name: None,
             redfish_version: None,
             service_uuid: None,
             vendor: None,
@@ -98,7 +97,6 @@ fn target_error_inventory_uses_mac_without_node_identity() {
                 "sourceType": "redfish",
                 "mac": "00:11:22:33:44:55",
                 "address": "10.0.0.1",
-                "hostName": null,
                 "redfishVersion": null,
                 "serviceUuid": null,
                 "vendor": null

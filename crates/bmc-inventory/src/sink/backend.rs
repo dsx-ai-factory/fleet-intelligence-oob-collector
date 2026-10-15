@@ -481,6 +481,7 @@ mod tests {
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
         assert_eq!(value["data"][0]["kind"], "nvswitch");
         assert_eq!(value["data"][0]["source"]["mac"], "00:11:22:33:44:55");
+        assert!(value["data"][0]["source"].get("hostName").is_none());
         assert!(value["data"][0].get("uuid").is_none());
         assert!(value["data"][0].get("primarySystemId").is_none());
         assert_eq!(value["data"][0]["name"], "node-01");
@@ -687,7 +688,6 @@ mod tests {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: address.to_string(),
-                host_name: None,
                 redfish_version: None,
                 service_uuid: None,
                 vendor: None,

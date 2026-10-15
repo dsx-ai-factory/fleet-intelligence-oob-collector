@@ -36,7 +36,6 @@ struct SummaryRow {
     node_group: String,
     mac: String,
     address: String,
-    host_name: String,
     tcp_rtt: String,
     source_type: String,
     redfish_version: String,
@@ -73,7 +72,6 @@ struct SourceDetailRow {
     source_type: String,
     mac: String,
     address: String,
-    host_name: String,
     redfish_version: String,
     service_uuid: String,
     vendor: String,
@@ -219,7 +217,6 @@ fn render_inventory_tables(inventories: &[NodeInventory], detail: bool) -> Strin
             "Node Group",
             "MAC",
             "Address",
-            "Host Name",
             "TCP RTT",
             "Source",
             "Redfish",
@@ -254,7 +251,6 @@ impl From<&NodeInventory> for SummaryRow {
             node_group: inventory.node_group.clone().unwrap_or_default(),
             mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
-            host_name: inventory.source.host_name.clone().unwrap_or_default(),
             tcp_rtt: format_tcp_rtt(inventory),
             source_type: inventory.source.source_type.clone(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
@@ -282,14 +278,13 @@ impl From<&NodeInventory> for SummaryRow {
 }
 
 impl SummaryRow {
-    fn values(&self) -> [String; 19] {
+    fn values(&self) -> [String; 18] {
         [
             self.name.clone(),
             self.compute_zone.clone(),
             self.node_group.clone(),
             self.mac.clone(),
             self.address.clone(),
-            self.host_name.clone(),
             self.tcp_rtt.clone(),
             self.source_type.clone(),
             self.redfish_version.clone(),
@@ -326,7 +321,6 @@ impl From<&NodeInventory> for SourceDetailRow {
             source_type: inventory.source.source_type.clone(),
             mac: inventory.source.mac.clone(),
             address: inventory.source.address.clone(),
-            host_name: inventory.source.host_name.clone().unwrap_or_default(),
             redfish_version: inventory.source.redfish_version.clone().unwrap_or_default(),
             service_uuid: inventory.source.service_uuid.clone().unwrap_or_default(),
             vendor: inventory.source.vendor.clone().unwrap_or_default(),
@@ -340,7 +334,6 @@ impl SourceDetailRow {
             ["Source".to_string(), self.source_type.clone()],
             ["MAC".to_string(), self.mac.clone()],
             ["Address".to_string(), self.address.clone()],
-            ["Host Name".to_string(), self.host_name.clone()],
             ["Redfish Version".to_string(), self.redfish_version.clone()],
             ["Service UUID".to_string(), self.service_uuid.clone()],
             ["Vendor".to_string(), self.vendor.clone()],
@@ -1087,7 +1080,6 @@ mod tests {
         assert_eq!(row.compute_zone, "us-west-dc1");
         assert_eq!(row.node_group, "gb200-training");
         assert_eq!(row.source_type, "redfish");
-        assert_eq!(row.host_name, "bmc-a.example.com");
         assert_eq!(row.redfish_version, "1.15.1");
         assert_eq!(row.service_uuid, "870155dd-d474-aca8-11ee-6e809af87c0c");
         assert_eq!(row.vendor, "NVIDIA");
@@ -1182,13 +1174,11 @@ mod tests {
 
         for expected in [
             "Address",
-            "Host Name",
             "Source",
             "Redfish",
             "Service UUID",
             "Vendor",
             "10.0.0.1",
-            "bmc-a.example.com",
             "redfish",
             "1.15.1",
             "870155dd-d474-aca8-11ee-6e809af87c0c",
@@ -1198,6 +1188,7 @@ mod tests {
             assert!(rendered.contains(expected), "missing {expected:?}");
         }
         assert!(!rendered.contains("Primary System"));
+        assert!(!rendered.contains("Host Name"));
         assert!(!rendered.contains("9aee71e4-6e80-11ee-a8ac-74d4dd550187"));
         assert!(!rendered.contains("Node:"));
         assert!(!rendered.contains("Firmware\n"));
@@ -1210,7 +1201,7 @@ mod tests {
         for expected in [
             "Node: 10.0.0.1",
             "Source Information\n",
-            "| Host Name       | bmc-a.example.com",
+            "node-a.example.com",
             "Redfish Version",
             "Service UUID",
             "870155dd-d474-aca8-11ee-6e809af87c0c",
@@ -1245,6 +1236,7 @@ mod tests {
 
         let source = rendered.find("Source Information\n").expect("source");
         let manager = rendered.find("Managers\n").expect("manager");
+        assert!(!rendered[source..manager].contains("Host Name"));
         let system = rendered.find("Systems\n").expect("system");
         let processor = rendered.find("Processors\n").expect("processor");
         let chassis = rendered.find("Chassis\n").expect("chassis");
@@ -1297,7 +1289,6 @@ mod tests {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: "10.0.0.1".to_string(),
-                host_name: Some("bmc-a.example.com".to_string()),
                 redfish_version: Some("1.15.1".to_string()),
                 service_uuid: Some("870155dd-d474-aca8-11ee-6e809af87c0c".to_string()),
                 vendor: Some("NVIDIA".to_string()),

@@ -25,7 +25,6 @@ use crate::models::{
 pub(super) fn assemble(
     target: Target,
     collected_at: String,
-    host_name: Option<String>,
     result: Result<RedfishReport, String>,
     latency: Vec<LatencyMeasurement>,
 ) -> NodeInventory {
@@ -41,7 +40,6 @@ pub(super) fn assemble(
             source_type: "redfish".to_string(),
             mac: target.mac,
             address: target.address,
-            host_name,
             redfish_version: None,
             service_uuid: None,
             vendor: None,
@@ -146,7 +144,6 @@ mod tests {
         let inventory = assemble(
             target(),
             "2026-01-01T00:00:00Z".into(),
-            Some("bmc.example.com".into()),
             Ok(report(vec![
                 system("Aux", None, Some(auxiliary_uuid)),
                 system("Host", Some("3A21"), Some(host_uuid)),
@@ -161,10 +158,6 @@ mod tests {
         assert_eq!(
             inventory.systems[1].uuid.as_ref().unwrap().to_string(),
             host_uuid
-        );
-        assert_eq!(
-            inventory.source.host_name.as_deref(),
-            Some("bmc.example.com")
         );
         assert_eq!(inventory.source.vendor.as_deref(), Some("AMI"));
     }
@@ -183,13 +176,7 @@ mod tests {
             if reversed {
                 systems.reverse();
             }
-            let inventory = assemble(
-                target(),
-                "time".into(),
-                None,
-                Ok(report(systems)),
-                Vec::new(),
-            );
+            let inventory = assemble(target(), "time".into(), Ok(report(systems)), Vec::new());
             let host = inventory
                 .systems
                 .iter()
@@ -213,7 +200,6 @@ mod tests {
         let inventory = assemble(
             target(),
             "2026-01-01T00:00:00Z".into(),
-            None,
             Ok(report(vec![system("Host", Some("3A21"), None)])),
             Vec::new(),
         );
@@ -228,7 +214,7 @@ mod tests {
             resource: None,
             message: SanitizedErrorMessage::new("firmware unavailable"),
         });
-        let inventory = assemble(target(), "time".into(), None, Ok(partial), Vec::new());
+        let inventory = assemble(target(), "time".into(), Ok(partial), Vec::new());
         assert_eq!(inventory.domain_errors.len(), 1);
         assert!(inventory.target_error.is_none());
         assert_eq!(inventory.source.mac, target().mac);
@@ -236,7 +222,6 @@ mod tests {
         let failed = assemble(
             target(),
             "time".into(),
-            None,
             Err("request failed at https://user:secret@bmc.example.com/redfish/v1".into()),
             Vec::new(),
         );
