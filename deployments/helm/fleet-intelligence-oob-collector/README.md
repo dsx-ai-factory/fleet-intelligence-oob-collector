@@ -133,9 +133,10 @@ overridden. Add another `credentials.secrets` entry with a distinct `target`
 for each override; the chart projects each Secret's `username` and `password`
 keys under `/run/secrets/bmc/<target>`.
 
-Every target requires an explicit BMC MAC: six hexadecimal octets separated by
-colons or hyphens. The collector normalizes it to lowercase colon-separated
-form and rejects duplicates. Identity is never derived from the IP address.
+Every target requires an explicit BMC MAC. Colon-separated, hyphen-separated,
+and unseparated hexadecimal forms are accepted in either case. MACs are stored
+as six bytes and formatted as uppercase colon-separated text. Duplicate MACs are
+rejected across all targets. The config file is not rewritten.
 
 The target `name` is optional. When present, the collector includes it as the
 top-level `name` in inventory uploads and adds it to NICo metrics and logs as

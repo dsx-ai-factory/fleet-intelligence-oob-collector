@@ -11,6 +11,7 @@ license.workspace = true
 async-trait.workspace = true
 bmc-dispatch.workspace = true
 bmc-error.workspace = true
+mac_address.workspace = true
 nv-redfish.workspace = true
 reqwest.workspace = true
 serde.workspace = true

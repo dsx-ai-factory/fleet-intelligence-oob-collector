@@ -17,7 +17,7 @@ Target
 ```
 
 Each observation is identified by its required configured BMC MAC in
-`source.mac`, normalized to lowercase colon-separated form. The collector gathers
+`source.mac`, formatted as uppercase colon-separated text. The collector gathers
 managers, systems, processors, secure boot, chassis, PCIe devices, firmware,
 fabrics, and switches.
 

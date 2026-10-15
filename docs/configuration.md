@@ -60,7 +60,7 @@ forms during migration.
 | `targets[].node_group` | No | Per-target node-group override. |
 | `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
-| `targets[].mac` | Yes | Stable BMC identity: six hexadecimal octets separated by colons or hyphens. Normalized to lowercase colon-separated form and unique in the file. |
+| `targets[].mac` | Yes | Stable BMC identity: Six-byte MAC in colon-separated, hyphen-separated, or unseparated hexadecimal form. Stored as bytes, formatted as uppercase colon-separated text, and unique in the file. The config file is not rewritten. |
 | `targets[].username_file` | Conditional | Per-target username file override; must be paired with `password_file`. |
 | `targets[].password_file` | Conditional | Per-target password file override; must be paired with `username_file`. |
 | `targets[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |

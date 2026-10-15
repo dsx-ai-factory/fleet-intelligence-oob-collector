@@ -190,13 +190,10 @@ fn build_attestation_targets(
     Ok(targets
         .into_iter()
         .filter_map(|target| {
-            let uuid = nodes
-                .iter()
-                .find(|node| node.mac == target.mac)?
-                .node_uuid
-                .clone();
+            let mac = target.mac.to_string();
+            let uuid = nodes.iter().find(|node| node.mac == mac)?.node_uuid.clone();
             Some(attestation_config::Target {
-                name: target.mac,
+                name: mac,
                 node_uuid: uuid,
                 address: target.address,
                 username: target.username,
@@ -409,7 +406,7 @@ async fn collect_and_upload_inventory(
         collector_config
             .targets
             .iter()
-            .map(|target| target.mac.clone()),
+            .map(|target| target.mac.to_string()),
     )?;
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
     let timeout = Duration::from_secs(options.timeout_seconds);
@@ -780,7 +777,7 @@ fn start_dispatcher(
             bmc_burst: options.bmc_burst,
             workflow_queue_capacity: WORKFLOW_QUEUE_CAPACITY,
         },
-        targets.iter().map(|target| target.mac.clone()),
+        targets.iter().map(|target| target.mac.to_string()),
     )?)
 }
 

@@ -88,7 +88,7 @@ impl RedfishSource {
             LatencyProbe::Intercepted => return vec![tcp_probe::intercepted(destination)],
             LatencyProbe::Enabled(config) => config,
         };
-        let Some(gate) = self.dispatcher.inventory_gate(&target.mac) else {
+        let Some(gate) = self.dispatcher.inventory_gate(&target.mac.to_string()) else {
             return vec![tcp_probe::unavailable(
                 destination,
                 format!("no dispatcher endpoint for target {:?}", target.mac),
@@ -120,7 +120,7 @@ impl RedfishSource {
         let url = bmc_url(&target.address)?;
         let gate = self
             .dispatcher
-            .inventory_gate(&target.mac)
+            .inventory_gate(&target.mac.to_string())
             .ok_or_else(|| format!("no dispatcher endpoint for target {:?}", target.mac))?;
         let bmc = Arc::new(HttpBmc::new(
             DispatchingHttpClient::new(self.client.clone(), gate),
@@ -176,7 +176,7 @@ mod tests {
                 bmc_burst: 100,
                 workflow_queue_capacity: 8,
             },
-            ["test".to_string()],
+            ["00:11:22:33:44:55".to_string()],
         )
         .expect("dispatcher")
     }
@@ -196,7 +196,7 @@ mod tests {
             node_group: None,
             ip: "127.0.0.1".parse().expect("ip"),
             port: Some(port),
-            mac: "test".to_string(),
+            mac: "00:11:22:33:44:55".parse().expect("mac"),
             address: format!("127.0.0.1:{port}"),
             username: "user".to_string(),
             password: "password".to_string(),
@@ -221,7 +221,7 @@ mod tests {
             node_group: None,
             ip: "10.0.0.1".parse().expect("ip"),
             port: None,
-            mac: "test".to_string(),
+            mac: "00:11:22:33:44:55".parse().expect("mac"),
             address: "10.0.0.1".to_string(),
             username: "user".to_string(),
             password: "password".to_string(),

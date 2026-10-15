@@ -38,7 +38,7 @@ pub(super) fn assemble(
         node_group: target.node_group,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
-            mac: target.mac,
+            mac: target.mac.to_string(),
             address: target.address,
             redfish_version: None,
             service_uuid: None,
@@ -88,7 +88,7 @@ mod tests {
             node_group: None,
             ip: "192.0.2.10".parse().unwrap(),
             port: None,
-            mac: "00:11:22:33:44:55".into(),
+            mac: "00:11:22:33:44:55".parse().unwrap(),
             address: "192.0.2.10".into(),
             username: "user".into(),
             password: "password".into(),
@@ -217,7 +217,7 @@ mod tests {
         let inventory = assemble(target(), "time".into(), Ok(partial), Vec::new());
         assert_eq!(inventory.domain_errors.len(), 1);
         assert!(inventory.target_error.is_none());
-        assert_eq!(inventory.source.mac, target().mac);
+        assert_eq!(inventory.source.mac, target().mac.to_string());
 
         let failed = assemble(
             target(),
@@ -225,7 +225,7 @@ mod tests {
             Err("request failed at https://user:secret@bmc.example.com/redfish/v1".into()),
             Vec::new(),
         );
-        assert_eq!(failed.source.mac, target().mac);
+        assert_eq!(failed.source.mac, target().mac.to_string());
         assert!(failed.systems.is_empty());
         assert!(failed.domain_errors.is_empty());
         assert_eq!(

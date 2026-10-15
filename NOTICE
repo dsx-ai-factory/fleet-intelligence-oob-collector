@@ -439,6 +439,12 @@ URL: https://crates.io/crates/lru-slab
 
 =========================================================
 
+mac_address (1.2.1)
+License: MIT OR Apache-2.0
+URL: https://crates.io/crates/mac_address
+
+=========================================================
+
 matchers (0.2.0)
 License: MIT
 URL: https://crates.io/crates/matchers
@@ -448,6 +454,12 @@ URL: https://crates.io/crates/matchers
 memchr (2.8.1)
 License: Unlicense OR MIT
 URL: https://crates.io/crates/memchr
+
+=========================================================
+
+memoffset (0.9.1)
+License: MIT
+URL: https://crates.io/crates/memoffset
 
 =========================================================
 
@@ -466,6 +478,12 @@ URL: https://crates.io/crates/mime_guess
 mio (1.2.1)
 License: MIT
 URL: https://crates.io/crates/mio
+
+=========================================================
+
+nix (0.31.3)
+License: MIT
+URL: https://crates.io/crates/nix
 
 =========================================================
 

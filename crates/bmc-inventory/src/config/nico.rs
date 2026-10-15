@@ -62,7 +62,7 @@ pub fn render_nico_config(
         .map(|target| NicoStaticBmcEndpoint {
             ip: target.ip,
             port: target.port,
-            mac: &target.mac,
+            mac: target.mac.to_string(),
             username: &target.username,
             password: &target.password,
             labels: target.labels.clone(),
@@ -136,7 +136,7 @@ struct NicoStaticBmcEndpoint<'a> {
     ip: IpAddr,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
-    mac: &'a str,
+    mac: String,
     username: &'a str,
     password: &'a str,
     labels: BTreeMap<String, String>,
@@ -263,7 +263,7 @@ mod tests {
 
         assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
         assert_eq!(endpoint["port"].as_integer(), Some(8443));
-        assert_eq!(endpoint["mac"].as_str(), Some("aa:bb:cc:dd:ee:ff"));
+        assert_eq!(endpoint["mac"].as_str(), Some("AA:BB:CC:DD:EE:FF"));
         assert_eq!(
             endpoint["labels"]["compute_zone"].as_str(),
             Some("us-west-dc1")
