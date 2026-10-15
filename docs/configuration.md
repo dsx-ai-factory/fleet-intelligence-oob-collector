@@ -34,8 +34,8 @@ ip = "10.0.0.12"
 
 The compute and power-shelf targets inherit the top-level credential files. The
 NVSwitch target overrides both files. Unknown fields, an empty target list,
-unsupported target kinds, incomplete or mixed credential pairs, blank
-credentials, and duplicate MACs are rejected.
+unsupported target kinds, incomplete credential pairs, conflicting sources for
+the same field, blank credentials, and duplicate MACs are rejected.
 
 `[[targets]]` is the canonical syntax. Its optional `kind` is one of `unknown`,
 `compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
@@ -50,8 +50,10 @@ forms during migration.
 | Top-level `compute_zone` | No | Default Fleet Intelligence compute zone inherited by targets and mirrored to telemetry as `compute_zone`. |
 | Top-level `node_group` | No | Default Fleet Intelligence node group inherited by targets and mirrored to telemetry as `node_group`. |
 | Top-level `labels` | No | Labels inherited by every target. Per-target labels with the same key override them. |
-| `credentials.username_file` | Conditional | Default username file inherited by targets; must be paired with `password_file`. |
-| `credentials.password_file` | Conditional | Default password file inherited by targets; must be paired with `username_file`. |
+| `credentials.username` | Conditional | Default inline Redfish username, as an alternative to `username_file`. |
+| `credentials.password` | Conditional | Default inline Redfish password for direct collector use, as an alternative to `password_file`. |
+| `credentials.username_file` | Conditional | Default username file; choose either `username` or `username_file`. |
+| `credentials.password_file` | Conditional | Default password file; choose either `password` or `password_file`. |
 | `targets[].kind` | No | Target type: `unknown`, `compute`, `nvswitch`, or `power_shelf`; defaults to `unknown`. |
 | `targets[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
 | `targets[].compute_zone` | No | Per-target compute-zone override. |
@@ -59,11 +61,19 @@ forms during migration.
 | `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
 | `targets[].mac` | No | Stable BMC identity. It must be unique in the file. |
-| `targets[].username_file` | Conditional | Per-target username file override; must be paired with `password_file`. |
-| `targets[].password_file` | Conditional | Per-target password file override; must be paired with `username_file`. |
-| `targets[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
-| `targets[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
+| `targets[].username_file` | Conditional | Per-target username file, as an alternative to `username`. |
+| `targets[].password_file` | Conditional | Per-target password file, as an alternative to `password`. |
+| `targets[].username` | Conditional | Inline Redfish username, as an alternative to `username_file`. |
+| `targets[].password` | Conditional | Inline Redfish password for direct collector use, as an alternative to `password_file`. |
 | `targets[].labels` | No | Labels added to this target or overriding inherited top-level labels. |
+
+MACs use the same `mac_address::MacAddress` parser as NICo health: colon-separated,
+hyphen-separated, and unseparated hexadecimal forms are accepted in either case.
+For example, `aa-bb-cc-dd-ee-ff` and `aabbccddeeff` both become
+`AA:BB:CC:DD:EE:FF` internally and in output; the configuration file is unchanged.
+Invalid MACs produce an error identifying the target index. Duplicates are
+rejected after normalization. No vendor, network, nonzero, or unicast checks
+are performed.
 
 When `mac` is omitted, the collector derives a locally administered MAC from
 `02:00` and the final four IP bytes. Because different IPv6 addresses can share
@@ -120,10 +130,18 @@ telemetry label are omitted. Custom labels are not promoted to Fleet
 Intelligence placement fields.
 
 Relative credential paths are resolved from the directory containing the
-collector configuration. A target must provide a complete file pair, a
-complete inline pair, or inherit a complete top-level file pair.
-Per-target credentials override the top-level pair as a unit; sources cannot
-be mixed.
+collector configuration. Choose exactly one source for each field: `username`
+or `username_file`, and `password` or `password_file`. For example:
+
+```toml
+[credentials]
+username = "ADMIN"
+password_file = "/run/secrets/bmc/default/password"
+```
+
+A target inherits the complete top-level pair when it has no credential fields.
+Setting any per-target credential field overrides the pair as a unit: both a
+username source and a password source must be supplied for that target.
 
 Inline credentials are supported for direct collector use, but they must not be
 used in the configuration referenced by the Helm chart. That configuration is

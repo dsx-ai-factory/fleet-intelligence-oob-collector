@@ -20,6 +20,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::TargetKind;
@@ -103,17 +104,21 @@ struct Config {
     #[serde(default)]
     labels: BTreeMap<String, String>,
     #[serde(default)]
-    credentials: Option<FileCredentialConfig>,
+    credentials: Option<CredentialConfig>,
     #[serde(default)]
     machines: Vec<RawTargetConfig>,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
 }
 
-/// Paths containing a complete BMC username and password pair.
+/// Independent inline or file sources for a complete BMC credential pair.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileCredentialConfig {
+struct CredentialConfig {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
     #[serde(default)]
     username_file: Option<PathBuf>,
     #[serde(default)]
@@ -230,7 +235,7 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
             labels.insert(NODE_GROUP_LABEL_NAME.to_string(), node_group.clone());
         }
         target.labels = labels;
-        if !macs.insert(target.mac.to_ascii_lowercase()) {
+        if !macs.insert(target.mac.clone()) {
             return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
         }
         targets.push(target);
@@ -312,7 +317,10 @@ impl RawTargetConfig {
             Some(mac) if mac.trim().is_empty() => {
                 return Err(format!("{context}.mac cannot be blank").into());
             }
-            Some(mac) => mac,
+            Some(mac) => mac
+                .parse::<MacAddress>()
+                .map_err(|error| format!("{context}.mac is invalid: {error}"))?
+                .to_string(),
             None => derive_mac_from_ip(self.ip),
         };
         let address = match (self.ip, self.port) {
@@ -347,21 +355,10 @@ impl RawTargetConfig {
         let has_inline = self.username.is_some() || self.password.is_some();
         let has_files = self.username_file.is_some() || self.password_file.is_some();
 
-        if has_inline && has_files {
-            return Err(format!(
-                "{context} must use either username/password or username_file/password_file, not both"
-            )
-            .into());
-        }
-        if has_inline {
-            return ResolvedCredentials::from_inline(
-                self.username.as_deref(),
-                self.password.as_deref(),
-                context,
-            );
-        }
-        if has_files {
-            return FileCredentialConfig {
+        if has_inline || has_files {
+            return CredentialConfig {
+                username: self.username.clone(),
+                password: self.password.clone(),
                 username_file: self.username_file.clone(),
                 password_file: self.password_file.clone(),
             }
@@ -369,7 +366,7 @@ impl RawTargetConfig {
         }
 
         default_credentials.cloned().ok_or_else(|| {
-            format!("{context} requires credentials or a top-level [credentials] file pair").into()
+            format!("{context} requires credentials or a top-level [credentials] pair").into()
         })
     }
 }
@@ -381,36 +378,45 @@ struct ResolvedCredentials {
     password: String,
 }
 
-impl ResolvedCredentials {
-    /// Validate and materialize a complete inline credential pair.
-    fn from_inline(
-        username: Option<&str>,
-        password: Option<&str>,
-        context: &str,
-    ) -> Result<Self, Box<dyn Error>> {
-        let username = username.ok_or_else(|| format!("{context}.username is required"))?;
-        let password = password.ok_or_else(|| format!("{context}.password is required"))?;
-        validate_credentials(username, password, context)
-    }
-}
-
-impl FileCredentialConfig {
-    /// Read and validate a complete credential pair from its configured files.
+impl CredentialConfig {
+    /// Validate source selection before reading any credential files.
     fn resolve(
         &self,
         context: &str,
         config_dir: &Path,
     ) -> Result<ResolvedCredentials, Box<dyn Error>> {
-        let username_path = self
-            .username_file
-            .as_deref()
-            .ok_or_else(|| format!("{context}.username_file is required"))?;
-        let password_path = self
-            .password_file
-            .as_deref()
-            .ok_or_else(|| format!("{context}.password_file is required"))?;
-        let username = read_credential_file(username_path, config_dir, context, "username_file")?;
-        let password = read_credential_file(password_path, config_dir, context, "password_file")?;
+        for (field, inline, file) in [
+            ("username", &self.username, &self.username_file),
+            ("password", &self.password, &self.password_file),
+        ] {
+            match (inline, file) {
+                (Some(_), Some(_)) => {
+                    return Err(
+                        format!("{context}.{field} and {field}_file cannot both be set").into(),
+                    );
+                }
+                (None, None) => {
+                    return Err(
+                        format!("{context}.{field} is required (or set {field}_file)").into(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        let read = |inline: &Option<String>, file: &Option<PathBuf>, field: &str| {
+            if let Some(value) = inline {
+                Ok(value.clone())
+            } else {
+                read_credential_file(
+                    file.as_deref().expect("source validated"),
+                    config_dir,
+                    context,
+                    field,
+                )
+            }
+        };
+        let username = read(&self.username, &self.username_file, "username_file")?;
+        let password = read(&self.password, &self.password_file, "password_file")?;
         validate_credentials(&username, &password, context)
     }
 }
@@ -473,7 +479,7 @@ fn derive_mac_from_ip(ip: IpAddr) -> String {
         }
     };
     format!(
-        "02:00:{:02x}:{:02x}:{:02x}:{:02x}",
+        "02:00:{:02X}:{:02X}:{:02X}:{:02X}",
         ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
     )
 }
@@ -663,7 +669,7 @@ mod tests {
 
         let config = load_config(path.to_str().expect("path")).expect("config");
 
-        assert_eq!(config.targets[0].mac, "02:00:0a:00:00:0a");
+        assert_eq!(config.targets[0].mac, "02:00:0A:00:00:0A");
         assert_eq!(config.targets[1].mac, "02:00:01:02:03:04");
     }
 
@@ -749,7 +755,7 @@ mod tests {
             "test.toml",
         )
         .expect("config");
-        assert_eq!(explicit.targets[0].mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(explicit.targets[0].mac, "AA:BB:CC:DD:EE:FF");
 
         let error = parse_config(
             r#"
@@ -872,7 +878,7 @@ mod tests {
             config.targets[0].node_group.as_deref(),
             Some("gb200-training")
         );
-        assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(config.targets[0].mac, "AA:BB:CC:DD:EE:FF");
         assert_eq!(
             config.targets[0].labels.get("compute_zone"),
             Some(&"us-west-dc1".to_string())
@@ -883,11 +889,11 @@ mod tests {
         );
         assert_eq!(config.targets[1].kind, TargetKind::NvSwitch);
         assert_eq!(config.targets[1].name.as_deref(), Some("switch-tray-01"));
-        assert_eq!(config.targets[1].mac, "02:00:0a:00:00:0b");
+        assert_eq!(config.targets[1].mac, "02:00:0A:00:00:0B");
         assert_eq!(config.targets[1].username, "switch-admin");
         assert_eq!(config.targets[2].kind, TargetKind::PowerShelf);
         assert_eq!(config.targets[2].name.as_deref(), Some("power-shelf-01"));
-        assert_eq!(config.targets[2].mac, "02:00:0a:00:00:0c");
+        assert_eq!(config.targets[2].mac, "02:00:0A:00:00:0C");
     }
 
     #[test]
@@ -910,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_and_mixed_credential_sources() {
+    fn rejects_partial_and_conflicting_credential_sources() {
         for (name, content, expected) in [
             (
                 "partial-default",
@@ -921,7 +927,7 @@ mod tests {
                 [[machines]]
                 ip = "10.0.0.1"
                 "#,
-                "credentials.password_file is required",
+                "credentials.password is required",
             ),
             (
                 "partial-machine-files",
@@ -930,17 +936,18 @@ mod tests {
                 ip = "10.0.0.1"
                 username_file = "/run/secrets/bmc/username"
                 "#,
-                "machines[0].password_file is required",
+                "machines[0].password is required",
             ),
             (
-                "mixed-machine",
+                "conflicting-machine",
                 r#"
                 [[machines]]
                 ip = "10.0.0.1"
                 username = "admin"
+                username_file = "/run/secrets/bmc/username"
                 password_file = "/run/secrets/bmc/password"
                 "#,
-                "must use either username/password or username_file/password_file",
+                "machines[0].username and username_file cannot both be set",
             ),
         ] {
             let path = write_config(name, content);
@@ -948,6 +955,109 @@ mod tests {
                 .expect_err("invalid credentials should fail")
                 .to_string();
             assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_password_conflicts_and_partial_overrides() {
+        for (fields, expected) in [
+            (
+                "username = \"admin\"\npassword = \"example\"\npassword_file = \"missing\"",
+                "targets[0].password and password_file cannot both be set",
+            ),
+            ("username = \"other\"", "targets[0].password is required"),
+        ] {
+            let contents = format!(
+                r#"
+                [credentials]
+                username = "admin"
+                password = "example"
+                [[targets]]
+                ip = "10.0.0.1"
+                {fields}
+            "#
+            );
+            let error = parse_config(&contents, "config.toml").expect_err("invalid sources");
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn resolves_credentials_independently_per_field() {
+        let username = write_credential("mixed-username", "ADMIN\n");
+        let password = write_credential("mixed-password", "example-password\r\n");
+        for (index, sources) in [
+            format!("username = \"ADMIN\"\npassword_file = {:?}", password),
+            format!(
+                "username_file = {:?}\npassword = \"example-password\"",
+                username
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for scope in ["default", "target"] {
+                let contents = if scope == "default" {
+                    format!("[credentials]\n{sources}\n[[targets]]\nip = \"10.0.0.1\"")
+                } else {
+                    format!("[[targets]]\nip = \"10.0.0.1\"\n{sources}")
+                };
+                let config = parse_config(&contents, "config.toml").expect("mixed sources");
+                assert_eq!(config.targets[0].username, "ADMIN", "{scope} {index}");
+                assert_eq!(config.targets[0].password, "example-password");
+            }
+        }
+    }
+
+    #[test]
+    fn normalizes_mac_addresses_like_nico_health() {
+        for (input, expected) in [
+            ("aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF"),
+            ("AA-BB-CC-DD-EE-FF", "AA:BB:CC:DD:EE:FF"),
+            ("aabbccddeeff", "AA:BB:CC:DD:EE:FF"),
+            ("00:00:00:00:00:00", "00:00:00:00:00:00"),
+            ("ff:ff:ff:ff:ff:ff", "FF:FF:FF:FF:FF:FF"),
+            ("01:00:5e:00:00:01", "01:00:5E:00:00:01"),
+        ] {
+            let contents = format!(
+                r#"
+                [[targets]]
+                ip = "10.0.0.1"
+                username = "admin"
+                password = "example-password"
+                mac = "{input}"
+            "#
+            );
+            let config = parse_config(&contents, "config.toml").expect("valid MAC");
+            assert_eq!(config.targets[0].mac, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_mac_with_endpoint_index() {
+        for table in ["targets", "machines"] {
+            for mac in [
+                "not-a-mac",
+                "aa:bb:cc:dd:ee:gg",
+                "aabbccddee",
+                "éabbccddeeff",
+            ] {
+                let contents = format!(
+                    r#"
+                    [[{table}]]
+                    ip = "10.0.0.1"
+                    username = "admin"
+                    password = "example-password"
+                    mac = "{mac}"
+                "#
+                );
+                let error = parse_config(&contents, "config.toml").expect_err("invalid MAC");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("{table}[0].mac is invalid"))
+                );
+            }
         }
     }
 
@@ -983,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_macs_case_insensitively() {
+    fn rejects_duplicate_macs_after_normalization() {
         let path = write_config(
             "duplicate-mac",
             r#"
@@ -995,7 +1105,7 @@ mod tests {
 
             [[machines]]
             ip = "10.0.0.2"
-            mac = "aa:bb:cc:dd:ee:ff"
+            mac = "aabbccddeeff"
             username = "admin"
             password = "secret"
             "#,

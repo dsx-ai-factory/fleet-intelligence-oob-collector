@@ -262,7 +262,7 @@ mod tests {
 
         assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
         assert_eq!(endpoint["port"].as_integer(), Some(8443));
-        assert_eq!(endpoint["mac"].as_str(), Some("02:00:0a:00:00:01"));
+        assert_eq!(endpoint["mac"].as_str(), Some("02:00:0A:00:00:01"));
         assert_eq!(
             endpoint["labels"]["compute_zone"].as_str(),
             Some("us-west-dc1")
