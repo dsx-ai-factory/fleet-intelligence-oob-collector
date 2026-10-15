@@ -123,6 +123,7 @@ labels = { site = "dev", environment = "development" }
 kind = "nvswitch"
 name = "switch-tray-01"
 ip = "10.0.0.11"
+mac = "02:00:0a:00:00:0b"
 username_file = "/run/secrets/bmc/switch-tray-01/username"
 password_file = "/run/secrets/bmc/switch-tray-01/password"
 ```
@@ -132,8 +133,10 @@ overridden. Add another `credentials.secrets` entry with a distinct `target`
 for each override; the chart projects each Secret's `username` and `password`
 keys under `/run/secrets/bmc/<target>`.
 
-The MAC is optional. If omitted, the collector and generated NICo config use a
-locally administered MAC formed as `02:00:<last four IP bytes>`.
+Every target requires an explicit BMC MAC. Colon-separated, hyphen-separated,
+and unseparated hexadecimal forms are accepted in either case. MACs are stored
+as six bytes and formatted as uppercase colon-separated text. Duplicate MACs are
+rejected across all targets. The config file is not rewritten.
 
 The target `name` is optional. When present, the collector includes it as the
 top-level `name` in inventory uploads and adds it to NICo metrics and logs as

@@ -20,6 +20,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::TargetKind;
@@ -69,7 +70,7 @@ pub struct Target {
     pub node_group: Option<String>,
     pub ip: IpAddr,
     pub port: Option<u16>,
-    pub mac: String,
+    pub mac: MacAddress,
     pub address: String,
     pub username: String,
     pub password: String,
@@ -230,8 +231,8 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
             labels.insert(NODE_GROUP_LABEL_NAME.to_string(), node_group.clone());
         }
         target.labels = labels;
-        if !macs.insert(target.mac.to_ascii_lowercase()) {
-            return Err(format!("duplicate BMC MAC {:?}", target.mac).into());
+        if !macs.insert(target.mac) {
+            return Err(format!("{context}.mac duplicates BMC MAC {}", target.mac).into());
         }
         targets.push(target);
     }
@@ -308,13 +309,16 @@ impl RawTargetConfig {
             self.node_group
                 .or_else(|| default_node_group.map(str::to_string)),
         )?;
-        let mac = match self.mac {
-            Some(mac) if mac.trim().is_empty() => {
-                return Err(format!("{context}.mac cannot be blank").into());
-            }
-            Some(mac) => mac,
-            None => derive_mac_from_ip(self.ip),
-        };
+        let mac = self
+            .mac
+            .ok_or_else(|| format!("{context}.mac is required"))?;
+        if mac.trim().is_empty() {
+            return Err(format!("{context}.mac cannot be blank").into());
+        }
+        let mac = mac
+            .trim()
+            .parse::<MacAddress>()
+            .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
         let address = match (self.ip, self.port) {
             (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
             (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
@@ -464,20 +468,6 @@ fn validate_credentials(
     })
 }
 
-fn derive_mac_from_ip(ip: IpAddr) -> String {
-    let ip_bytes = match ip {
-        IpAddr::V4(ip) => ip.octets(),
-        IpAddr::V6(ip) => {
-            let octets = ip.octets();
-            [octets[12], octets[13], octets[14], octets[15]]
-        }
-    };
-    format!(
-        "02:00:{:02x}:{:02x}:{:02x}:{:02x}",
-        ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,24 +478,28 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "compute"
             ip = "10.0.0.2"
+            mac = "02:00:0a:00:00:02"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "nvswitch"
             ip = "10.0.0.3"
+            mac = "02:00:0a:00:00:03"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "power_shelf"
             ip = "10.0.0.4"
+            mac = "02:00:0a:00:00:04"
             username = "admin"
             password = "secret"
             "#,
@@ -534,6 +528,7 @@ mod tests {
             r#"
             [[targets]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -547,6 +542,7 @@ mod tests {
             [[machines]]
             kind = "nvswitch"
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -598,7 +594,7 @@ mod tests {
             config.targets[0].node_group.as_deref(),
             Some("gb200-training")
         );
-        assert_eq!(config.targets[0].mac, "00:11:22:33:44:55");
+        assert_eq!(config.targets[0].mac.to_string(), "00:11:22:33:44:55");
         assert_eq!(config.targets[0].address, "10.0.0.1:8443");
         assert_eq!(
             config.targets[0].labels.get("oob"),
@@ -620,7 +616,7 @@ mod tests {
             config.targets[0].labels.get("compute_zone"),
             Some(&"us-west-dc2".to_string())
         );
-        assert_eq!(config.targets[1].mac, "00:11:22:33:44:66");
+        assert_eq!(config.targets[1].mac.to_string(), "00:11:22:33:44:66");
         assert_eq!(config.targets[1].address, "[2001:db8::1]");
         assert_eq!(
             config.targets[1].compute_zone.as_deref(),
@@ -645,26 +641,90 @@ mod tests {
     }
 
     #[test]
-    fn derives_mac_from_last_four_ip_bytes_when_omitted() {
-        let path = write_config(
-            "derived-mac",
-            r#"
-            [[machines]]
-            ip = "10.0.0.10"
-            username = "admin"
-            password = "secret"
+    fn requires_mac_for_targets_and_legacy_machines() {
+        for collection in ["targets", "machines"] {
+            for ip in ["10.0.0.10", "2001:db8::102:304"] {
+                let input = format!(
+                    r#"
+                    [[{collection}]]
+                    ip = "{ip}"
+                    username = "admin"
+                    password = "secret"
+                "#
+                );
+                let error = parse_config(&input, "test.toml").expect_err("MAC is required");
+                assert!(error.to_string().contains("mac is required"));
+            }
+        }
+    }
 
-            [[machines]]
-            ip = "2001:db8::102:304"
-            username = "admin"
-            password = "secret"
-            "#,
-        );
+    #[test]
+    fn parses_mac_formats_to_the_same_bytes_and_uppercase_text() {
+        for mac in [
+            "AA:BB:CC:DD:EE:FF",
+            " aa-bb-cc-dd-ee-ff ",
+            "aabbccddeeff",
+            "AaBbCcDdEeFf",
+        ] {
+            let input = format!(
+                r#"
+                [[targets]]
+                ip = "10.0.0.10"
+                mac = "{mac}"
+                username = "admin"
+                password = "secret"
+                "#
+            );
+            let config = parse_config(&input, "test.toml").expect("valid MAC");
+            assert_eq!(
+                config.targets[0].mac.bytes(),
+                [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]
+            );
+            assert_eq!(config.targets[0].mac.to_string(), "AA:BB:CC:DD:EE:FF");
+        }
+    }
 
-        let config = load_config(path.to_str().expect("path")).expect("config");
+    #[test]
+    fn rejects_invalid_macs_with_entry_context() {
+        for mac in [
+            "",
+            "aa:bb:cc:dd:ee",
+            "aa:bb:cc:dd:ee:ff:00",
+            "gg:bb:cc:dd:ee:ff",
+            "not-a-mac",
+        ] {
+            let input = format!(
+                r#"
+                [[targets]]
+                ip = "10.0.0.10"
+                mac = "{mac}"
+                username = "admin"
+                password = "secret"
+                "#
+            );
+            let error = parse_config(&input, "test.toml").expect_err("invalid MAC");
+            assert!(error.to_string().contains("targets[0].mac"), "{error}");
+        }
+    }
 
-        assert_eq!(config.targets[0].mac, "02:00:0a:00:00:0a");
-        assert_eq!(config.targets[1].mac, "02:00:01:02:03:04");
+    #[test]
+    fn mac_validation_checks_syntax_only() {
+        for mac in [
+            "00:00:00:00:00:00",
+            "FF:FF:FF:FF:FF:FF",
+            "01:00:5E:00:00:01",
+        ] {
+            let input = format!(
+                r#"
+                [[targets]]
+                ip = "10.0.0.10"
+                mac = "{mac}"
+                username = "admin"
+                password = "secret"
+                "#
+            );
+            assert!(parse_config(&input, "test.toml").is_ok(), "{mac}");
+        }
     }
 
     #[test]
@@ -683,9 +743,11 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
 
                 [[machines]]
                 ip = "10.0.0.2"
+                mac = "02:00:0a:00:00:02"
                 username_file = "{}"
                 password_file = "{}"
                 "#,
@@ -725,6 +787,7 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 "#,
             ),
         )
@@ -737,19 +800,19 @@ mod tests {
     }
 
     #[test]
-    fn explicit_mac_takes_precedence_and_blank_mac_is_rejected() {
+    fn explicit_mac_is_formatted_and_blank_mac_is_rejected() {
         let explicit = parse_config(
             r#"
             [[machines]]
             ip = "10.0.0.10"
-            mac = "aa:bb:cc:dd:ee:ff"
+            mac = " AA-BB-CC-DD-EE-FF "
             username = "admin"
             password = "secret"
             "#,
             "test.toml",
         )
         .expect("config");
-        assert_eq!(explicit.targets[0].mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(explicit.targets[0].mac.to_string(), "AA:BB:CC:DD:EE:FF");
 
         let error = parse_config(
             r#"
@@ -777,6 +840,7 @@ mod tests {
             name = "  node-01  "
             node_group = "  gb200-training  "
             ip = "10.0.0.10"
+            mac = "02:00:0a:00:00:0a"
             username = "admin"
             password = "secret"
             "#,
@@ -805,6 +869,7 @@ mod tests {
             [[machines]]
             name = "   "
             ip = "10.0.0.10"
+            mac = "02:00:0a:00:00:0a"
             username = "admin"
             password = "secret"
             "#,
@@ -822,6 +887,7 @@ mod tests {
 
                     [[machines]]
                     ip = "10.0.0.10"
+                    mac = "02:00:0a:00:00:0a"
                     username = "admin"
                     password = "secret"
                     "#
@@ -872,7 +938,7 @@ mod tests {
             config.targets[0].node_group.as_deref(),
             Some("gb200-training")
         );
-        assert_eq!(config.targets[0].mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(config.targets[0].mac.to_string(), "AA:BB:CC:DD:EE:FF");
         assert_eq!(
             config.targets[0].labels.get("compute_zone"),
             Some(&"us-west-dc1".to_string())
@@ -883,11 +949,11 @@ mod tests {
         );
         assert_eq!(config.targets[1].kind, TargetKind::NvSwitch);
         assert_eq!(config.targets[1].name.as_deref(), Some("switch-tray-01"));
-        assert_eq!(config.targets[1].mac, "02:00:0a:00:00:0b");
+        assert_eq!(config.targets[1].mac.to_string(), "02:00:0A:00:00:0B");
         assert_eq!(config.targets[1].username, "switch-admin");
         assert_eq!(config.targets[2].kind, TargetKind::PowerShelf);
         assert_eq!(config.targets[2].name.as_deref(), Some("power-shelf-01"));
-        assert_eq!(config.targets[2].mac, "02:00:0a:00:00:0c");
+        assert_eq!(config.targets[2].mac.to_string(), "02:00:0A:00:00:0C");
     }
 
     #[test]
@@ -920,6 +986,7 @@ mod tests {
 
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 "#,
                 "credentials.password_file is required",
             ),
@@ -928,6 +995,7 @@ mod tests {
                 r#"
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 username_file = "/run/secrets/bmc/username"
                 "#,
                 "machines[0].password_file is required",
@@ -937,6 +1005,7 @@ mod tests {
                 r#"
                 [[machines]]
                 ip = "10.0.0.1"
+                mac = "02:00:0a:00:00:01"
                 username = "admin"
                 password_file = "/run/secrets/bmc/password"
                 "#,
@@ -983,29 +1052,61 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_macs_case_insensitively() {
-        let path = write_config(
-            "duplicate-mac",
-            r#"
-            [[machines]]
-            ip = "10.0.0.1"
-            mac = "AA:BB:CC:DD:EE:FF"
-            username = "admin"
-            password = "secret"
+    fn rejects_duplicate_macs_across_lists_and_formats() {
+        for (first_list, second_list) in [
+            ("machines", "machines"),
+            ("machines", "targets"),
+            ("targets", "targets"),
+        ] {
+            for second_mac in ["aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "aabbccddeeff"] {
+                let input = format!(
+                    r#"
+                    [[{first_list}]]
+                    ip = "10.0.0.1"
+                    mac = "AA:BB:CC:DD:EE:FF"
+                    username = "admin"
+                    password = "secret"
 
-            [[machines]]
-            ip = "10.0.0.2"
-            mac = "aa:bb:cc:dd:ee:ff"
+                    [[{second_list}]]
+                    ip = "10.0.0.2"
+                    mac = "{second_mac}"
+                    username = "admin"
+                    password = "secret"
+                    "#
+                );
+                let error = parse_config(&input, "test.toml").expect_err("duplicate MAC");
+                assert!(error.to_string().contains("duplicates BMC MAC"), "{error}");
+                assert!(error.to_string().contains(second_list), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn loading_and_rendering_config_keeps_original_mac_text() {
+        let path = write_config(
+            "mac-original-text",
+            r#"
+            [[targets]]
+            ip = "10.0.0.1"
+            mac = "aabbccddeeff"
             username = "admin"
             password = "secret"
             "#,
         );
-
-        let error = load_config(path.to_str().expect("path"))
-            .expect_err("duplicate MAC should fail")
-            .to_string();
-
-        assert!(error.contains("duplicate BMC MAC"));
+        let original = std::fs::read_to_string(&path).expect("original config");
+        let config = load_config(path.to_str().unwrap()).expect("config");
+        let rendered = crate::config::render_nico_config(
+            &config,
+            &crate::config::NicoConfigOptions::default(),
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("NICo TOML");
+        assert_eq!(
+            rendered["endpoint_sources"]["static_bmc_endpoints"][0]["mac"].as_str(),
+            Some("AA:BB:CC:DD:EE:FF"),
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        std::fs::remove_file(path).expect("remove config");
     }
 
     #[test]

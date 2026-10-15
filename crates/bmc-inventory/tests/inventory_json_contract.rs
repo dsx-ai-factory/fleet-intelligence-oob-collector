@@ -30,17 +30,14 @@ fn failed_inventory() -> NodeInventory {
         name: None,
         compute_zone: None,
         node_group: None,
-        uuid: None,
         source: InventorySourceInfo {
             source_type: "redfish".to_string(),
             mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
-            host_name: None,
             redfish_version: None,
             service_uuid: None,
             vendor: None,
         },
-        primary_system_id: None,
         managers: Vec::new(),
         systems: Vec::new(),
         chassis: Vec::new(),
@@ -86,7 +83,7 @@ fn condition_serializes_diagnostic_fields() {
 }
 
 #[test]
-fn target_error_inventory_serializes_absent_uuid() {
+fn target_error_inventory_uses_mac_without_node_identity() {
     let actual =
         serde_json::to_value(failed_inventory()).expect("serialize failed target inventory");
     assert_eq!(
@@ -96,17 +93,14 @@ fn target_error_inventory_serializes_absent_uuid() {
             "collectedAt": "2026-01-01T00:00:00Z",
             "enrolledAt": null,
             "kind": "unknown",
-            "uuid": null,
             "source": {
                 "sourceType": "redfish",
                 "mac": "00:11:22:33:44:55",
                 "address": "10.0.0.1",
-                "hostName": null,
                 "redfishVersion": null,
                 "serviceUuid": null,
                 "vendor": null
             },
-            "primarySystemId": null,
             "managers": [],
             "systems": [],
             "chassis": [],

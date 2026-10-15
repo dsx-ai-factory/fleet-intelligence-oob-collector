@@ -23,6 +23,7 @@ labels = { site = "dev", environment = "development" }
 kind = "nvswitch"
 name = "switch-tray-01"
 ip = "10.0.0.11"
+mac = "02:00:0a:00:00:0b"
 username_file = "/run/secrets/bmc/switch-tray-01/username"
 password_file = "/run/secrets/bmc/switch-tray-01/password"
 
@@ -30,6 +31,7 @@ password_file = "/run/secrets/bmc/switch-tray-01/password"
 kind = "power_shelf"
 name = "power-shelf-01"
 ip = "10.0.0.12"
+mac = "02:00:0a:00:00:0c"
 ```
 
 The compute and power-shelf targets inherit the top-level credential files. The
@@ -58,17 +60,17 @@ forms during migration.
 | `targets[].node_group` | No | Per-target node-group override. |
 | `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
-| `targets[].mac` | No | Stable BMC identity. It must be unique in the file. |
+| `targets[].mac` | Yes | Stable BMC identity: Six-byte MAC in colon-separated, hyphen-separated, or unseparated hexadecimal form. Stored as bytes, formatted as uppercase colon-separated text, and unique in the file. The config file is not rewritten. |
 | `targets[].username_file` | Conditional | Per-target username file override; must be paired with `password_file`. |
 | `targets[].password_file` | Conditional | Per-target password file override; must be paired with `username_file`. |
 | `targets[].username` | Conditional | Inline Redfish username; must be paired with inline `password`. |
 | `targets[].password` | Conditional | Inline Redfish password; must be paired with inline `username`. |
 | `targets[].labels` | No | Labels added to this target or overriding inherited top-level labels. |
 
-When `mac` is omitted, the collector derives a locally administered MAC from
-`02:00` and the final four IP bytes. Because different IPv6 addresses can share
-the same final four bytes, configure an explicit, unique MAC for IPv6 targets.
-An explicit stable MAC is preferred for IPv4 targets as well.
+Every target, including a legacy `[[machines]]` entry, requires an explicit
+BMC MAC. The collector does not derive identity from the IP address. The
+normalized MAC is used consistently in configuration, inventory, and NICo
+telemetry; equivalent spellings are rejected as duplicate targets.
 
 Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. The collector reserves capacity
 for labels derived from `name`, `compute_zone`, and `node_group`, plus
@@ -103,11 +105,13 @@ node_group = "gb200-training"
 kind = "compute"
 name = "node-01"
 ip = "10.0.0.10"
+mac = "02:00:0a:00:00:0a"
 
 [[targets]]
 kind = "compute"
 name = "node-02"
 ip = "10.0.0.11"
+mac = "02:00:0a:00:00:0b"
 compute_zone = "us-west-dc2"
 node_group = "gb200-inference"
 ```

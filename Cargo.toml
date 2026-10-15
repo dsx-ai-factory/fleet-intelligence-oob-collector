@@ -25,8 +25,8 @@ bmc-dispatch = { path = "crates/bmc-dispatch" }
 bmc-error = { path = "crates/bmc-error" }
 bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
-hickory-resolver = "0.26"
 http = "1"
+mac_address = "1.2.1"
 nv-redfish = { version = "0.18.1", features = [
     "bmc-http",
     "oem-nvidia",

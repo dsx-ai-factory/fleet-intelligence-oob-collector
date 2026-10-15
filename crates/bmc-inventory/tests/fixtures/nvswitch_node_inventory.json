@@ -210,11 +210,9 @@
   ],
   "name": "nvswitch-01",
   "nodeGroup": "gb200-training",
-  "primarySystemId": "System_0",
   "schemaVersion": "inventory.v1alpha1",
   "source": {
     "address": "10.0.0.2",
-    "hostName": "bmc-nvswitch-a.example.com",
     "mac": "00:11:22:33:44:66",
     "redfishVersion": "1.17.0",
     "serviceUuid": "6c2f3d4e-5f60-4b7c-9d8e-0f1a2b3c4d5e",
@@ -272,6 +270,5 @@
       "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
     }
   ],
-  "targetError": null,
-  "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+  "targetError": null
 }

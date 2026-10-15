@@ -25,7 +25,6 @@ pub struct InventorySourceInfo {
     pub source_type: String,
     pub mac: String,
     pub address: String,
-    pub host_name: Option<String>,
     pub redfish_version: Option<String>,
     pub service_uuid: Option<String>,
     pub vendor: Option<String>,

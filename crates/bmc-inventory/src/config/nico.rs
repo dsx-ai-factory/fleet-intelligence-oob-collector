@@ -62,7 +62,7 @@ pub fn render_nico_config(
         .map(|target| NicoStaticBmcEndpoint {
             ip: target.ip,
             port: target.port,
-            mac: &target.mac,
+            mac: target.mac.to_string(),
             username: &target.username,
             password: &target.password,
             labels: target.labels.clone(),
@@ -136,7 +136,7 @@ struct NicoStaticBmcEndpoint<'a> {
     ip: IpAddr,
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
-    mac: &'a str,
+    mac: String,
     username: &'a str,
     password: &'a str,
     labels: BTreeMap<String, String>,
@@ -247,6 +247,7 @@ mod tests {
             [[machines]]
             name = "node-01"
             ip = "10.0.0.1"
+            mac = " AA-BB-CC-DD-EE-FF "
             port = 8443
             username = "admin"
             password = "secret"
@@ -262,7 +263,7 @@ mod tests {
 
         assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
         assert_eq!(endpoint["port"].as_integer(), Some(8443));
-        assert_eq!(endpoint["mac"].as_str(), Some("02:00:0a:00:00:01"));
+        assert_eq!(endpoint["mac"].as_str(), Some("AA:BB:CC:DD:EE:FF"));
         assert_eq!(
             endpoint["labels"]["compute_zone"].as_str(),
             Some("us-west-dc1")
@@ -302,24 +303,28 @@ mod tests {
             [[targets]]
             kind = "unknown"
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "compute"
             ip = "10.0.0.2"
+            mac = "02:00:0a:00:00:02"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "nvswitch"
             ip = "10.0.0.3"
+            mac = "02:00:0a:00:00:03"
             username = "admin"
             password = "secret"
 
             [[targets]]
             kind = "power_shelf"
             ip = "10.0.0.4"
+            mac = "02:00:0a:00:00:04"
             username = "admin"
             password = "secret"
             "#,
@@ -349,6 +354,7 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -372,6 +378,7 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -391,6 +398,7 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
@@ -413,6 +421,7 @@ mod tests {
             r#"
             [[machines]]
             ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
             username = "admin"
             password = "secret"
             "#,
