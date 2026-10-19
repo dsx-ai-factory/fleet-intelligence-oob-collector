@@ -133,22 +133,18 @@ kubectl rollout restart \
 
 ## Disconnect an individual machine
 
-Remove a machine from this collector's configuration to stop its inventory,
-attestation, metrics, and log collection. Do this before completing the Delete
-Machine flow in Fleet Intelligence. Removing the configuration does not delete
-the machine or its previously uploaded data from Fleet Intelligence.
+Remove the machine from each collector that monitors it before completing the
+Delete Machine flow in Fleet Intelligence. This stops future collection;
+previously uploaded data remains in Fleet Intelligence.
 
-The commands below use the release, namespace, ConfigMap, and Deployment names
-from this guide. Substitute your deployment's names if they differ. If a
-configuration management system manages these resources, update its source so
-it does not restore the removed machine.
+Use your deployment's resource names if they differ from the examples below.
+Update any configuration management source too, so it does not restore the
+machine.
 
-1. Find the machine in the source `config.toml` by its BMC `mac`. Remove its
-   entire `[[targets]]` entry, including any labels and credential file paths
-   belonging to that entry. Keep the other targets and shared settings.
-   If this is the last target, follow
-   [Uninstall the OOB Collector](#uninstall-the-oob-collector); an empty target
-   list is invalid.
+1. Find the machine by its BMC `mac` in `config.toml` and remove its entire
+   `[[targets]]` entry. Keep the other targets and shared settings. For the last
+   target, [uninstall the collector](#uninstall-the-oob-collector); an empty
+   target list is invalid.
 2. Apply the updated password-free configuration:
 
    ```bash
@@ -158,112 +154,64 @@ it does not restore the removed machine.
      --dry-run=client -o yaml | kubectl apply -f -
    ```
 
-3. Restart the collector to stop the current cycle and load the new target
-   list immediately, then wait for the rollout:
+3. Restart the collector to apply the change immediately, then wait for its
+   rollout:
 
    ```bash
-   kubectl rollout restart \
-     --namespace fleet-intelligence \
-     deployment/fleet-intelligence-oob-collector
-
-   kubectl rollout status \
-     --namespace fleet-intelligence \
-     deployment/fleet-intelligence-oob-collector \
-     --timeout=10m
+   kubectl rollout restart deployment/fleet-intelligence-oob-collector \
+     --namespace fleet-intelligence
+   kubectl rollout status deployment/fleet-intelligence-oob-collector \
+     --namespace fleet-intelligence --timeout=10m
    ```
 
-   Without a restart, the collector reads the mounted TOML at the next cycle,
-   after Kubernetes propagates the ConfigMap update. The default interval is
-   24 hours, and work from the current cycle can still be uploaded.
-4. If NICo hardware health is enabled, restart it as well so its init container
-   regenerates the configuration without the removed machine:
+4. If NICo hardware health is enabled, restart it to regenerate its target
+   configuration, then wait for its rollout:
 
    ```bash
-   kubectl rollout restart \
-     --namespace fleet-intelligence \
-     deployment/nico-hardware-health
-
-   kubectl rollout status \
-     --namespace fleet-intelligence \
-     deployment/nico-hardware-health \
-     --timeout=10m
+   kubectl rollout restart deployment/nico-hardware-health \
+     --namespace fleet-intelligence
+   kubectl rollout status deployment/nico-hardware-health \
+     --namespace fleet-intelligence --timeout=10m
    ```
 
-5. Confirm the ConfigMap no longer contains the machine's BMC MAC and both
-   enabled collectors have completed their rollouts. Check the collector logs
-   using the [verification commands](#verify) for configuration or collection
-   failures affecting the remaining targets. Data already in transit can still
-   arrive after the restart. If the machine is configured in other collectors,
-   remove it there too before deleting it in Fleet Intelligence.
-
-Keep shared credential Secrets while remaining targets use them. If a Secret
-was dedicated to the removed machine, remove its `credentials.secrets` mount
-mapping through a Helm upgrade using your existing chart version and complete
-values, then delete that Secret only after no workloads reference it.
-
-For a collector run directly outside Kubernetes, edit the TOML passed to
-`--config` and restart the running collector process. Update and restart any
-separately managed NICo process too.
+Confirm the ConfigMap no longer contains the machine's BMC MAC and check the
+[collector logs](#verify) for failures affecting remaining targets. Data already
+in transit can still arrive after the restart. Keep shared credential Secrets;
+remove a dedicated Secret only after removing its `credentials.secrets` mapping
+through a Helm upgrade and confirming no workloads use it.
 
 ## Uninstall the OOB Collector
 
-Use this workflow to stop collection for every target in a deployment. To keep
-collecting from other machines, use
-[Disconnect an individual machine](#disconnect-an-individual-machine) instead.
-Uninstalling removes the deployed collectors; it does not delete machines or
-previously uploaded data from Fleet Intelligence.
+This stops collection for all targets in the deployment. Previously uploaded
+data remains in Fleet Intelligence. Substitute your release and namespace names
+if they differ, and disable any automation that would reinstall the release.
 
-1. Disable any automation that would reinstall the release, such as a GitOps
-   reconciliation, before removing it. Use your release and namespace names
-   if they differ from this guide.
-2. Uninstall the Helm release and wait for its resources to be removed:
+1. Remove the Helm release, including its OOB collector, NICo hardware health,
+   and OpenTelemetry gateway:
 
    ```bash
    helm uninstall fleet-intelligence-oob-collector \
-     --namespace fleet-intelligence \
-     --wait \
-     --timeout 10m
+     --namespace fleet-intelligence --wait --timeout 10m
    ```
 
-   This removes the OOB collector, NICo hardware health, and OpenTelemetry
-   gateway resources installed by this release, including their Deployments,
-   Services, and chart-managed ConfigMaps and policies. An external telemetry
-   collector configured through `nicoHardwareHealth.otlpEndpoint` is managed
-   separately.
-3. Verify that no pods remain for the release:
+2. Verify that no pods remain for the release:
 
    ```bash
-   kubectl get pods \
-     --namespace fleet-intelligence \
+   kubectl get pods --namespace fleet-intelligence \
      -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
-   The command should report no resources. Investigate any remaining pods
-   before considering collection stopped.
-4. Helm does not remove the existing ConfigMap and Secrets created in
-   [Create ConfigMap and Secrets](#create-configmap-and-secrets). Delete them
-   only if they are dedicated to this deployment and no other workloads use
-   them:
+3. Delete the separately created ConfigMap and Secrets only if no other
+   workloads use them:
 
    ```bash
    kubectl delete configmap fleet-intelligence-config \
      --namespace fleet-intelligence
-
-   kubectl delete secret \
-     fleet-intelligence-oob-collector-agent-token \
-     default-bmc-credentials \
-     --namespace fleet-intelligence
+   kubectl delete secret fleet-intelligence-oob-collector-agent-token \
+     default-bmc-credentials --namespace fleet-intelligence
    ```
 
-   Also remove any unused per-machine credential, image pull, NICo TLS, or
-   separate gateway token Secrets created for this deployment. Deleting a
-   Kubernetes Secret removes the stored copy; it does not revoke its token or
-   BMC credentials. Retire dedicated credentials through their issuing system
-   when they are no longer needed. Keep the namespace if it contains other
-   workloads or shared resources.
-
-For a collector run directly outside Kubernetes, stop the collector process
-and disable its service or scheduled job so it cannot restart. Stop any
-separately managed NICo and gateway processes dedicated to that deployment,
-then remove unused local configuration and credential files according to your
-organization's credential handling policy.
+Also remove any other unused Secrets dedicated to this deployment. Deleting a
+Secret does not revoke its credentials; retire them through their issuing
+system. Keep shared resources and separately managed external telemetry
+collectors.
