@@ -8,8 +8,7 @@ PartOf=fleetint-oob.target
 
 [Service]
 EnvironmentFile=/etc/fleetint-oob/service.conf
-LoadCredential=agent-token:/etc/fleetint-oob/agent-token
-ExecStart=/usr/lib/fleetint-oob/start-collector
+ExecStart=/usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml --interval-seconds ${FLEETINT_INTERVAL_SECONDS}
 Restart=on-failure
 RestartSec=10s
 KillSignal=SIGINT

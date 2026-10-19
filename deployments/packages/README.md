@@ -68,13 +68,16 @@ sudo install -m 0600 -o root -g root /secure/path/to/bmc-username \
   /etc/fleetint-oob/credentials/username
 sudo install -m 0600 -o root -g root /secure/path/to/bmc-password \
   /etc/fleetint-oob/credentials/password
-sudo install -m 0600 -o root -g root /secure/path/to/agent-token \
-  /etc/fleetint-oob/agent-token
 ```
 
 Edit `config.toml` with the target BMCs and MACs; see
 [configuration](../../docs/configuration.md). Set backend/proxy settings in
-`/etc/fleetint-oob/service.conf`; keep that file free of secrets.
+`/etc/fleetint-oob/service.conf`, including `FLEETINT_AGENT_TOKEN`. This file is
+installed root-owned with mode `0600`. Both services read it directly through
+systemd `EnvironmentFile`; no shell wrappers are used.
+
+Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the
+backend. Environment files do not expand references to other variables.
 The host needs access to the BMCs and backend, but no local GPU.
 
 ```bash
@@ -85,8 +88,8 @@ systemctl status fleetint-oob-collector.service fleetint-nico-health.service \
 
 The target groups services; inspect each service to verify health. NICo renders
 its private configuration under `/run` before starting. Telemetry listeners
-bind to loopback. The collector and gateway load the token through systemd
-credentials; their launchers pass it through the existing environment interface.
+bind to loopback. The collector and gateway use the same
+`FLEETINT_AGENT_TOKEN` environment variable from `service.conf`.
 
 ## Upgrade and remove
 

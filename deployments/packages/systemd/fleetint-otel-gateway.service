@@ -8,8 +8,7 @@ PartOf=fleetint-oob.target
 
 [Service]
 EnvironmentFile=/etc/fleetint-oob/service.conf
-LoadCredential=agent-token:/etc/fleetint-oob/agent-token
-ExecStart=/usr/lib/fleetint-oob/start-gateway
+ExecStart=/usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
 Restart=on-failure
 RestartSec=10s
 

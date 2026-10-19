@@ -44,7 +44,7 @@ packages-check-deb:
 			echo 'Credential file or account definition found in package' >&2; exit 1; \
 		fi; \
 	done
-	@set -e; for script in deployments/packages/scripts/* deployments/packages/scripts/*/* deployments/packages/libexec/*; do \
+	@set -e; for script in deployments/packages/scripts/* deployments/packages/scripts/*/*; do \
 		test -f "$$script" || continue; sh -n "$$script"; \
 	done
 

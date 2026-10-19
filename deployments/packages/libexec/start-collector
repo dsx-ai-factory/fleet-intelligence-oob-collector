@@ -1,9 +1,0 @@
-#!/bin/sh
-# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-set -eu
-. /usr/lib/fleetint-oob/read-token
-: "${FLEETINT_BACKEND_URL:?backend URL is required}"
-exec /usr/bin/bmc-collector run \
-    --config /etc/fleetint-oob/config.toml \
-    --interval-seconds "${FLEETINT_INTERVAL_SECONDS:-86400}"

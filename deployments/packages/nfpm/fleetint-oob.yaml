@@ -24,19 +24,11 @@ contents:
   expand: true
   file_info:
     mode: 0755
-- src: deployments/packages/libexec/read-token
-  dst: /usr/lib/fleetint-oob/read-token
-  file_info:
-    mode: 0755
-- src: deployments/packages/libexec/start-collector
-  dst: /usr/lib/fleetint-oob/start-collector
-  file_info:
-    mode: 0755
 - src: deployments/packages/config/service.conf
   dst: /etc/fleetint-oob/service.conf
   type: config|noreplace
   file_info:
-    mode: 0644
+    mode: 0600
 - src: deployments/packages/config/config.example.toml
   dst: /usr/share/doc/fleetint-oob/config.example.toml
   file_info:
@@ -70,10 +62,6 @@ contents:
 - src: ${OOB_PACKAGE_INPUT}/otel-gateway
   dst: /usr/lib/fleetint-oob/otel-gateway
   expand: true
-  file_info:
-    mode: 0755
-- src: deployments/packages/libexec/start-gateway
-  dst: /usr/lib/fleetint-oob/start-gateway
   file_info:
     mode: 0755
 - src: deployments/packages/config/gateway.yaml
