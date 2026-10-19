@@ -1,0 +1,11 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Sourced by service launchers; systemd supplies a private credential directory.
+: "${CREDENTIALS_DIRECTORY:?systemd credential directory is required}"
+FLEETINT_AGENT_TOKEN=$(cat "$CREDENTIALS_DIRECTORY/agent-token")
+if [ -z "$FLEETINT_AGENT_TOKEN" ]; then
+    echo 'The agent-token credential must not be empty' >&2
+    exit 1
+fi
+export FLEETINT_AGENT_TOKEN

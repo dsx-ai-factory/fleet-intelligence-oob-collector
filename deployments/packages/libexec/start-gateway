@@ -1,0 +1,12 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+. /usr/lib/fleetint-oob/read-token
+: "${FLEETINT_BACKEND_URL:?backend URL is required}"
+export SAK_TOKEN="$FLEETINT_AGENT_TOKEN"
+unset FLEETINT_AGENT_TOKEN
+export BACKEND_ENDPOINT="${FLEETINT_TELEMETRY_URL:-${FLEETINT_BACKEND_URL%/}/api/v1/health}"
+export ENROLL_ENDPOINT="${FLEETINT_ENROLL_URL:-$BACKEND_ENDPOINT/enroll}"
+exec /usr/lib/fleetint-oob/otel-gateway \
+    --config=/etc/fleetint-oob/gateway.yaml

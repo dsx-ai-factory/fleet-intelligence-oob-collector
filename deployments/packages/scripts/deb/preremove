@@ -1,0 +1,12 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+unit=fleetint-oob.target
+case "${1:-}" in
+    remove|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop "$unit"
+        fi
+        ;;
+esac

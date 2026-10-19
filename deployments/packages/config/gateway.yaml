@@ -1,0 +1,53 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+extensions:
+  sakauth:
+    enroll_endpoint: ${env:ENROLL_ENDPOINT}
+    sak_token: ${env:SAK_TOKEN}
+  health_check:
+    endpoint: 127.0.0.1:13133
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+      http:
+        endpoint: 127.0.0.1:4318
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    timeout: 10s
+    send_batch_size: 1000
+exporters:
+  otlp_http/backend:
+    metrics_endpoint: ${env:BACKEND_ENDPOINT}/metrics
+    logs_endpoint: ${env:BACKEND_ENDPOINT}/logs
+    compression: none
+    auth:
+      authenticator: sakauth
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+service:
+  extensions: [sakauth, health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/backend]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/backend]
+  telemetry:
+    logs:
+      level: warn

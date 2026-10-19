@@ -14,7 +14,48 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template packages-deb packages-rpm packages-check-deb packages-check-rpm
+
+NFPM ?= nfpm
+VERSION ?= 0.1.0~prototype1
+ARCH ?= amd64
+INPUTDIR ?= dist/package-input
+OUTPUTDIR ?= dist/packages
+export OOB_PACKAGE_VERSION = $(VERSION)
+export OOB_PACKAGE_ARCH = $(ARCH)
+export OOB_PACKAGE_INPUT = $(abspath $(INPUTDIR))
+
+packages-deb packages-rpm:
+	mkdir -p "$(OUTPUTDIR)"
+	$(NFPM) package --config deployments/packages/nfpm/fleetint-oob.yaml \
+		--packager $(patsubst packages-%,%,$@) --target "$(OUTPUTDIR)/"
+
+# Native package inspection; never installs packages or starts services.
+packages-check-deb:
+	@set -e; for package in "$(OUTPUTDIR)"/*.deb; do \
+		test -f "$$package" || continue; \
+		dpkg-deb --info "$$package" >/dev/null; \
+		name=$$(dpkg-deb --field "$$package" Package); \
+		test "$$name" = fleetint-oob; \
+		for config in /etc/fleetint-oob/service.conf /etc/fleetint-oob/gateway.yaml; do \
+			dpkg-deb --ctrl-tarfile "$$package" | tar --wildcards -xOf - '*conffiles' | grep -Fx "$$config"; \
+		done; \
+		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
+			echo 'Credential file or account definition found in package' >&2; exit 1; \
+		fi; \
+	done
+	@set -e; for script in deployments/packages/scripts/* deployments/packages/scripts/*/* deployments/packages/libexec/*; do \
+		test -f "$$script" || continue; sh -n "$$script"; \
+	done
+
+packages-check-rpm:
+	@set -e; for package in "$(OUTPUTDIR)"/*.rpm; do \
+		test -f "$$package" || continue; \
+		rpm --checksig --nosignature "$$package"; \
+		if rpm -qpl "$$package" | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
+			echo 'Credential file or account definition found in package' >&2; exit 1; \
+		fi; \
+	done
 
 test:
 	cargo test --workspace

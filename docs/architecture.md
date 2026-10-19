@@ -104,6 +104,14 @@ capabilities, and with read-only root filesystems. The default NetworkPolicy
 restricts gateway ingress to pods in the same Helm release when enforced by the
 cluster CNI.
 
+The experimental `fleetint-oob` host package runs the same three components as
+`fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd
+services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's
+`ExecStartPre` replaces the Kubernetes init container and generates a private
+configuration under `/run`. These prototype services run as root; the gateway
+listens only on loopback. See the [host package prototype](../deployments/packages/README.md)
+for installation, credentials, and validation limits.
+
 ### Redfish URI sanitization
 
 The Redfish source removes URL authorities (including credentials) and queries
