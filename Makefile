@@ -14,9 +14,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template deb rpm package packages-check-deb packages-check-rpm packages-test-hooks
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template deb rpm package packages-check-deb packages-check-rpm packages-test-hooks package-binaries package-collector package-nico package-gateway package-native-check
 
 NFPM ?= nfpm
+CARGO ?= cargo
+GO ?= go
+OCB_VERSION ?= v0.156.0
+NICO_REF := $(shell sed -n 's/^  NICO_SOURCE_REF: //p' .github/workflows/release.yml)
+AGENT_REF ?= 6eace17c3c19adf1524ba71c9cbd0450266a61f1
+NICO_SOURCE ?= dist/package-sources/infra-controller
+AGENT_SOURCE ?= dist/package-sources/fleet-intelligence-agent
+PACKAGE_BUILDDIR ?= dist/package-build
 VERSION ?= 0.1.0~prototype1
 ARCH ?= amd64
 INPUTDIR ?= dist/package-input
@@ -27,10 +35,52 @@ export OOB_PACKAGE_INPUT = $(abspath $(INPUTDIR))
 
 package: deb rpm
 
-deb rpm:
+deb rpm: package-binaries
 	mkdir -p "$(OUTPUTDIR)"
 	$(NFPM) package --config deployments/packages/nfpm/fleetint-oob.yaml \
 		--packager $@ --target "$(OUTPUTDIR)/"
+
+# Native builds; each toolchain reuses its normal incremental build cache.
+package-binaries: package-collector package-nico package-gateway
+
+package-native-check:
+	@test "$$(uname -s)" = Linux || { echo 'Host packages must be built on Linux' >&2; exit 1; }
+	@test "$(ARCH)" = "$$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')" || { echo 'Build natively for ARCH=$(ARCH); cross-compilation is not configured' >&2; exit 1; }
+
+package-collector: package-native-check
+	mkdir -p "$(INPUTDIR)"
+	FLEETINT_BUILD_VERSION="$(VERSION)" $(CARGO) build --release --locked --bin bmc-collector
+	install -m 0755 target/release/bmc-collector "$(INPUTDIR)/bmc-collector"
+
+$(NICO_SOURCE)/Cargo.toml:
+	mkdir -p "$(dir $(NICO_SOURCE))"
+	test -d "$(NICO_SOURCE)/.git" || git clone --no-checkout --depth 1 https://github.com/NVIDIA/infra-controller.git "$(NICO_SOURCE)"
+	git -C "$(NICO_SOURCE)" fetch --depth 1 origin "$(NICO_REF)"
+	git -C "$(NICO_SOURCE)" checkout --detach FETCH_HEAD
+
+package-nico: package-native-check $(NICO_SOURCE)/Cargo.toml
+	@command -v protoc >/dev/null || { echo 'NICo requires protobuf-compiler and libprotobuf-dev (sudo apt-get install protobuf-compiler libprotobuf-dev)' >&2; exit 1; }
+	mkdir -p "$(INPUTDIR)" "$(PACKAGE_BUILDDIR)/nico"
+	cd "$(NICO_SOURCE)" && VERSION="$(VERSION)" CI_COMMIT_SHORT_SHA="$$(git rev-parse HEAD)" \
+		CARBIDE_VERSION_AVOID_REBUILD=1 FORGE_VERSION_AVOID_REBUILD=1 \
+		CARGO_TARGET_DIR="$(abspath $(PACKAGE_BUILDDIR))/nico" \
+		$(CARGO) build --release --locked -p carbide-health --bin forge-hw-health
+	install -m 0755 "$(PACKAGE_BUILDDIR)/nico/release/forge-hw-health" "$(INPUTDIR)/nico-hardware-health"
+	cat "$(NICO_SOURCE)/LICENSE" "$(NICO_SOURCE)/THIRD-PARTY-LICENSES" > "$(INPUTDIR)/nico-NOTICES"
+
+$(AGENT_SOURCE)/otelcol/otelcol-builder.yaml:
+	mkdir -p "$(dir $(AGENT_SOURCE))"
+	test -d "$(AGENT_SOURCE)/.git" || git clone --no-checkout --depth 1 https://github.com/dsx-ai-factory/fleet-intelligence-agent.git "$(AGENT_SOURCE)"
+	git -C "$(AGENT_SOURCE)" fetch --depth 1 origin "$(AGENT_REF)"
+	git -C "$(AGENT_SOURCE)" checkout --detach FETCH_HEAD
+
+package-gateway: package-native-check $(AGENT_SOURCE)/otelcol/otelcol-builder.yaml
+	mkdir -p "$(INPUTDIR)" "$(PACKAGE_BUILDDIR)/gateway"
+	cd "$(AGENT_SOURCE)/otelcol" && CGO_ENABLED=0 GOOS=linux GOARCH="$(ARCH)" \
+		$(GO) run go.opentelemetry.io/collector/cmd/builder@$(OCB_VERSION) \
+		--config=otelcol-builder.yaml --output-path="$(abspath $(PACKAGE_BUILDDIR))/gateway"
+	install -m 0755 "$(PACKAGE_BUILDDIR)/gateway/fleetint-otelcol" "$(INPUTDIR)/otel-gateway"
+	cat "$(AGENT_SOURCE)/LICENSE" "$(AGENT_SOURCE)/NOTICE" > "$(INPUTDIR)/gateway-NOTICES"
 
 packages-test-hooks:
 	sh deployments/packages/tests/hooks.sh

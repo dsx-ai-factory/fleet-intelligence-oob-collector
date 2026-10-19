@@ -20,20 +20,24 @@ Install the nFPM version pinned in `nfpm.version` using an
 npm install -g @goreleaser/nfpm@2.48.0
 ```
 
-Put the native executables and their notices in `dist/package-input/`:
+Install Rust through rustup, Go, Git, a C/C++ compiler, Clang, CMake,
+`pkg-config`, OpenSSL development headers, and protobuf tools. On Ubuntu/Debian,
+the native development packages are:
 
-```text
-bmc-collector
-nico-hardware-health
-nico-NOTICES
-otel-gateway
-gateway-NOTICES
+```bash
+sudo apt-get install build-essential clang cmake pkg-config libssl-dev \
+  protobuf-compiler libprotobuf-dev
 ```
 
-Build the collector with `cargo build --release --locked --bin bmc-collector`.
-Use the NICo revision pinned by `NICO_SOURCE_REF` in the release workflow and
-our custom gateway containing `sakauth`. A stock OpenTelemetry Collector cannot
-provide the configured authentication flow.
+The Make targets build the collector with Cargo, build only NICo's
+`carbide-health` / `forge-hw-health` binary with Cargo, and build the custom
+OpenTelemetry gateway through the agent's pinned collector builder. Rustup
+uses each source repository's pinned toolchain. No Docker is required.
+
+Pinned NICo and agent sources are checked out under `dist/package-sources/`.
+NICo uses the same source revision as the release workflow. Build outputs stay
+under `target/` and `dist/`; upstream sources are not edited. The gateway's
+`sakauth` extension is required for authentication.
 
 ```bash
 make deb      # DEB only
@@ -41,18 +45,21 @@ make rpm      # RPM only
 make package  # Both formats
 ```
 
-The targets invoke nFPM directly using `nfpm/fleetint-oob.yaml`.
-Output goes to `dist/packages/`.
+The targets first prepare all three binaries and their notices in
+`dist/package-input/`, then invoke nFPM using `nfpm/fleetint-oob.yaml`.
+Packages go to `dist/packages/`. Build on the target Linux architecture;
+cross-compilation is not configured.
 
 Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or
-the `NFPM` executable as needed. Versions must be valid in both package
-formats, for example `0.1.0~prototype1`. The package revision is 1.
+the `NFPM` executable as needed. `NICO_SOURCE` and `AGENT_SOURCE` can point to
+existing compatible checkouts; the Make targets do not change those checkouts.
+Versions must be valid in both package formats, for example `0.1.0~prototype1`. The package revision is 1.
 
 **Prototype limitation:** use artifacts built for the selected architecture
 and distribution baseline. The package declares system dependencies;
 add the actual native-library dependencies to the configuration's `depends`
 list before distributing dynamically linked binaries. nFPM does not discover
-those dependencies. NICo and gateway native builds are supplied separately.
+those dependencies.
 
 ## Configure a test VM
 
