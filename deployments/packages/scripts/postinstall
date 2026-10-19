@@ -2,13 +2,7 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 set -eu
-unit=fleetint-oob.target
-if command -v deb-systemd-helper >/dev/null 2>&1; then
-    deb-systemd-helper unmask "$unit"
-    deb-systemd-helper update-state "$unit"
-fi
-install -d -m 0700 -o root -g root /etc/fleetint-oob/credentials
-chmod 0600 /etc/fleetint-oob/service.conf
-if [ -d /run/systemd/system ]; then
+chmod 0600 "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf"
+if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
     systemctl daemon-reload
 fi

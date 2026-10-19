@@ -15,6 +15,10 @@ license: Apache-2.0
 section: utils
 priority: optional
 contents:
+- dst: /etc/fleetint-oob/credentials
+  type: dir
+  file_info:
+    mode: 0700
 - src: deployments/packages/systemd/fleetint-oob-collector.service
   dst: /usr/lib/systemd/system/fleetint-oob-collector.service
   file_info:
@@ -87,7 +91,7 @@ overrides:
     scripts:
       postinstall: deployments/packages/scripts/postinstall
       preremove: deployments/packages/scripts/deb/preremove
-      postremove: deployments/packages/scripts/deb/postremove
+      postremove: deployments/packages/scripts/postremove
   rpm:
     depends:
     - systemd >= 247
