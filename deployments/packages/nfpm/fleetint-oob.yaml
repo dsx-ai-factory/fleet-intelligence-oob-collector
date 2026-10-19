@@ -90,7 +90,7 @@ contents:
 overrides:
   deb:
     depends:
-    - systemd (>= 247)
+    - systemd
     - init-system-helpers
     - ca-certificates
     scripts:
@@ -99,7 +99,7 @@ overrides:
       postremove: deployments/packages/scripts/deb/postrm
   rpm:
     depends:
-    - systemd >= 247
+    - systemd
     - ca-certificates
     scripts:
       postinstall: deployments/packages/scripts/rpm/postinstall

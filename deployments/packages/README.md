@@ -67,7 +67,7 @@ from glibc, so validate name resolution in the target environment.
 
 ## Configure a test VM
 
-Requires systemd 247 or newer. All services run as root. Installation reloads
+Requires systemd. All services run as root. Installation reloads
 units without creating accounts or starting collection. Install the package:
 
 ```bash
