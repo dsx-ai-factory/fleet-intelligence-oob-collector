@@ -5,13 +5,16 @@ Description=Fleet Intelligence OOB inventory and attestation
 Wants=network-online.target
 After=network-online.target
 PartOf=fleetint-oob.target
+StartLimitIntervalSec=60s
+StartLimitBurst=3
 
 [Service]
 EnvironmentFile=/etc/fleetint-oob/service.conf
 ExecStart=/usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml --interval-seconds ${FLEETINT_INTERVAL_SECONDS}
+RestartPreventExitStatus=2
 Restart=on-failure
 RestartSec=10s
-KillSignal=SIGINT
+TimeoutStopSec=300s
 
 [Install]
 WantedBy=multi-user.target

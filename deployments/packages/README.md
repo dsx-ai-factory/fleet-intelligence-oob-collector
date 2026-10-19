@@ -21,20 +21,23 @@ npm install -g @goreleaser/nfpm@2.48.0
 ```
 
 Install Rust through rustup, Go, Git, a C/C++ compiler, Clang, CMake,
-`pkg-config`, OpenSSL development headers, and protobuf tools. On Ubuntu/Debian,
+`pkg-config`, musl tools, and protobuf tools. On Ubuntu/Debian,
 the native development packages are:
 
 ```bash
-sudo apt-get install build-essential clang cmake pkg-config libssl-dev \
+sudo apt-get install build-essential clang cmake pkg-config musl-tools \
   protobuf-compiler libprotobuf-dev
 ```
 
 The Make targets build the collector with Cargo, build only NICo's
 `carbide-health` / `forge-hw-health` binary with Cargo, and build the custom
 OpenTelemetry gateway through the agent's pinned collector builder. Rustup
-uses each source repository's pinned toolchain. No Docker is required.
+uses each source repository's pinned toolchain and installs the native musl
+target. No Docker or Helm is required for building host packages.
 
-Pinned NICo and agent sources are checked out under `dist/package-sources/`.
+Pinned NICo and agent sources are checked out under revision-specific
+directories in `dist/package-sources/`. Changing a pinned revision selects a
+new checkout; an existing custom checkout must match the requested revision.
 NICo uses the same source revision as the release workflow. Build outputs stay
 under `target/` and `dist/`; upstream sources are not edited. The gateway's
 `sakauth` extension is required for authentication.
@@ -52,14 +55,15 @@ cross-compilation is not configured.
 
 Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or
 the `NFPM` executable as needed. `NICO_SOURCE` and `AGENT_SOURCE` can point to
-existing compatible checkouts; the Make targets do not change those checkouts.
+existing checkouts at the selected revisions; the Make targets verify their
+revisions and do not change those checkouts.
 Versions must be valid in both package formats, for example `0.1.0~prototype1`. The package revision is 1.
 
-**Prototype limitation:** use artifacts built for the selected architecture
-and distribution baseline. The package declares system dependencies;
-add the actual native-library dependencies to the configuration's `depends`
-list before distributing dynamically linked binaries. nFPM does not discover
-those dependencies.
+Both Rust binaries use musl and the gateway uses `CGO_ENABLED=0`. The build
+rejects binaries that contain an ELF interpreter or shared-library dependency.
+The package therefore does not depend on glibc, libgcc, or OpenSSL. Systemd and
+CA certificates are still required on the host. Musl DNS behavior can differ
+from glibc, so validate name resolution in the target environment.
 
 ## Configure a test VM
 
@@ -103,7 +107,16 @@ bind to loopback. The collector and gateway use the same
 
 Packages preserve configuration and do not automatically restart services on
 upgrade. Restart the target after upgrading or changing targets, tokens,
-or shared settings.
+or shared settings. The collector handles SIGINT and SIGTERM during active
+collection: it cancels collection, drains completed inventory awaiting upload,
+and finishes an in-flight upload before stopping. Its systemd stop timeout is
+300 seconds to accommodate the bounded inventory queue and HTTP retries.
+
+Keep `FLEETINT_INTERVAL_SECONDS` set in `service.conf` (default: `86400`).
+Missing or invalid command-line settings are not retried; other startup failures, including
+an empty token, are limited to three attempts within 60 seconds. After fixing
+settings following a start-limit failure, run
+`sudo systemctl reset-failed fleetint-oob-collector.service` before restarting.
 
 ```bash
 sudo systemctl restart fleetint-oob.target
@@ -126,8 +139,9 @@ RPM hooks use explicit systemd commands in nFPM scriptlets, following the
 The prototype does not automatically enable/start services or restart them on
 upgrade. Service-management failures do not fail package transactions.
 
-Run `make packages-test-hooks` for isolated lifecycle tests with mocked service
-commands; these never manage host services.
+Run `make packages-test-hooks packages-test-build` for isolated lifecycle and
+build regression tests. They use mocked service/compiler commands and local
+Git fixtures; they never manage host services or fetch remote sources.
 
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.

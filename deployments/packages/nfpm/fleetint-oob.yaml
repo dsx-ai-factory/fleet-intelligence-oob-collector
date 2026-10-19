@@ -7,7 +7,7 @@ platform: linux
 version: ${OOB_PACKAGE_VERSION}
 version_schema: none
 release: 1
-maintainer: NVIDIA Fleet Intelligence Team <support@example.com>
+maintainer: NVIDIA Fleet Intelligence Team
 description: Fleet Intelligence OOB collector, NICo health, and telemetry gateway
 vendor: NVIDIA Corporation
 homepage: https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector

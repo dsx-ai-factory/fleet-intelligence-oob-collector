@@ -74,6 +74,12 @@ The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
 set at the start of each cycle. This allows target changes from a projected
 Kubernetes Secret to take effect without restarting the collector.
 
+The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
+and sleep. Shutdown cancels Redfish collection and closes the inventory
+producer, drains its bounded queue of completed observations, and finishes
+in-flight uploads. Attestation collection can be cancelled; shutdown does not
+start another attestation upload batch.
+
 Inventory preserves partial results. Recoverable domain failures are returned
 in `domainErrors`; failures that prevent meaningful target collection are
 returned in `targetError`. Detailed identity, mapping, and failure rules are in
@@ -109,7 +115,9 @@ The experimental `fleetint-oob` host package runs the same three components as
 services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's
 `ExecStartPre` replaces the Kubernetes init container and generates a private
 configuration under `/run`. These prototype services run as root; the gateway
-listens only on loopback. See the [host package prototype](../deployments/packages/README.md)
+listens only on loopback. Rust binaries are built statically with musl and the
+gateway with Go's CGO disabled; package builds verify no ELF interpreter or
+shared-library requirements remain. See the [host package prototype](../deployments/packages/README.md)
 for installation, credentials, and validation limits.
 
 ### Redfish URI sanitization

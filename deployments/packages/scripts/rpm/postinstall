@@ -2,7 +2,9 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 set -eu
-chmod 0600 /etc/fleetint-oob/service.conf
+if [ -f /etc/fleetint-oob/service.conf ]; then
+    chmod 0600 /etc/fleetint-oob/service.conf
+fi
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null || true
 fi

@@ -6,7 +6,9 @@ case "${1:-}" in
     configure|abort-upgrade|abort-deconfigure|abort-remove) ;;
     *) exit 0 ;;
 esac
-chmod 0600 "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf"
+if [ -f "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf" ]; then
+    chmod 0600 "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf"
+fi
 # Preserve administrator enablement and masks; never enable on first install.
 for unit in fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service; do
     if deb-systemd-helper debian-installed "$unit"; then
