@@ -108,6 +108,17 @@ sudo apt remove fleetint-oob
 
 Operator-created configuration and credentials remain, including on purge. Delete unused credentials explicitly. Backend data remains.
 
+Debian hooks use `deb-systemd-invoke` for stopping services and
+`deb-systemd-helper` to preserve enablement on removal/reinstallation and clean
+up on purge, following the [debhelper convention](https://manpages.debian.org/bookworm/debhelper/dh_installsystemd.1.en.html).
+RPM hooks use explicit systemd commands in nFPM scriptlets, following the
+[systemd packaging lifecycle](https://www.freedesktop.org/software/systemd/man/latest/daemon.html).
+The prototype does not automatically enable/start services or restart them on
+upgrade. Service-management failures do not fail package transactions.
+
+Run `make packages-test-hooks` for isolated lifecycle tests with mocked service
+commands; these never manage host services.
+
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
 Real service startup, upgrade/rollback, and shutdown during collection still

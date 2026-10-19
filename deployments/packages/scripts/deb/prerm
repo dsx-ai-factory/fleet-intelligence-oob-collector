@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 case "${1:-}" in
-    remove|deconfigure)
+    remove|deconfigure|failed-upgrade)
         if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-            deb-systemd-invoke stop fleetint-oob.target
-            systemctl --no-reload disable fleetint-oob.target
+            deb-systemd-invoke stop fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
         fi
         ;;
 esac

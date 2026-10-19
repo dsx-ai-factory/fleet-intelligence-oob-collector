@@ -4,5 +4,5 @@
 set -eu
 chmod 0600 /etc/fleetint-oob/service.conf
 if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
+    systemctl daemon-reload >/dev/null || true
 fi

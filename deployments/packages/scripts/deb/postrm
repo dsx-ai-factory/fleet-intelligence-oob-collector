@@ -2,6 +2,18 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 set -eu
+# The helper also works without a running systemd instance.
+if command -v deb-systemd-helper >/dev/null 2>&1; then
+    case "${1:-}" in
+        remove)
+            deb-systemd-helper mask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            ;;
+        purge)
+            deb-systemd-helper purge fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            deb-systemd-helper unmask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            ;;
+    esac
+fi
 if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-    systemctl daemon-reload
+    systemctl --system daemon-reload >/dev/null || true
 fi

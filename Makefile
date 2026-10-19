@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template packages-deb packages-rpm packages-check-deb packages-check-rpm
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template packages-deb packages-rpm packages-check-deb packages-check-rpm packages-test-hooks
 
 NFPM ?= nfpm
 VERSION ?= 0.1.0~prototype1
@@ -29,6 +29,9 @@ packages-deb packages-rpm:
 	mkdir -p "$(OUTPUTDIR)"
 	$(NFPM) package --config deployments/packages/nfpm/fleetint-oob.yaml \
 		--packager $(patsubst packages-%,%,$@) --target "$(OUTPUTDIR)/"
+
+packages-test-hooks:
+	sh deployments/packages/tests/hooks.sh
 
 # Native package inspection; never installs packages or starts services.
 packages-check-deb:
