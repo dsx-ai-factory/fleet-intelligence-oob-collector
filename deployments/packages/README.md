@@ -113,10 +113,9 @@ and finishes an in-flight upload before stopping. Its systemd stop timeout is
 300 seconds to accommodate the bounded inventory queue and HTTP retries.
 
 Keep `FLEETINT_INTERVAL_SECONDS` set in `service.conf` (default: `86400`).
-Missing or invalid command-line settings are not retried; other startup failures, including
-an empty token, are limited to three attempts within 60 seconds. After fixing
-settings following a start-limit failure, run
-`sudo systemctl reset-failed fleetint-oob-collector.service` before restarting.
+Missing or invalid command-line settings are not retried. Other startup failures,
+including enrollment failures, restart after 10 seconds using the host's default
+systemd start-limit policy. The package does not set a stricter start limit.
 
 ```bash
 sudo systemctl restart fleetint-oob.target

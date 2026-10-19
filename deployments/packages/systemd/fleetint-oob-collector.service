@@ -5,8 +5,6 @@ Description=Fleet Intelligence OOB inventory and attestation
 Wants=network-online.target
 After=network-online.target
 PartOf=fleetint-oob.target
-StartLimitIntervalSec=60s
-StartLimitBurst=3
 
 [Service]
 EnvironmentFile=/etc/fleetint-oob/service.conf
