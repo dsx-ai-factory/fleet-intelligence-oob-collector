@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template packages-deb packages-rpm packages-check-deb packages-check-rpm packages-test-hooks
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template deb rpm package packages-check-deb packages-check-rpm packages-test-hooks
 
 NFPM ?= nfpm
 VERSION ?= 0.1.0~prototype1
@@ -25,10 +25,12 @@ export OOB_PACKAGE_VERSION = $(VERSION)
 export OOB_PACKAGE_ARCH = $(ARCH)
 export OOB_PACKAGE_INPUT = $(abspath $(INPUTDIR))
 
-packages-deb packages-rpm:
+package: deb rpm
+
+deb rpm:
 	mkdir -p "$(OUTPUTDIR)"
 	$(NFPM) package --config deployments/packages/nfpm/fleetint-oob.yaml \
-		--packager $(patsubst packages-%,%,$@) --target "$(OUTPUTDIR)/"
+		--packager $@ --target "$(OUTPUTDIR)/"
 
 packages-test-hooks:
 	sh deployments/packages/tests/hooks.sh

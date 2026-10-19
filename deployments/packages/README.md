@@ -36,11 +36,12 @@ our custom gateway containing `sakauth`. A stock OpenTelemetry Collector cannot
 provide the configured authentication flow.
 
 ```bash
-make packages-deb
-make packages-rpm
+make deb      # DEB only
+make rpm      # RPM only
+make package  # Both formats
 ```
 
-Both commands invoke nFPM directly using `nfpm/fleetint-oob.yaml`.
+The targets invoke nFPM directly using `nfpm/fleetint-oob.yaml`.
 Output goes to `dist/packages/`.
 
 Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or
