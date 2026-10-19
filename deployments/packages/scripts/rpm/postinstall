@@ -1,0 +1,8 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+chmod 0600 /etc/fleetint-oob/service.conf
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi

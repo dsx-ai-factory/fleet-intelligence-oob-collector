@@ -89,14 +89,14 @@ overrides:
     - init-system-helpers
     - ca-certificates
     scripts:
-      postinstall: deployments/packages/scripts/postinstall
-      preremove: deployments/packages/scripts/deb/preremove
-      postremove: deployments/packages/scripts/postremove
+      postinstall: deployments/packages/scripts/deb/postinst
+      preremove: deployments/packages/scripts/deb/prerm
+      postremove: deployments/packages/scripts/deb/postrm
   rpm:
     depends:
     - systemd >= 247
     - ca-certificates
     scripts:
-      postinstall: deployments/packages/scripts/postinstall
+      postinstall: deployments/packages/scripts/rpm/postinstall
       preremove: deployments/packages/scripts/rpm/preremove
-      postremove: deployments/packages/scripts/postremove
+      postremove: deployments/packages/scripts/rpm/postremove
