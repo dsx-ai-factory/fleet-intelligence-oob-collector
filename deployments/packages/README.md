@@ -69,16 +69,16 @@ units without creating accounts or starting collection. Install the package:
 ```bash
 sudo apt install ./dist/packages/fleetint-oob_*.deb
 # RPM systems: sudo dnf install ./dist/packages/fleetint-oob-*.rpm
-sudo install -m 0600 -o root -g root \
-  /usr/share/doc/fleetint-oob/config.example.toml \
-  /etc/fleetint-oob/config.toml
 sudo install -m 0600 -o root -g root /secure/path/to/bmc-username \
   /etc/fleetint-oob/credentials/username
 sudo install -m 0600 -o root -g root /secure/path/to/bmc-password \
   /etc/fleetint-oob/credentials/password
 ```
 
-Edit `config.toml` with the target BMCs and MACs; see
+The package installs `/etc/fleetint-oob/config.toml` with a commented example
+target and mode `0600`, preserving edits on upgrade. Uncomment the example and
+set a real BMC address and MAC before starting services. An empty target list
+is rejected by the collector. See
 [configuration](../../docs/configuration.md). Set backend/proxy settings in
 `/etc/fleetint-oob/service.conf`, including `FLEETINT_AGENT_TOKEN`. This file is
 installed root-owned with mode `0600`. Both services read it directly through
@@ -114,7 +114,9 @@ sudo apt remove fleetint-oob
 # RPM systems: sudo dnf remove fleetint-oob
 ```
 
-Operator-created configuration and credentials remain, including on purge. Delete unused credentials explicitly. Backend data remains.
+Package-owned configuration is preserved on removal; Debian purge removes
+package-owned configuration. Operator-created BMC credential files remain.
+Delete unused credentials explicitly. Backend data remains.
 
 Debian hooks use `deb-systemd-invoke` for stopping services and
 `deb-systemd-helper` to preserve enablement on removal/reinstallation and clean

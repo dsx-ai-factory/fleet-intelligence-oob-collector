@@ -34,9 +34,10 @@ contents:
   file_info:
     mode: 0600
 - src: deployments/packages/config/config.example.toml
-  dst: /usr/share/doc/fleetint-oob/config.example.toml
+  dst: /etc/fleetint-oob/config.toml
+  type: config|noreplace
   file_info:
-    mode: 0644
+    mode: 0600
 - src: LICENSE
   dst: /usr/share/doc/fleetint-oob/copyright
   file_info:

@@ -87,12 +87,12 @@ packages-test-hooks:
 
 # Native package inspection; never installs packages or starts services.
 packages-check-deb:
-	@set -e; for package in "$(OUTPUTDIR)"/*.deb; do \
+	@set -e; for package in "$(OUTPUTDIR)"/fleetint-oob_*.deb; do \
 		test -f "$$package" || continue; \
 		dpkg-deb --info "$$package" >/dev/null; \
 		name=$$(dpkg-deb --field "$$package" Package); \
 		test "$$name" = fleetint-oob; \
-		for config in /etc/fleetint-oob/service.conf /etc/fleetint-oob/gateway.yaml; do \
+		for config in /etc/fleetint-oob/config.toml /etc/fleetint-oob/service.conf /etc/fleetint-oob/gateway.yaml; do \
 			dpkg-deb --ctrl-tarfile "$$package" | tar --wildcards -xOf - '*conffiles' | grep -Fx "$$config"; \
 		done; \
 		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
@@ -104,7 +104,7 @@ packages-check-deb:
 	done
 
 packages-check-rpm:
-	@set -e; for package in "$(OUTPUTDIR)"/*.rpm; do \
+	@set -e; for package in "$(OUTPUTDIR)"/fleetint-oob-*.rpm; do \
 		test -f "$$package" || continue; \
 		rpm --checksig --nosignature "$$package"; \
 		if rpm -qpl "$$package" | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
