@@ -130,3 +130,88 @@ kubectl rollout restart \
   --namespace fleet-intelligence \
   deployment/nico-hardware-health
 ```
+
+## Disconnect an individual machine
+
+Remove the machine from each collector that monitors it before completing the
+Delete Machine flow in Fleet Intelligence. This stops future collection;
+previously uploaded data remains in Fleet Intelligence.
+
+Use your deployment's resource names if they differ from the examples below.
+Update any configuration management source too, so it does not restore the
+machine.
+
+1. Find the machine by its BMC `mac` in `config.toml` and remove its entire
+   `[[targets]]` entry. Keep the other targets and shared settings. For the last
+   target, [uninstall the collector](#uninstall-the-oob-collector); an empty
+   target list is invalid.
+2. Apply the updated password-free configuration:
+
+   ```bash
+   kubectl create configmap fleet-intelligence-config \
+     --namespace fleet-intelligence \
+     --from-file=config.toml=/path/to/config.toml \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+
+3. Restart the collector to apply the change immediately, then wait for its
+   rollout:
+
+   ```bash
+   kubectl rollout restart deployment/fleet-intelligence-oob-collector \
+     --namespace fleet-intelligence
+   kubectl rollout status deployment/fleet-intelligence-oob-collector \
+     --namespace fleet-intelligence --timeout=10m
+   ```
+
+4. If NICo hardware health is enabled, restart it to regenerate its target
+   configuration, then wait for its rollout:
+
+   ```bash
+   kubectl rollout restart deployment/nico-hardware-health \
+     --namespace fleet-intelligence
+   kubectl rollout status deployment/nico-hardware-health \
+     --namespace fleet-intelligence --timeout=10m
+   ```
+
+Confirm the ConfigMap no longer contains the machine's BMC MAC and check the
+[collector logs](#verify) for failures affecting remaining targets. Data already
+in transit can still arrive after the restart. Keep shared credential Secrets;
+remove a dedicated Secret only after removing its `credentials.secrets` mapping
+through a Helm upgrade and confirming no workloads use it.
+
+## Uninstall the OOB Collector
+
+This stops collection for all targets in the deployment. Previously uploaded
+data remains in Fleet Intelligence. Substitute your release and namespace names
+if they differ, and disable any automation that would reinstall the release.
+
+1. Remove the Helm release, including its OOB collector, NICo hardware health,
+   and OpenTelemetry gateway:
+
+   ```bash
+   helm uninstall fleet-intelligence-oob-collector \
+     --namespace fleet-intelligence --wait --timeout 10m
+   ```
+
+2. Verify that no pods remain for the release:
+
+   ```bash
+   kubectl get pods --namespace fleet-intelligence \
+     -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
+   ```
+
+3. Delete the separately created ConfigMap and Secrets only if no other
+   workloads use them:
+
+   ```bash
+   kubectl delete configmap fleet-intelligence-config \
+     --namespace fleet-intelligence
+   kubectl delete secret fleet-intelligence-oob-collector-agent-token \
+     default-bmc-credentials --namespace fleet-intelligence
+   ```
+
+Also remove any other unused Secrets dedicated to this deployment. Deleting a
+Secret does not revoke its credentials; retire them through their issuing
+system. Keep shared resources and separately managed external telemetry
+collectors.
