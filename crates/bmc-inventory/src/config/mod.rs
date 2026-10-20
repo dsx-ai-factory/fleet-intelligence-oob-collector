@@ -15,8 +15,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod nico;
+mod reporting;
 mod targets;
 
 pub use crate::models::TargetKind;
 pub use nico::{NicoConfigOptions, render_nico_config};
+pub use reporting::{
+    CollectorReport, DeploymentReport, MemoryLimiterReport, NicoReport, RuntimeReport,
+    TelemetryReport,
+};
 pub use targets::{CollectorConfig, Target, load_config, load_targets};

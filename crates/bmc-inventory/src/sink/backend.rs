@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
 use crate::COLLECTOR_VERSION;
+use crate::config::CollectorReport;
 use crate::models::NodeInventory;
 
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
@@ -44,6 +45,11 @@ impl BackendSink<HttpBackendClient> {
     /// Update the bearer token without rebuilding the underlying HTTP client.
     pub fn set_jwt(&mut self, jwt: impl Into<String>) {
         self.client.set_jwt(jwt);
+    }
+
+    pub fn with_collector_config(mut self, config: CollectorReport) -> Self {
+        self.client.collector_config = Some(config);
+        self
     }
 }
 
@@ -79,6 +85,7 @@ pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
     client: reqwest::Client,
+    collector_config: Option<CollectorReport>,
 }
 
 impl HttpBackendClient {
@@ -105,6 +112,7 @@ impl HttpBackendClient {
             endpoint: endpoint.into(),
             jwt: jwt.into(),
             client: backend_http_client(request_timeout)?,
+            collector_config: None,
         })
     }
 
@@ -195,7 +203,10 @@ impl BackendClient for HttpBackendClient {
     ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
             .bearer_auth(&self.jwt)
-            .json(&build_batch_upsert_request(inventories))
+            .json(&build_batch_upsert_request(
+                inventories,
+                self.collector_config.as_ref(),
+            ))
             .send()
             .await?;
         let status = response.status();
@@ -256,7 +267,10 @@ pub enum BackendNodeOutcome<'a> {
     Missing,
 }
 
-fn build_batch_upsert_request(inventories: &[NodeInventory]) -> BatchUpsertRequest<'_> {
+fn build_batch_upsert_request<'a>(
+    inventories: &'a [NodeInventory],
+    config: Option<&'a CollectorReport>,
+) -> BatchUpsertRequest<'a> {
     let data = inventories
         .iter()
         .map(|inventory| NodeUpsertRequest {
@@ -264,8 +278,9 @@ fn build_batch_upsert_request(inventories: &[NodeInventory]) -> BatchUpsertReque
         })
         .collect();
     BatchUpsertRequest {
-        agent: AgentInfo {
+        collector: CollectorInfo {
             version: COLLECTOR_VERSION,
+            config,
         },
         data,
     }
@@ -341,14 +356,16 @@ struct EnrollResponse {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchUpsertRequest<'a> {
-    agent: AgentInfo<'static>,
+    collector: CollectorInfo<'a>,
     data: Vec<NodeUpsertRequest<'a>>,
 }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AgentInfo<'a> {
+struct CollectorInfo<'a> {
     version: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<&'a CollectorReport>,
 }
 
 #[derive(serde::Serialize)]
@@ -471,13 +488,13 @@ mod tests {
         inventory.compute_zone = Some("us-west-dc1".to_string());
         inventory.node_group = Some("gb200-training".to_string());
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories);
+        let request = build_batch_upsert_request(&inventories, None);
 
         let value = serde_json::to_value(request).expect("serialize request");
         let expected_version = option_env!("FLEETINT_BUILD_VERSION")
             .filter(|version| !version.is_empty())
             .unwrap_or(env!("CARGO_PKG_VERSION"));
-        assert_eq!(value["agent"]["version"], expected_version);
+        assert_eq!(value["collector"]["version"], expected_version);
         assert_eq!(value["data"][0]["source"]["address"], "10.0.0.1");
         assert_eq!(value["data"][0]["kind"], "nvswitch");
         assert_eq!(value["data"][0]["source"]["mac"], "00:11:22:33:44:55");
@@ -493,12 +510,65 @@ mod tests {
     fn batch_request_omits_missing_placement_fields() {
         let inventory = inventory("10.0.0.1");
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories);
+        let request = build_batch_upsert_request(&inventories, None);
 
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
         assert_eq!(value["data"][0]["latency"], serde_json::json!([]));
+        assert!(value.get("agent").is_none());
+        assert!(value["collector"].get("config").is_none());
+    }
+
+    #[test]
+    fn batch_reports_config_once_and_keeps_it_when_token_rotates() {
+        use crate::config::RuntimeReport;
+
+        let config = CollectorReport {
+            runtime: RuntimeReport {
+                inventory_interval_seconds: 3600,
+                target_concurrency: 8,
+                bmc_max_in_flight: 2,
+                bmc_requests_per_second: 5,
+                bmc_burst: 6,
+                timeout_seconds: 15,
+                insecure_tls: false,
+                latency_probe: false,
+                log_level: None,
+            },
+            nico: None,
+            telemetry: None,
+        };
+        let mut sink = BackendSink::new("https://api.example.com", "old-token")
+            .unwrap()
+            .with_collector_config(config);
+        sink.set_jwt("new-token");
+        let inventories = [inventory("10.0.0.1"), inventory("10.0.0.2")];
+        let request =
+            build_batch_upsert_request(&inventories, sink.client.collector_config.as_ref());
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            value["collector"]["config"]["runtime"]["inventoryIntervalSeconds"],
+            3600
+        );
+        assert_eq!(
+            value["collector"]["config"]["runtime"]["latencyProbe"],
+            false
+        );
+        assert_eq!(
+            value["collector"]["config"]["runtime"]["insecureTls"],
+            false
+        );
+        assert!(value["collector"]["config"].get("nico").is_none());
+        assert!(value["collector"]["config"].get("telemetry").is_none());
+        for item in value["data"].as_array().unwrap() {
+            assert!(item.get("collector").is_none());
+            assert!(item.get("config").is_none());
+        }
+        let json = value.to_string();
+        assert!(!json.contains("old-token"));
+        assert!(!json.contains("new-token"));
+        assert!(!json.contains("flushInterval"));
     }
 
     #[test]
@@ -518,7 +588,7 @@ mod tests {
             error: None,
         });
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories);
+        let request = build_batch_upsert_request(&inventories, None);
 
         let value = serde_json::to_value(request).expect("serialize request");
         let latency = &value["data"][0]["latency"][0];

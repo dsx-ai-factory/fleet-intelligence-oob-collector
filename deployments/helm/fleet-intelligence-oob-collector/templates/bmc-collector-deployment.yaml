@@ -22,6 +22,7 @@ spec:
         {{- with .Values.bmcCollector.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        checksum/deployment-config: {{ include (print $.Template.BasePath "/collector-deployment-configmap.yaml") . | sha256sum }}
       labels:
         {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 8 }}
     spec:
@@ -50,6 +51,8 @@ spec:
             readOnlyRootFilesystem: true
           args:
             - run
+            - --deployment-config
+            - /etc/fleet-intelligence-reporting/deployment.json
             - --config
             - /etc/fleet-intelligence/config.toml
             - --interval-seconds
@@ -84,6 +87,9 @@ spec:
           resources:
             {{- toYaml .Values.bmcCollector.resources | nindent 12 }}
           volumeMounts:
+            - name: deployment-reporting
+              mountPath: /etc/fleet-intelligence-reporting
+              readOnly: true
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
@@ -91,6 +97,13 @@ spec:
               mountPath: /run/secrets/bmc
               readOnly: true
       volumes:
+        - name: deployment-reporting
+          configMap:
+            name: {{ include "fleet-intelligence-oob-collector.reportingName" . }}
+            items:
+              - key: deployment.json
+                path: deployment.json
+                mode: 0440
         - name: hardware-config
           configMap:
             name: {{ include "fleet-intelligence-oob-collector.fullname" . }}-config
