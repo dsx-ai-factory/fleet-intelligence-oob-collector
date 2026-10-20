@@ -53,6 +53,8 @@ fn links<const N: usize>(
 #[test]
 fn compute_node_inventory_serializes_expected_json() {
     // Representative compute BMC shape with synthetic identifiers.
+    // Memory/storage fields and capacities follow the configured lab BMC;
+    // they belong to separate systems. Identifying values are replaced.
     let mut inventory = NodeInventory {
         schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
         collected_at: "2026-01-01T00:00:00Z".to_string(),
@@ -121,7 +123,50 @@ fn compute_node_inventory_serializes_expected_json() {
             ..Default::default()
         }),
         secure_boot_enabled: Some(true),
-        memory: Vec::new(),
+        memory: vec![
+            MemoryInventory {
+                id: "HBM0".to_string(),
+                system_id: "System".to_string(),
+                odata_id: Some("/redfish/v1/Systems/System/Memory/HBM0".into()),
+                memory_device_type: Some("HBM".to_string()),
+                capacity_mib: Some(192527),
+                serial_number: None,
+                part_number: None,
+                manufacturer: None,
+                device_locator: None,
+                location: Some(InventoryLocation {
+                    part_location: Some(PartLocation {
+                        service_label: Some("HBM0".to_string()),
+                        location_type: Some("Embedded".to_string()),
+                        ..Default::default()
+                    }),
+                    placement: None,
+                    part_location_context: Some("System/GPU1".to_string()),
+                }),
+                status: Some(ok_status_with_conditions(Some("OK"))),
+            },
+            MemoryInventory {
+                id: "LPDDR5_0".to_string(),
+                system_id: "System".to_string(),
+                odata_id: Some("/redfish/v1/Systems/System/Memory/LPDDR5_0".into()),
+                memory_device_type: Some("LPDDR5_SDRAM".to_string()),
+                capacity_mib: Some(491520),
+                serial_number: Some("MEMORY-SN1".to_string()),
+                part_number: Some("MEMORY-PN1".to_string()),
+                manufacturer: Some("Example Memory Vendor".to_string()),
+                device_locator: None,
+                location: Some(InventoryLocation {
+                    part_location: Some(PartLocation {
+                        service_label: Some("LPDDR5_0".to_string()),
+                        location_type: Some("Embedded".to_string()),
+                        ..Default::default()
+                    }),
+                    placement: None,
+                    part_location_context: Some("System/CPU1".to_string()),
+                }),
+                status: Some(ok_status_with_conditions(Some("OK"))),
+            },
+        ],
         storage: Vec::new(),
         processors: vec![
             ProcessorInventory {
@@ -205,6 +250,59 @@ fn compute_node_inventory_serializes_expected_json() {
                 links: Default::default(),
             },
         ],
+        links: Default::default(),
+    });
+    inventory.systems.push(SystemInventory {
+        name: "Host System".to_string(),
+        description: None,
+        id: "HostSystem".to_string(),
+        odata_id: Some("/redfish/v1/Systems/HostSystem".into()),
+        uuid: None,
+        manufacturer: None,
+        model: None,
+        sku: None,
+        serial_number: None,
+        bios_version: None,
+        host_name: None,
+        asset_tag: None,
+        power_state: None,
+        status: None,
+        processor_summary: None,
+        memory_summary: None,
+        secure_boot_enabled: None,
+        processors: Vec::new(),
+        memory: Vec::new(),
+        storage: vec![StorageInventory {
+            id: "Storage0".to_string(),
+            system_id: "HostSystem".to_string(),
+            odata_id: Some("/redfish/v1/Systems/HostSystem/Storage/Storage0".into()),
+            drives: [
+                ("Drive0", "DRIVE-SN0", 3840755982336),
+                ("Drive1", "DRIVE-SN1", 1920383410176),
+            ]
+            .into_iter()
+            .map(|(id, serial_number, capacity_bytes)| DriveInventory {
+                id: id.to_string(),
+                storage_id: "Storage0".to_string(),
+                system_id: "HostSystem".to_string(),
+                odata_id: Some(
+                    format!("/redfish/v1/Systems/HostSystem/Storage/Storage0/Drives/{id}").into(),
+                ),
+                model: Some("Example NVMe SSD".to_string()),
+                serial_number: Some(serial_number.to_string()),
+                capacity_bytes: Some(capacity_bytes),
+                protocol: Some("NVMe".to_string()),
+                media_type: Some("SSD".to_string()),
+                revision: None,
+                status: Some(InventoryStatus {
+                    conditions: None,
+                    health: None,
+                    health_rollup: None,
+                    state: Some("Enabled".to_string()),
+                }),
+            })
+            .collect(),
+        }],
         links: Default::default(),
     });
     inventory.chassis.push(ChassisInventory {

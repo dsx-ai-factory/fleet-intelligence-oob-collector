@@ -265,8 +265,132 @@
         "state": "Enabled"
       },
       "uuid": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
-      "memory": [],
+      "memory": [
+        {
+          "id": "HBM0",
+          "systemId": "System",
+          "odataId": "/redfish/v1/Systems/System/Memory/HBM0",
+          "memoryDeviceType": "HBM",
+          "capacityMib": 192527,
+          "serialNumber": null,
+          "partNumber": null,
+          "manufacturer": null,
+          "deviceLocator": null,
+          "location": {
+            "partLocation": {
+              "serviceLabel": "HBM0",
+              "locationType": "Embedded",
+              "locationOrdinalValue": null,
+              "reference": null,
+              "orientation": null
+            },
+            "placement": null,
+            "partLocationContext": "System/GPU1"
+          },
+          "status": {
+            "conditions": [],
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          }
+        },
+        {
+          "id": "LPDDR5_0",
+          "systemId": "System",
+          "odataId": "/redfish/v1/Systems/System/Memory/LPDDR5_0",
+          "memoryDeviceType": "LPDDR5_SDRAM",
+          "capacityMib": 491520,
+          "serialNumber": "MEMORY-SN1",
+          "partNumber": "MEMORY-PN1",
+          "manufacturer": "Example Memory Vendor",
+          "deviceLocator": null,
+          "location": {
+            "partLocation": {
+              "serviceLabel": "LPDDR5_0",
+              "locationType": "Embedded",
+              "locationOrdinalValue": null,
+              "reference": null,
+              "orientation": null
+            },
+            "placement": null,
+            "partLocationContext": "System/CPU1"
+          },
+          "status": {
+            "conditions": [],
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          }
+        }
+      ],
       "storage": []
+    },
+    {
+      "assetTag": null,
+      "biosVersion": null,
+      "description": null,
+      "hostName": null,
+      "id": "HostSystem",
+      "links": {},
+      "manufacturer": null,
+      "memorySummary": null,
+      "model": null,
+      "name": "Host System",
+      "odataId": "/redfish/v1/Systems/HostSystem",
+      "powerState": null,
+      "processorSummary": null,
+      "processors": [],
+      "secureBootEnabled": null,
+      "serialNumber": null,
+      "sku": null,
+      "status": null,
+      "uuid": null,
+      "memory": [],
+      "storage": [
+        {
+          "id": "Storage0",
+          "systemId": "HostSystem",
+          "odataId": "/redfish/v1/Systems/HostSystem/Storage/Storage0",
+          "drives": [
+            {
+              "id": "Drive0",
+              "storageId": "Storage0",
+              "systemId": "HostSystem",
+              "odataId": "/redfish/v1/Systems/HostSystem/Storage/Storage0/Drives/Drive0",
+              "model": "Example NVMe SSD",
+              "serialNumber": "DRIVE-SN0",
+              "capacityBytes": 3840755982336,
+              "protocol": "NVMe",
+              "mediaType": "SSD",
+              "revision": null,
+              "status": {
+                "conditions": null,
+                "health": null,
+                "healthRollup": null,
+                "state": "Enabled"
+              }
+            },
+            {
+              "id": "Drive1",
+              "storageId": "Storage0",
+              "systemId": "HostSystem",
+              "odataId": "/redfish/v1/Systems/HostSystem/Storage/Storage0/Drives/Drive1",
+              "model": "Example NVMe SSD",
+              "serialNumber": "DRIVE-SN1",
+              "capacityBytes": 1920383410176,
+              "protocol": "NVMe",
+              "mediaType": "SSD",
+              "revision": null,
+              "status": {
+                "conditions": null,
+                "health": null,
+                "healthRollup": null,
+                "state": "Enabled"
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "targetError": null
