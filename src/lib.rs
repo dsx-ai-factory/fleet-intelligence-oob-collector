@@ -75,6 +75,7 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
+    pub log_level: String,
 }
 
 impl RuntimeOptions {
@@ -88,7 +89,7 @@ impl RuntimeOptions {
             timeout_seconds: self.inventory.timeout_seconds,
             insecure_tls: self.inventory.insecure_tls,
             latency_probe: self.inventory.latency_probe,
-            log_level: std::env::var("RUST_LOG").ok(),
+            log_level: self.log_level.clone(),
         }
     }
 }
@@ -503,8 +504,7 @@ async fn collect_and_upload_inventory(
             .iter()
             .map(|target| target.mac.to_string()),
     )?;
-    let mut backend_sink =
-        InventoryBackendSink::new(endpoint, session.jwt())?.with_collector_config(collector_config);
+    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
@@ -1102,12 +1102,14 @@ mod tests {
             backend_url: Some("https://private.example.com".to_string()),
             agent_token: Some("must-not-be-reported".to_string()),
             interval_seconds: 0,
+            log_level: "info".to_string(),
         };
         let config = runtime.runtime_config();
         assert_eq!(config.inventory_interval_seconds, 1);
         assert_eq!(config.target_concurrency, 1);
         assert_eq!(config.bmc_max_in_flight, 1);
         assert!(!config.latency_probe);
+        assert_eq!(config.log_level, "info");
     }
 
     #[test]

@@ -166,11 +166,11 @@ fn write_private_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let log_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let log_level = log_filter.to_string();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        .with_env_filter(log_filter)
         .with_writer(std::io::stderr)
         .with_target(true)
         .compact()
@@ -189,6 +189,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,
+                log_level,
             })
             .await?
         }

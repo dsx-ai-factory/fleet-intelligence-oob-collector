@@ -60,8 +60,7 @@ pub struct RuntimeConfig {
     pub timeout_seconds: u64,
     pub insecure_tls: bool,
     pub latency_probe: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub log_level: Option<String>,
+    pub log_level: String,
 }
 
 #[derive(Clone)]
@@ -73,18 +72,16 @@ impl BackendSink<HttpBackendClient> {
     pub fn new(
         endpoint: impl Into<String>,
         jwt: impl Into<String>,
+        config: CollectorConfig,
     ) -> Result<Self, Box<dyn Error>> {
-        Ok(Self::with_client(HttpBackendClient::new(endpoint, jwt)?))
+        Ok(Self::with_client(HttpBackendClient::new(
+            endpoint, jwt, config,
+        )?))
     }
 
     /// Update the bearer token without rebuilding the underlying HTTP client.
     pub fn set_jwt(&mut self, jwt: impl Into<String>) {
         self.client.set_jwt(jwt);
-    }
-
-    pub fn with_collector_config(mut self, config: CollectorConfig) -> Self {
-        self.client.collector_config = Some(config);
-        self
     }
 }
 
@@ -120,18 +117,20 @@ pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
     client: reqwest::Client,
-    collector_config: Option<CollectorConfig>,
+    collector_config: CollectorConfig,
 }
 
 impl HttpBackendClient {
     pub fn new(
         endpoint: impl Into<String>,
         jwt: impl Into<String>,
+        config: CollectorConfig,
     ) -> Result<Self, Box<dyn Error>> {
         Self::with_timeout(
             endpoint,
             jwt,
             Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
+            config,
         )
     }
 
@@ -139,6 +138,7 @@ impl HttpBackendClient {
         endpoint: impl Into<String>,
         jwt: impl Into<String>,
         request_timeout: Duration,
+        config: CollectorConfig,
     ) -> Result<Self, Box<dyn Error>> {
         if request_timeout.is_zero() {
             return Err("backend request timeout must be greater than zero".into());
@@ -147,7 +147,7 @@ impl HttpBackendClient {
             endpoint: endpoint.into(),
             jwt: jwt.into(),
             client: backend_http_client(request_timeout)?,
-            collector_config: None,
+            collector_config: config,
         })
     }
 
@@ -240,7 +240,7 @@ impl BackendClient for HttpBackendClient {
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(
                 inventories,
-                self.collector_config.as_ref(),
+                &self.collector_config,
             ))
             .send()
             .await?;
@@ -304,7 +304,7 @@ pub enum BackendNodeOutcome<'a> {
 
 fn build_batch_upsert_request<'a>(
     inventories: &'a [NodeInventory],
-    config: Option<&'a CollectorConfig>,
+    config: &'a CollectorConfig,
 ) -> BatchUpsertRequest<'a> {
     let data = inventories
         .iter()
@@ -399,8 +399,7 @@ struct BatchUpsertRequest<'a> {
 #[serde(rename_all = "camelCase")]
 struct CollectorInfo<'a> {
     version: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    config: Option<&'a CollectorConfig>,
+    config: &'a CollectorConfig,
 }
 
 #[derive(serde::Serialize)]
@@ -523,7 +522,8 @@ mod tests {
         inventory.compute_zone = Some("us-west-dc1".to_string());
         inventory.node_group = Some("gb200-training".to_string());
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories, None);
+        let config = collector_config();
+        let request = build_batch_upsert_request(&inventories, &config);
 
         let value = serde_json::to_value(request).expect("serialize request");
         let expected_version = option_env!("FLEETINT_BUILD_VERSION")
@@ -545,39 +545,28 @@ mod tests {
     fn batch_request_omits_missing_placement_fields() {
         let inventory = inventory("10.0.0.1");
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories, None);
+        let config = collector_config();
+        let request = build_batch_upsert_request(&inventories, &config);
 
         let value = serde_json::to_value(request).expect("serialize request");
         assert!(value["data"][0].get("computeZone").is_none());
         assert!(value["data"][0].get("nodeGroup").is_none());
         assert_eq!(value["data"][0]["latency"], serde_json::json!([]));
         assert!(value.get("agent").is_none());
-        assert!(value["collector"].get("config").is_none());
+        assert_eq!(value["collector"]["config"]["runtime"]["logLevel"], "info");
     }
 
     #[test]
     fn batch_reports_config_once_and_preserves_optional_enablement() {
-        let config = CollectorConfig {
-            runtime: RuntimeConfig {
-                inventory_interval_seconds: 3600,
-                target_concurrency: 8,
-                bmc_max_in_flight: 2,
-                bmc_requests_per_second: 5,
-                bmc_burst: 6,
-                timeout_seconds: 15,
-                insecure_tls: false,
-                latency_probe: false,
-                log_level: None,
-            },
-            nico_health: None,
-            otel_gateway: None,
-        };
-        let sink = BackendSink::new("https://api.example.com", "must-not-be-reported")
-            .unwrap()
-            .with_collector_config(config.clone());
+        let config = collector_config();
+        let sink = BackendSink::new(
+            "https://api.example.com",
+            "must-not-be-reported",
+            config.clone(),
+        )
+        .unwrap();
         let inventories = [inventory("10.0.0.1"), inventory("10.0.0.2")];
-        let request =
-            build_batch_upsert_request(&inventories, sink.client.collector_config.as_ref());
+        let request = build_batch_upsert_request(&inventories, &sink.client.collector_config);
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(
             value["collector"]["config"],
@@ -590,7 +579,8 @@ mod tests {
                     "bmcBurst": 6,
                     "timeoutSeconds": 15,
                     "insecureTls": false,
-                    "latencyProbe": false
+                    "latencyProbe": false,
+                    "logLevel": "info"
                 }
             })
         );
@@ -611,8 +601,7 @@ mod tests {
                 ..config.clone()
             };
             let value =
-                serde_json::to_value(build_batch_upsert_request(&inventories, Some(&config)))
-                    .unwrap();
+                serde_json::to_value(build_batch_upsert_request(&inventories, &config)).unwrap();
             assert_eq!(
                 value["collector"]["config"].get("nicoHealth"),
                 nico.map(|enabled| serde_json::json!({"enabled": enabled}))
@@ -644,7 +633,8 @@ mod tests {
             error: None,
         });
         let inventories = [inventory];
-        let request = build_batch_upsert_request(&inventories, None);
+        let config = collector_config();
+        let request = build_batch_upsert_request(&inventories, &config);
 
         let value = serde_json::to_value(request).expect("serialize request");
         let latency = &value["data"][0]["latency"][0];
@@ -725,9 +715,12 @@ mod tests {
 
     #[test]
     fn backend_sink_updates_jwt_without_rebuilding() {
-        let mut sink =
-            BackendSink::new("https://backend.example.com/v1/agent/oob_nodes", "old-jwt")
-                .expect("sink");
+        let mut sink = BackendSink::new(
+            "https://backend.example.com/v1/agent/oob_nodes",
+            "old-jwt",
+            collector_config(),
+        )
+        .expect("sink");
 
         sink.set_jwt("new-jwt");
 
@@ -736,17 +729,24 @@ mod tests {
 
     #[tokio::test]
     async fn backend_sink_can_be_created_and_dropped_in_async_context() {
-        let sink = BackendSink::new("https://backend.example.com/v1/agent/oob_nodes", "jwt")
-            .expect("sink");
+        let sink = BackendSink::new(
+            "https://backend.example.com/v1/agent/oob_nodes",
+            "jwt",
+            collector_config(),
+        )
+        .expect("sink");
 
         drop(sink);
     }
 
     #[test]
     fn backend_client_rejects_zero_timeout() {
-        let Err(err) =
-            HttpBackendClient::with_timeout("https://api.example.com", "jwt", Duration::ZERO)
-        else {
+        let Err(err) = HttpBackendClient::with_timeout(
+            "https://api.example.com",
+            "jwt",
+            Duration::ZERO,
+            collector_config(),
+        ) else {
             panic!("zero timeout should fail");
         };
 
@@ -798,6 +798,24 @@ mod tests {
                     })
                     .collect(),
             })
+        }
+    }
+
+    fn collector_config() -> CollectorConfig {
+        CollectorConfig {
+            runtime: RuntimeConfig {
+                inventory_interval_seconds: 3600,
+                target_concurrency: 8,
+                bmc_max_in_flight: 2,
+                bmc_requests_per_second: 5,
+                bmc_burst: 6,
+                timeout_seconds: 15,
+                insecure_tls: false,
+                latency_probe: false,
+                log_level: "info".to_string(),
+            },
+            nico_health: None,
+            otel_gateway: None,
         }
     }
 
