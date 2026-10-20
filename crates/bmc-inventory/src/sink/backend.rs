@@ -31,7 +31,7 @@ const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectorConfig {
-    pub runtime: CollectorRuntimeConfig,
+    pub runtime_config: CollectorRuntimeConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nico_health: Option<NicoHealthConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn batch_reports_config_once_and_preserves_optional_enablement() {
         let config = CollectorConfig {
-            runtime: CollectorRuntimeConfig {
+            runtime_config: CollectorRuntimeConfig {
                 inventory_interval_seconds: 3600,
                 target_concurrency: 8,
                 bmc_max_in_flight: 2,
@@ -575,7 +575,7 @@ mod tests {
         assert_eq!(
             value["collector"]["config"],
             serde_json::json!({
-                "runtime": {
+                "runtimeConfig": {
                     "inventoryIntervalSeconds": 3600,
                     "targetConcurrency": 8,
                     "bmcMaxInFlight": 2,

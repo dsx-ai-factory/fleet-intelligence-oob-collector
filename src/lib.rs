@@ -154,7 +154,7 @@ async fn run_runtime_until_shutdown(
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let collector_config = CollectorConfig {
-        runtime: options.runtime_config(),
+        runtime_config: options.runtime_config(),
         nico_health: parse_optional_bool(
             "FLEETINT_NICO_ENABLED",
             std::env::var("FLEETINT_NICO_ENABLED"),
