@@ -31,8 +31,9 @@ use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
 use bmc_inventory::models::{InventoryUuid, NodeInventory};
 use bmc_inventory::sink::{
-    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink,
-    CollectorRuntimeConfig, InventorySink, JsonSink, TableSink,
+    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
+    CollectorRuntimeConfig, InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig,
+    TableSink,
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
@@ -93,6 +94,18 @@ impl RuntimeOptions {
     }
 }
 
+fn parse_optional_bool(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<Option<bool>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value == "true" => Ok(Some(true)),
+        Ok(value) if value == "false" => Ok(Some(false)),
+        _ => Err(format!("{name} must be true or false").into()),
+    }
+}
+
 #[derive(Clone)]
 struct Shutdown(watch::Receiver<bool>);
 
@@ -140,7 +153,19 @@ async fn run_runtime_until_shutdown(
     options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let runtime_config = options.runtime_config();
+    let collector_config = CollectorConfig {
+        runtime: options.runtime_config(),
+        nico_health: parse_optional_bool(
+            "FLEETINT_NICO_ENABLED",
+            std::env::var("FLEETINT_NICO_ENABLED"),
+        )?
+        .map(|enabled| NicoHealthConfig::from_iter([("enabled".to_string(), enabled.into())])),
+        otel_gateway: parse_optional_bool(
+            "FLEETINT_OTEL_GATEWAY_ENABLED",
+            std::env::var("FLEETINT_OTEL_GATEWAY_ENABLED"),
+        )?
+        .map(|enabled| OtelGatewayConfig::from_iter([("enabled".to_string(), enabled.into())])),
+    };
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -172,7 +197,7 @@ async fn run_runtime_until_shutdown(
         // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
-            runtime_config.clone(),
+            collector_config.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
             Arc::clone(&dispatcher),
@@ -466,21 +491,21 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
-    runtime_config: CollectorRuntimeConfig,
+    collector_config: CollectorConfig,
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
-    let collector_config = config::load_config(&options.config)?;
+    let target_config = config::load_config(&options.config)?;
     dispatcher.sync_endpoints(
-        collector_config
+        target_config
             .targets
             .iter()
             .map(|target| target.mac.to_string()),
     )?;
     let mut backend_sink =
-        InventoryBackendSink::new(endpoint, session.jwt())?.with_runtime_config(runtime_config);
+        InventoryBackendSink::new(endpoint, session.jwt())?.with_collector_config(collector_config);
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
@@ -493,7 +518,7 @@ async fn collect_and_upload_inventory(
     producer.spawn(async move {
         let collections = inventory_collections(
             &source,
-            collector_config.targets,
+            target_config.targets,
             target_concurrency,
             CollectionOrder::Completion,
         );
@@ -1084,6 +1109,32 @@ mod tests {
         assert_eq!(config.target_concurrency, 1);
         assert_eq!(config.bmc_max_in_flight, 1);
         assert!(!config.latency_probe);
+    }
+
+    #[test]
+    fn optional_enablement_distinguishes_unknown_false_and_invalid_values() {
+        for name in ["FLEETINT_NICO_ENABLED", "FLEETINT_OTEL_GATEWAY_ENABLED"] {
+            assert_eq!(
+                parse_optional_bool(name, Err(std::env::VarError::NotPresent)).unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("true".into())).unwrap(),
+                Some(true)
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("false".into())).unwrap(),
+                Some(false)
+            );
+            for value in ["", "1", "TRUE", "invalid"] {
+                assert_eq!(
+                    parse_optional_bool(name, Ok(value.into()))
+                        .unwrap_err()
+                        .to_string(),
+                    format!("{name} must be true or false")
+                );
+            }
+        }
     }
 
     #[tokio::test]

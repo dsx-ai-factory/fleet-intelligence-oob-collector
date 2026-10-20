@@ -71,6 +71,10 @@ spec:
             - --disable-latency-probe
             {{- end }}
           env:
+            - name: FLEETINT_NICO_ENABLED
+              value: {{ .Values.nicoHardwareHealth.enabled | quote }}
+            - name: FLEETINT_OTEL_GATEWAY_ENABLED
+              value: {{ .Values.otelGateway.enabled | quote }}
             - name: RUST_LOG
               value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}
             - name: FLEETINT_BACKEND_URL

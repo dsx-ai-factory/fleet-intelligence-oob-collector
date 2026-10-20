@@ -28,6 +28,19 @@ pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectorConfig {
+    pub runtime: CollectorRuntimeConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nico_health: Option<NicoHealthConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_gateway: Option<OtelGatewayConfig>,
+}
+
+pub type NicoHealthConfig = serde_json::Map<String, serde_json::Value>;
+pub type OtelGatewayConfig = serde_json::Map<String, serde_json::Value>;
+
 /// Non-sensitive runtime settings shared by every node in an inventory batch.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,8 +75,8 @@ impl BackendSink<HttpBackendClient> {
         self.client.set_jwt(jwt);
     }
 
-    pub fn with_runtime_config(mut self, config: CollectorRuntimeConfig) -> Self {
-        self.client.runtime_config = Some(config);
+    pub fn with_collector_config(mut self, config: CollectorConfig) -> Self {
+        self.client.collector_config = Some(config);
         self
     }
 }
@@ -100,7 +113,7 @@ pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
     client: reqwest::Client,
-    runtime_config: Option<CollectorRuntimeConfig>,
+    collector_config: Option<CollectorConfig>,
 }
 
 impl HttpBackendClient {
@@ -127,7 +140,7 @@ impl HttpBackendClient {
             endpoint: endpoint.into(),
             jwt: jwt.into(),
             client: backend_http_client(request_timeout)?,
-            runtime_config: None,
+            collector_config: None,
         })
     }
 
@@ -220,7 +233,7 @@ impl BackendClient for HttpBackendClient {
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(
                 inventories,
-                self.runtime_config.as_ref(),
+                self.collector_config.as_ref(),
             ))
             .send()
             .await?;
@@ -284,7 +297,7 @@ pub enum BackendNodeOutcome<'a> {
 
 fn build_batch_upsert_request<'a>(
     inventories: &'a [NodeInventory],
-    runtime_config: Option<&'a CollectorRuntimeConfig>,
+    config: Option<&'a CollectorConfig>,
 ) -> BatchUpsertRequest<'a> {
     let data = inventories
         .iter()
@@ -295,7 +308,7 @@ fn build_batch_upsert_request<'a>(
     BatchUpsertRequest {
         collector: CollectorInfo {
             version: COLLECTOR_VERSION,
-            config: runtime_config.map(|runtime| CollectorConfig { runtime }),
+            config,
         },
         data,
     }
@@ -380,12 +393,7 @@ struct BatchUpsertRequest<'a> {
 struct CollectorInfo<'a> {
     version: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    config: Option<CollectorConfig<'a>>,
-}
-
-#[derive(Serialize)]
-struct CollectorConfig<'a> {
-    runtime: &'a CollectorRuntimeConfig,
+    config: Option<&'a CollectorConfig>,
 }
 
 #[derive(serde::Serialize)]
@@ -541,23 +549,28 @@ mod tests {
     }
 
     #[test]
-    fn batch_reports_runtime_config_once() {
-        let config = CollectorRuntimeConfig {
-            inventory_interval_seconds: 3600,
-            target_concurrency: 8,
-            bmc_max_in_flight: 2,
-            bmc_requests_per_second: 5,
-            bmc_burst: 6,
-            timeout_seconds: 15,
-            insecure_tls: false,
-            latency_probe: false,
-            log_level: None,
+    fn batch_reports_config_once_and_preserves_optional_enablement() {
+        let config = CollectorConfig {
+            runtime: CollectorRuntimeConfig {
+                inventory_interval_seconds: 3600,
+                target_concurrency: 8,
+                bmc_max_in_flight: 2,
+                bmc_requests_per_second: 5,
+                bmc_burst: 6,
+                timeout_seconds: 15,
+                insecure_tls: false,
+                latency_probe: false,
+                log_level: None,
+            },
+            nico_health: None,
+            otel_gateway: None,
         };
         let sink = BackendSink::new("https://api.example.com", "must-not-be-reported")
             .unwrap()
-            .with_runtime_config(config);
+            .with_collector_config(config.clone());
         let inventories = [inventory("10.0.0.1"), inventory("10.0.0.2")];
-        let request = build_batch_upsert_request(&inventories, sink.client.runtime_config.as_ref());
+        let request =
+            build_batch_upsert_request(&inventories, sink.client.collector_config.as_ref());
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(
             value["collector"]["config"],
@@ -578,6 +591,57 @@ mod tests {
             assert!(item.get("collector").is_none());
         }
         assert!(!value.to_string().contains("must-not-be-reported"));
+
+        for (nico, gateway) in [
+            (Some(false), Some(false)),
+            (Some(true), Some(true)),
+            (None, Some(false)),
+            (Some(false), None),
+        ] {
+            let config = CollectorConfig {
+                nico_health: nico.map(|enabled| {
+                    NicoHealthConfig::from_iter([("enabled".to_string(), enabled.into())])
+                }),
+                otel_gateway: gateway.map(|enabled| {
+                    OtelGatewayConfig::from_iter([("enabled".to_string(), enabled.into())])
+                }),
+                ..config.clone()
+            };
+            let value =
+                serde_json::to_value(build_batch_upsert_request(&inventories, Some(&config)))
+                    .unwrap();
+            assert_eq!(
+                value["collector"]["config"].get("nicoHealth"),
+                nico.map(|enabled| serde_json::json!({"enabled": enabled}))
+                    .as_ref()
+            );
+            assert_eq!(
+                value["collector"]["config"].get("otelGateway"),
+                gateway
+                    .map(|enabled| serde_json::json!({"enabled": enabled}))
+                    .as_ref()
+            );
+        }
+
+        let additional_fields = serde_json::json!({
+            "enabled": true,
+            "futureOption": { "intervalSeconds": 30, "labels": ["example"] }
+        });
+        let extended = CollectorConfig {
+            nico_health: Some(serde_json::from_value(additional_fields.clone()).unwrap()),
+            otel_gateway: Some(serde_json::from_value(additional_fields.clone()).unwrap()),
+            ..config
+        };
+        let value = serde_json::to_value(build_batch_upsert_request(&inventories, Some(&extended)))
+            .unwrap();
+        assert_eq!(
+            value["collector"]["config"]["nicoHealth"],
+            additional_fields
+        );
+        assert_eq!(
+            value["collector"]["config"]["otelGateway"],
+            additional_fields
+        );
     }
 
     #[test]
