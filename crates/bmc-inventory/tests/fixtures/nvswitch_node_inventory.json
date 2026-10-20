@@ -47,7 +47,8 @@
         "health": "OK",
         "healthRollup": "OK",
         "state": "Enabled"
-      }
+      },
+      "powerSupplies": []
     }
   ],
   "collectedAt": "2026-01-01T00:00:00Z",
@@ -267,7 +268,9 @@
         "healthRollup": null,
         "state": "Enabled"
       },
-      "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+      "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "memory": [],
+      "storage": []
     }
   ],
   "targetError": null

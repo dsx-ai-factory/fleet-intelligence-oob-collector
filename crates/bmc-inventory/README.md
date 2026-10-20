@@ -18,7 +18,8 @@ Target
 
 Each observation is identified by its required configured BMC MAC in
 `source.mac`, formatted as uppercase colon-separated text. The collector gathers
-managers, systems, processors, secure boot, chassis, PCIe devices, firmware,
+managers, systems, processors, memory modules, storage/drives, secure boot,
+chassis, PCIe devices, power supplies, firmware,
 fabrics, and switches.
 
 A configured target name provides a display label. System hostnames come from
@@ -52,6 +53,9 @@ control flow.
 | `managers` | `null` | Keep stored manager data. |
 | `systems` | `null` | Keep stored system data, including secure boot. |
 | `systems.processors` | system ID | Update system data while keeping stored processors. |
+| `systems.memory` | system ID | Update system data while keeping stored memory modules. |
+| `systems.storage` | system ID | Keep the system's stored storage and drives if any controller/drive read fails. |
+| `chassis.powerSupplies` | chassis ID | Update chassis data while keeping stored power supplies. |
 | `systems.secureBoot` | system ID | Update system data while keeping stored secure boot state. |
 | `chassis` | `null` | Keep stored chassis data, including PCIe devices. |
 | `chassis.pcieDevices` | chassis ID | Update chassis data while keeping stored PCIe devices. |
@@ -87,3 +91,24 @@ Targets with `targetError` are not probed. Probe failures do not populate
   are not fetched solely to populate references.
 - Exported errors are sanitized. Reference URLs omit authority and query
   parameters while retaining fragments.
+
+## Component Inventory
+
+Each system contains `memory[]` and `storage[]`; each storage record contains
+`drives[]`. Each chassis contains `powerSupplies[]`. Memory includes DIMM/HBM
+resources exposed by Redfish, with type, capacity in MiB, serial/part number,
+manufacturer, device locator, location, and status. Drives include model, serial,
+capacity in bytes, protocol, media type, revision, and status. PSUs include
+model, serial/part number, firmware, power capacity in watts, and status.
+
+Parent IDs are explicit: memory and storage have `systemId`; drives have both
+`systemId` and `storageId`; power supplies have `chassisId`. All include `id`
+and sanitized `odataId`. Optional BMC fields remain null in collector JSON.
+PSUs are read from `PowerSubsystem/PowerSupplies`, or the legacy `Power` array
+when no modern subsystem is advertised. Legacy `MemberId` becomes inventory `id`.
+Absent optional links produce empty lists without a domain error.
+
+Detailed table output (`inventory --detail`) lists these components. Processor
+status, location, and `links.Chassis` remain available; chassis status, location,
+and enclosure relationships remain available as well. A failed component domain
+preserves other inventory domains and records the parent ID in `domainErrors`.

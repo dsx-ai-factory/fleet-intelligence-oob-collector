@@ -66,6 +66,8 @@ pub struct SystemInventory {
     pub memory_summary: Option<MemorySummary>,
     pub secure_boot_enabled: Option<bool>,
     pub processors: Vec<ProcessorInventory>,
+    pub memory: Vec<MemoryInventory>,
+    pub storage: Vec<StorageInventory>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
@@ -141,6 +143,7 @@ pub struct ChassisInventory {
     pub status: Option<InventoryStatus>,
     pub location: Option<InventoryLocation>,
     pub pcie_devices: Vec<PcieDeviceInventory>,
+    pub power_supplies: Vec<PowerSupplyInventory>,
     pub links: std::collections::BTreeMap<String, InventoryLink>,
 }
 
@@ -311,4 +314,59 @@ pub struct Placement {
     pub rack_offset_units: Option<String>,
     pub additional_info: Option<String>,
     pub facility_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryInventory {
+    pub id: String,
+    pub system_id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub memory_device_type: Option<String>,
+    pub capacity_mib: Option<i64>,
+    pub serial_number: Option<String>,
+    pub part_number: Option<String>,
+    pub manufacturer: Option<String>,
+    pub device_locator: Option<String>,
+    pub location: Option<InventoryLocation>,
+    pub status: Option<InventoryStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageInventory {
+    pub id: String,
+    pub system_id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub drives: Vec<DriveInventory>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveInventory {
+    pub id: String,
+    pub storage_id: String,
+    pub system_id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub model: Option<String>,
+    pub serial_number: Option<String>,
+    pub capacity_bytes: Option<i64>,
+    pub protocol: Option<String>,
+    pub media_type: Option<String>,
+    pub revision: Option<String>,
+    pub status: Option<InventoryStatus>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerSupplyInventory {
+    pub id: String,
+    pub chassis_id: String,
+    pub odata_id: Option<SanitizedUriReference>,
+    pub model: Option<String>,
+    pub serial_number: Option<String>,
+    pub part_number: Option<String>,
+    pub firmware_version: Option<String>,
+    pub power_capacity_watts: Option<f64>,
+    pub status: Option<InventoryStatus>,
 }

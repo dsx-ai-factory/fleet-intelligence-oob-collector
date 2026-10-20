@@ -21,3 +21,6 @@ mod resources;
 mod status;
 
 pub use client::RedfishSource;
+
+#[cfg(test)]
+mod components_tests;

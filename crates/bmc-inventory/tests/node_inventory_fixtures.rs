@@ -121,6 +121,8 @@ fn compute_node_inventory_serializes_expected_json() {
             ..Default::default()
         }),
         secure_boot_enabled: Some(true),
+        memory: Vec::new(),
+        storage: Vec::new(),
         processors: vec![
             ProcessorInventory {
                 name: "Processor".to_string(),
@@ -232,6 +234,7 @@ fn compute_node_inventory_serializes_expected_json() {
             }),
             part_location_context: None,
         }),
+        power_supplies: Vec::new(),
         pcie_devices: vec![PcieDeviceInventory {
             name: "PcieDevice".to_string(),
             description: None,
@@ -374,6 +377,8 @@ fn nvswitch_node_inventory_serializes_expected_json() {
             }),
             secure_boot_enabled: None,
             processors: Vec::new(),
+            memory: Vec::new(),
+            storage: Vec::new(),
             links: links([
                 ("Chassis", &["/redfish/v1/Chassis/BMC_eeprom"]),
                 ("ManagedBy", &["/redfish/v1/Managers/BMC_0"]),
@@ -402,6 +407,7 @@ fn nvswitch_node_inventory_serializes_expected_json() {
                 part_location_context: None,
             }),
             pcie_devices: Vec::new(),
+            power_supplies: Vec::new(),
             links: links([
                 ("ComputerSystems", &["/redfish/v1/Systems/System_0"]),
                 ("ManagedBy", &["/redfish/v1/Managers/BMC_0"]),
