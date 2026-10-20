@@ -29,11 +29,10 @@ use bmc_attestation::models::BatchAttestation;
 use bmc_attestation::sink::BackendSink as AttestationBackendSink;
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
-use bmc_inventory::config::{CollectorReport, DeploymentReport, RuntimeReport};
 use bmc_inventory::models::{InventoryUuid, NodeInventory};
 use bmc_inventory::sink::{
-    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
-    JsonSink, TableSink,
+    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink,
+    CollectorRuntimeConfig, InventorySink, JsonSink, TableSink,
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
@@ -76,32 +75,21 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
-    pub deployment_config: Option<String>,
 }
 
 impl RuntimeOptions {
-    fn collector_report(&self) -> Result<CollectorReport, Box<dyn Error>> {
-        let deployment = self
-            .deployment_config
-            .as_deref()
-            .map(DeploymentReport::load)
-            .transpose()?
-            .unwrap_or_default();
-        Ok(CollectorReport {
-            runtime: RuntimeReport {
-                inventory_interval_seconds: self.interval_seconds.max(1),
-                target_concurrency: self.inventory.target_concurrency.max(1),
-                bmc_max_in_flight: self.inventory.bmc_max_in_flight,
-                bmc_requests_per_second: self.inventory.bmc_requests_per_second,
-                bmc_burst: self.inventory.bmc_burst,
-                timeout_seconds: self.inventory.timeout_seconds,
-                insecure_tls: self.inventory.insecure_tls,
-                latency_probe: self.inventory.latency_probe,
-                log_level: std::env::var("RUST_LOG").ok(),
-            },
-            nico: deployment.nico,
-            telemetry: deployment.telemetry,
-        })
+    fn runtime_config(&self) -> CollectorRuntimeConfig {
+        CollectorRuntimeConfig {
+            inventory_interval_seconds: self.interval_seconds.max(1),
+            target_concurrency: self.inventory.target_concurrency.max(1),
+            bmc_max_in_flight: self.inventory.bmc_max_in_flight,
+            bmc_requests_per_second: self.inventory.bmc_requests_per_second,
+            bmc_burst: self.inventory.bmc_burst,
+            timeout_seconds: self.inventory.timeout_seconds,
+            insecure_tls: self.inventory.insecure_tls,
+            latency_probe: self.inventory.latency_probe,
+            log_level: std::env::var("RUST_LOG").ok(),
+        }
     }
 }
 
@@ -152,7 +140,7 @@ async fn run_runtime_until_shutdown(
     options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let collector_report = options.collector_report()?;
+    let runtime_config = options.runtime_config();
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -184,7 +172,7 @@ async fn run_runtime_until_shutdown(
         // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
-            collector_report.clone(),
+            runtime_config.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
             Arc::clone(&dispatcher),
@@ -478,7 +466,7 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
-    collector_report: CollectorReport,
+    runtime_config: CollectorRuntimeConfig,
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
@@ -492,7 +480,7 @@ async fn collect_and_upload_inventory(
             .map(|target| target.mac.to_string()),
     )?;
     let mut backend_sink =
-        InventoryBackendSink::new(endpoint, session.jwt())?.with_collector_config(collector_report);
+        InventoryBackendSink::new(endpoint, session.jwt())?.with_runtime_config(runtime_config);
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
@@ -1073,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn collector_report_uses_effective_runtime_options_without_deployment_settings() {
+    fn runtime_config_uses_effective_options() {
         let runtime = RuntimeOptions {
             inventory: InventoryOptions {
                 config: "unused-targets.toml".to_string(),
@@ -1090,15 +1078,12 @@ mod tests {
             backend_url: Some("https://private.example.com".to_string()),
             agent_token: Some("must-not-be-reported".to_string()),
             interval_seconds: 0,
-            deployment_config: None,
         };
-        let report = runtime.collector_report().unwrap();
-        assert_eq!(report.runtime.inventory_interval_seconds, 1);
-        assert_eq!(report.runtime.target_concurrency, 1);
-        assert_eq!(report.runtime.bmc_max_in_flight, 1);
-        assert!(!report.runtime.latency_probe);
-        assert!(report.nico.is_none());
-        assert!(report.telemetry.is_none());
+        let config = runtime.runtime_config();
+        assert_eq!(config.inventory_interval_seconds, 1);
+        assert_eq!(config.target_concurrency, 1);
+        assert_eq!(config.bmc_max_in_flight, 1);
+        assert!(!config.latency_probe);
     }
 
     #[tokio::test]

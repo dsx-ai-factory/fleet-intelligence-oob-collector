@@ -24,7 +24,7 @@ use super::models::NodeInventory;
 
 pub use backend::{
     BackendBatchOutcome, BackendClient, BackendHttpError, BackendNodeOutcome, BackendSink,
-    HttpBackendClient,
+    CollectorRuntimeConfig, HttpBackendClient,
 };
 pub use json::JsonSink;
 pub use table::TableSink;

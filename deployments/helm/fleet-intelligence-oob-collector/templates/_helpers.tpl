@@ -1,7 +1,3 @@
-{{- define "fleet-intelligence-oob-collector.reportingName" -}}
-{{- printf "%s-reporting" (include "fleet-intelligence-oob-collector.fullname" . | trunc 53 | trimSuffix "-") -}}
-{{- end }}
-
 {{- define "fleet-intelligence-oob-collector.name" -}}
 {{- .Chart.Name | trunc 63 | trimSuffix "-" }}
 {{- end }}

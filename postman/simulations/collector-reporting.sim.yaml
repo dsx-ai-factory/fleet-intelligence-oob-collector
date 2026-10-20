@@ -1,5 +1,0 @@
-simulation: collector-reporting
-routing: path
-mocks:
-  - routeKey: backend
-    path: ../mocks/inventory/config.yaml

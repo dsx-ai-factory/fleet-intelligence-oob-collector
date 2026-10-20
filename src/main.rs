@@ -100,10 +100,6 @@ struct RuntimeArgs {
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]
     interval_seconds: u64,
-
-    /// JSON file containing non-sensitive NICo and telemetry deployment settings.
-    #[arg(long)]
-    deployment_config: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -193,7 +189,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,
-                deployment_config: args.deployment_config,
             })
             .await?
         }

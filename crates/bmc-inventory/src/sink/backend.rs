@@ -22,12 +22,27 @@ use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
 use crate::COLLECTOR_VERSION;
-use crate::config::CollectorReport;
 use crate::models::NodeInventory;
 
 pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
+
+/// Non-sensitive runtime settings shared by every node in an inventory batch.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectorRuntimeConfig {
+    pub inventory_interval_seconds: u64,
+    pub target_concurrency: usize,
+    pub bmc_max_in_flight: u32,
+    pub bmc_requests_per_second: u64,
+    pub bmc_burst: u64,
+    pub timeout_seconds: u64,
+    pub insecure_tls: bool,
+    pub latency_probe: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct BackendSink<C = HttpBackendClient> {
@@ -47,8 +62,8 @@ impl BackendSink<HttpBackendClient> {
         self.client.set_jwt(jwt);
     }
 
-    pub fn with_collector_config(mut self, config: CollectorReport) -> Self {
-        self.client.collector_config = Some(config);
+    pub fn with_runtime_config(mut self, config: CollectorRuntimeConfig) -> Self {
+        self.client.runtime_config = Some(config);
         self
     }
 }
@@ -85,7 +100,7 @@ pub struct HttpBackendClient {
     endpoint: String,
     jwt: String,
     client: reqwest::Client,
-    collector_config: Option<CollectorReport>,
+    runtime_config: Option<CollectorRuntimeConfig>,
 }
 
 impl HttpBackendClient {
@@ -112,7 +127,7 @@ impl HttpBackendClient {
             endpoint: endpoint.into(),
             jwt: jwt.into(),
             client: backend_http_client(request_timeout)?,
-            collector_config: None,
+            runtime_config: None,
         })
     }
 
@@ -205,7 +220,7 @@ impl BackendClient for HttpBackendClient {
             .bearer_auth(&self.jwt)
             .json(&build_batch_upsert_request(
                 inventories,
-                self.collector_config.as_ref(),
+                self.runtime_config.as_ref(),
             ))
             .send()
             .await?;
@@ -269,7 +284,7 @@ pub enum BackendNodeOutcome<'a> {
 
 fn build_batch_upsert_request<'a>(
     inventories: &'a [NodeInventory],
-    config: Option<&'a CollectorReport>,
+    runtime_config: Option<&'a CollectorRuntimeConfig>,
 ) -> BatchUpsertRequest<'a> {
     let data = inventories
         .iter()
@@ -280,7 +295,7 @@ fn build_batch_upsert_request<'a>(
     BatchUpsertRequest {
         collector: CollectorInfo {
             version: COLLECTOR_VERSION,
-            config,
+            config: runtime_config.map(|runtime| CollectorConfig { runtime }),
         },
         data,
     }
@@ -365,7 +380,12 @@ struct BatchUpsertRequest<'a> {
 struct CollectorInfo<'a> {
     version: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    config: Option<&'a CollectorReport>,
+    config: Option<CollectorConfig<'a>>,
+}
+
+#[derive(Serialize)]
+struct CollectorConfig<'a> {
+    runtime: &'a CollectorRuntimeConfig,
 }
 
 #[derive(serde::Serialize)]
@@ -521,54 +541,43 @@ mod tests {
     }
 
     #[test]
-    fn batch_reports_config_once_and_keeps_it_when_token_rotates() {
-        use crate::config::RuntimeReport;
-
-        let config = CollectorReport {
-            runtime: RuntimeReport {
-                inventory_interval_seconds: 3600,
-                target_concurrency: 8,
-                bmc_max_in_flight: 2,
-                bmc_requests_per_second: 5,
-                bmc_burst: 6,
-                timeout_seconds: 15,
-                insecure_tls: false,
-                latency_probe: false,
-                log_level: None,
-            },
-            nico: None,
-            telemetry: None,
+    fn batch_reports_runtime_config_once() {
+        let config = CollectorRuntimeConfig {
+            inventory_interval_seconds: 3600,
+            target_concurrency: 8,
+            bmc_max_in_flight: 2,
+            bmc_requests_per_second: 5,
+            bmc_burst: 6,
+            timeout_seconds: 15,
+            insecure_tls: false,
+            latency_probe: false,
+            log_level: None,
         };
-        let mut sink = BackendSink::new("https://api.example.com", "old-token")
+        let sink = BackendSink::new("https://api.example.com", "must-not-be-reported")
             .unwrap()
-            .with_collector_config(config);
-        sink.set_jwt("new-token");
+            .with_runtime_config(config);
         let inventories = [inventory("10.0.0.1"), inventory("10.0.0.2")];
-        let request =
-            build_batch_upsert_request(&inventories, sink.client.collector_config.as_ref());
+        let request = build_batch_upsert_request(&inventories, sink.client.runtime_config.as_ref());
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(
-            value["collector"]["config"]["runtime"]["inventoryIntervalSeconds"],
-            3600
+            value["collector"]["config"],
+            serde_json::json!({
+                "runtime": {
+                    "inventoryIntervalSeconds": 3600,
+                    "targetConcurrency": 8,
+                    "bmcMaxInFlight": 2,
+                    "bmcRequestsPerSecond": 5,
+                    "bmcBurst": 6,
+                    "timeoutSeconds": 15,
+                    "insecureTls": false,
+                    "latencyProbe": false
+                }
+            })
         );
-        assert_eq!(
-            value["collector"]["config"]["runtime"]["latencyProbe"],
-            false
-        );
-        assert_eq!(
-            value["collector"]["config"]["runtime"]["insecureTls"],
-            false
-        );
-        assert!(value["collector"]["config"].get("nico").is_none());
-        assert!(value["collector"]["config"].get("telemetry").is_none());
         for item in value["data"].as_array().unwrap() {
             assert!(item.get("collector").is_none());
-            assert!(item.get("config").is_none());
         }
-        let json = value.to_string();
-        assert!(!json.contains("old-token"));
-        assert!(!json.contains("new-token"));
-        assert!(!json.contains("flushInterval"));
+        assert!(!value.to_string().contains("must-not-be-reported"));
     }
 
     #[test]
