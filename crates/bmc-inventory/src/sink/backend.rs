@@ -31,20 +31,27 @@ const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectorConfig {
-    pub runtime_config: CollectorRuntimeConfig,
+    pub runtime: RuntimeConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nico_health: Option<NicoHealthConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub otel_gateway: Option<OtelGatewayConfig>,
 }
 
-pub type NicoHealthConfig = serde_json::Map<String, serde_json::Value>;
-pub type OtelGatewayConfig = serde_json::Map<String, serde_json::Value>;
+#[derive(Clone, Debug, Serialize)]
+pub struct NicoHealthConfig {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OtelGatewayConfig {
+    pub enabled: bool,
+}
 
 /// Non-sensitive runtime settings shared by every node in an inventory batch.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CollectorRuntimeConfig {
+pub struct RuntimeConfig {
     pub inventory_interval_seconds: u64,
     pub target_concurrency: usize,
     pub bmc_max_in_flight: u32,
@@ -551,7 +558,7 @@ mod tests {
     #[test]
     fn batch_reports_config_once_and_preserves_optional_enablement() {
         let config = CollectorConfig {
-            runtime_config: CollectorRuntimeConfig {
+            runtime: RuntimeConfig {
                 inventory_interval_seconds: 3600,
                 target_concurrency: 8,
                 bmc_max_in_flight: 2,
@@ -575,7 +582,7 @@ mod tests {
         assert_eq!(
             value["collector"]["config"],
             serde_json::json!({
-                "runtimeConfig": {
+                "runtime": {
                     "inventoryIntervalSeconds": 3600,
                     "targetConcurrency": 8,
                     "bmcMaxInFlight": 2,
@@ -599,12 +606,8 @@ mod tests {
             (Some(false), None),
         ] {
             let config = CollectorConfig {
-                nico_health: nico.map(|enabled| {
-                    NicoHealthConfig::from_iter([("enabled".to_string(), enabled.into())])
-                }),
-                otel_gateway: gateway.map(|enabled| {
-                    OtelGatewayConfig::from_iter([("enabled".to_string(), enabled.into())])
-                }),
+                nico_health: nico.map(|enabled| NicoHealthConfig { enabled }),
+                otel_gateway: gateway.map(|enabled| OtelGatewayConfig { enabled }),
                 ..config.clone()
             };
             let value =
@@ -622,26 +625,6 @@ mod tests {
                     .as_ref()
             );
         }
-
-        let additional_fields = serde_json::json!({
-            "enabled": true,
-            "futureOption": { "intervalSeconds": 30, "labels": ["example"] }
-        });
-        let extended = CollectorConfig {
-            nico_health: Some(serde_json::from_value(additional_fields.clone()).unwrap()),
-            otel_gateway: Some(serde_json::from_value(additional_fields.clone()).unwrap()),
-            ..config
-        };
-        let value = serde_json::to_value(build_batch_upsert_request(&inventories, Some(&extended)))
-            .unwrap();
-        assert_eq!(
-            value["collector"]["config"]["nicoHealth"],
-            additional_fields
-        );
-        assert_eq!(
-            value["collector"]["config"]["otelGateway"],
-            additional_fields
-        );
     }
 
     #[test]

@@ -32,8 +32,7 @@ use bmc_inventory::config;
 use bmc_inventory::models::{InventoryUuid, NodeInventory};
 use bmc_inventory::sink::{
     BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
-    CollectorRuntimeConfig, InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig,
-    TableSink,
+    InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
@@ -79,8 +78,8 @@ pub struct RuntimeOptions {
 }
 
 impl RuntimeOptions {
-    fn runtime_config(&self) -> CollectorRuntimeConfig {
-        CollectorRuntimeConfig {
+    fn runtime_config(&self) -> RuntimeConfig {
+        RuntimeConfig {
             inventory_interval_seconds: self.interval_seconds.max(1),
             target_concurrency: self.inventory.target_concurrency.max(1),
             bmc_max_in_flight: self.inventory.bmc_max_in_flight,
@@ -154,17 +153,17 @@ async fn run_runtime_until_shutdown(
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let collector_config = CollectorConfig {
-        runtime_config: options.runtime_config(),
+        runtime: options.runtime_config(),
         nico_health: parse_optional_bool(
             "FLEETINT_NICO_ENABLED",
             std::env::var("FLEETINT_NICO_ENABLED"),
         )?
-        .map(|enabled| NicoHealthConfig::from_iter([("enabled".to_string(), enabled.into())])),
+        .map(|enabled| NicoHealthConfig { enabled }),
         otel_gateway: parse_optional_bool(
             "FLEETINT_OTEL_GATEWAY_ENABLED",
             std::env::var("FLEETINT_OTEL_GATEWAY_ENABLED"),
         )?
-        .map(|enabled| OtelGatewayConfig::from_iter([("enabled".to_string(), enabled.into())])),
+        .map(|enabled| OtelGatewayConfig { enabled }),
     };
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
