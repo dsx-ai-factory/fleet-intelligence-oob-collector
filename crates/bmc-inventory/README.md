@@ -91,24 +91,3 @@ Targets with `targetError` are not probed. Probe failures do not populate
   are not fetched solely to populate references.
 - Exported errors are sanitized. Reference URLs omit authority and query
   parameters while retaining fragments.
-
-## Component Inventory
-
-Each system contains `memory[]` and `storage[]`; each storage record contains
-`drives[]`. Each chassis contains `powerSupplies[]`. Memory includes DIMM/HBM
-resources exposed by Redfish, with type, capacity in MiB, serial/part number,
-manufacturer, device locator, location, and status. Drives include model, serial,
-capacity in bytes, protocol, media type, revision, and status. PSUs include
-model, serial/part number, firmware, power capacity in watts, and status.
-
-Parent IDs are explicit: memory and storage have `systemId`; drives have both
-`systemId` and `storageId`; power supplies have `chassisId`. All include `id`
-and sanitized `odataId`. Optional BMC fields remain null in collector JSON.
-PSUs are read from `PowerSubsystem/PowerSupplies`, or the legacy `Power` array
-when no modern subsystem is advertised. Legacy `MemberId` becomes inventory `id`.
-Absent optional links produce empty lists without a domain error.
-
-Detailed table output (`inventory --detail`) lists these components. Processor
-status, location, and `links.Chassis` remain available; chassis status, location,
-and enclosure relationships remain available as well. A failed component domain
-preserves other inventory domains and records the parent ID in `domainErrors`.
