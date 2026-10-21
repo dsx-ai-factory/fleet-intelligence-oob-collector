@@ -133,9 +133,9 @@ Intelligence placement fields.
 The JSON secret file is required for all collector runs. Store credential values
 in its profiles or per-MAC overrides and select a profile with
 `credentials_profile` where needed.
-Store the TOML in the existing ConfigMap and the JSON file in the existing
-Secret referenced by the chart. Credential values never enter Helm release
-state. See [installation](installation.md#create-configmap-and-secrets).
+Helm renders the password-free TOML from `inventory` values and references an
+existing Secret for the JSON file. Credential values never enter Helm release
+state. See [installation](installation.md#configure-targets-and-secrets).
 
 `bmc-collector render-nico-config` reads the same TOML and JSON files as the
 collector. It writes the JSON file's absolute path and each selected profile
@@ -146,47 +146,33 @@ endpoints without NICo machine, switch, or power-shelf descriptors.
 
 ## Helm values
 
-The commonly configured chart values are:
+Both services use `inventory.targets`; addresses are IP literals with optional
+ports. Target placement and labels override shared defaults. All target kinds
+render as generic static Redfish endpoints through the Rust renderer.
 
-| Value | Default | Description |
-| --- | --- | --- |
-| `config.configMapName` | `fleet-intelligence-config` | Existing ConfigMap containing the password-free TOML file. |
-| `config.configKey` | `config.toml` | Key containing the TOML file. |
-| `credentials.existingSecret` | `fleet-intelligence-bmc-credentials` | Existing Secret containing the shared JSON credentials. |
-| `credentials.secretKey` | `credentials.json` | Secret key mounted as `/run/secrets/bmc/credentials.json`. |
-| `bmcCollector.backendUrl` | `https://data.fleet-intelligence.nvidia.com` | API base URL without `/v1/agent`. |
-| `bmcCollector.agentTokenSecretName` | `fleet-intelligence-oob-collector-agent-token` | Existing Secret containing `agent-token`. |
-| `bmcCollector.intervalSeconds` | `86400` | Collection interval. |
-| `bmcCollector.insecureTls` | `false` | Disable BMC certificate verification. |
-| `bmcCollector.logLevel` | `info` | Rust tracing filter. |
-| `bmcCollector.targetConcurrency` | `64` | Maximum concurrent inventory or attestation target workflows. |
-| `bmcCollector.bmcMaxInFlight` | `4` | Maximum concurrent Redfish requests to each BMC. |
-| `bmcCollector.bmcRequestsPerSecond` | `10` | Sustained Redfish request rate for each BMC. |
-| `bmcCollector.bmcBurst` | `10` | Per-BMC Redfish request burst capacity. |
-| `bmcCollector.timeoutSeconds` | `30` | Timeout for each Redfish request. |
-| `nicoHardwareHealth.enabled` | `true` | Deploy NICo metrics and log collection. |
-| `nicoHardwareHealth.metricsPrefix` | `fleetint` | NICo metric prefix. |
-| `otelGateway.enabled` | `true` | Deploy the authenticated telemetry gateway. |
+| Setting | Purpose |
+| --- | --- |
+| `inventory` | Targets, placement, and labels. |
+| `credentials` | Shared BMC JSON Secret reference. |
+| `backend` | Fleet Intelligence URL and bootstrap token reference. |
+| `telemetry.endpoint` | External OTLP/gRPC destination; disable `otelGateway`. |
+| `proxy` | Shared proxy, enabled explicitly; URLs cannot contain credentials. |
+| `bmcCollector.redfish` | Per-BMC request limits, timeout, and TLS verification. |
+| `otelGateway` | Gateway deployment controls and replica count. |
 
-See the chart's
-[values.yaml](../deployments/helm/fleet-intelligence-oob-collector/values.yaml)
-for the full value reference. To use an external OTLP/gRPC collector, disable
-`otelGateway.enabled` and set `nicoHardwareHealth.otlpEndpoint`. To run only
-inventory and attestation, disable both NICo and the gateway.
+All workloads share image, resource, scheduling, annotation, and logging fields.
+Optional features use `enabled`; application Secret references use
+`existingSecret` and `secretKey`. See [values.yaml](../deployments/helm/fleet-intelligence-oob-collector/values.yaml)
+for defaults and [installation](installation.md#configure-targets-and-secrets)
+for an example.
+
+NICo uses the renderer defaults for sensor collection, SSE logs, GPU identity,
+CPER diagnostics, and alert details. Its polling and concurrency settings are
+not exposed as Helm values.
 
 ## Proxy and TLS
 
-Configure a cluster-reachable proxy with:
-
-```yaml
-bmcCollector:
-  proxy:
-    httpProxy: http://proxy.example.internal:3128
-    httpsProxy: http://proxy.example.internal:3128
-    allProxy: ""
-    noProxy: localhost,127.0.0.1,.svc,.cluster.local
-```
-
-These values are passed to the collector and gateway. Do not commit
-authenticated proxy URLs. Set `bmcCollector.insecureTls=true` only when BMC
-certificates cannot be validated; it does not disable backend TLS validation.
+Enable `proxy` with a cluster-reachable URL without credentials.
+`bmcCollector.redfish.insecureTls` disables BMC certificate verification and
+permits interception. It does not affect backend TLS or NICo; the pinned NICo
+client accepts invalid Redfish certificates.

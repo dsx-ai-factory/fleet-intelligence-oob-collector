@@ -71,8 +71,8 @@ missing customer context; a trusted edge must inject that context before
 requests reach the agent API.
 
 The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
-set at the start of each cycle. This allows target changes from a projected
-Kubernetes Secret to take effect without restarting the collector.
+set at the start of each cycle. Mounted target configuration and JSON
+credential updates are read on the next cycle.
 
 The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
 and sleep. Shutdown cancels Redfish collection and closes the inventory
@@ -101,6 +101,9 @@ endpoint or workflow from monopolizing collection.
 
 The collector and NICo config renderer share the password-free target
 configuration and projected credential files, avoiding duplicated credentials.
+Helm generates only the collector TOML from `inventory` values. ConfigMap
+checksum annotations roll both deployments when that inventory changes, and
+NICo's init container regenerates its TOML with `render-nico-config`.
 Generated NICo configuration is held in a memory-backed pod volume. The
 collector and NICo use `Recreate` deployments to avoid duplicate collection;
 the independently scalable gateway uses `RollingUpdate`.

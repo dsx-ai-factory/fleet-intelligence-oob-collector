@@ -1,104 +1,91 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Existing Docker registry Secrets used to pull chart images.
-imagePullSecrets: []
+# Shared hardware inventory.
+inventory:
+  # address is the BMC IP; mac also keys credential overrides.
+  targets: []
+  # - kind: compute # compute | nvswitch | power_shelf | unknown
+  #   name: node-01
+  #   address: 192.0.2.10
+  #   mac: "00:11:22:33:44:55"
+  #   credentialsProfile: bmc # Profile name in the credentials file.
+  computeZone: "" # Default compute zone for every target.
+  nodeGroup: "" # Default node group for every target.
+  labels: {} # Default labels applied to every target.
 
-# Existing ConfigMap containing the password-free Fleet Intelligence OOB
-# collector TOML.
-config:
-  configMapName: fleet-intelligence-config
-  configKey: config.toml
-
-# Shared BMC JSON file mounted into the collector, NICo init, and NICo runtime.
-# Values stay in the existing Secret, outside Helm release state.
+# Shared BMC JSON file; credential values belong in the Secret.
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 
-# Fleet Intelligence BMC inventory and attestation collector.
+# Fleet Intelligence destination and shared bootstrap token.
+backend:
+  url: https://data.fleet-intelligence.nvidia.com
+  agentToken:
+    existingSecret: fleet-intelligence-oob-collector-agent-token
+    secretKey: agent-token
+
+# External OTLP/gRPC endpoint; requires otelGateway.enabled=false.
+telemetry:
+  endpoint: ""
+
+# Registry pull Secrets.
+imagePullSecrets: []
+# - name: ghcr-pull-secret
+
+# Proxy URLs must not contain credentials.
+proxy:
+  enabled: false
+  httpProxy: ""
+  httpsProxy: ""
+  allProxy: ""
+  noProxy: localhost,127.0.0.1,.svc,.cluster.local
+
 bmcCollector:
+  enabled: true
   image:
     repository: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
-    # Defaults to the chart version when empty.
+    # An empty tag uses the chart version.
     tag: ""
     pullPolicy: IfNotPresent
-  # Fleet Intelligence API base URL, without a /v1/agent suffix.
-  backendUrl: https://data.fleet-intelligence.nvidia.com
-  # Secret containing the `agent-token` key.
-  agentTokenSecretName: fleet-intelligence-oob-collector-agent-token
-  # Rust tracing filter. Accepts levels such as debug or full RUST_LOG directives.
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
   logLevel: info
-  # Optional plain proxy settings rendered as container environment variables.
-  proxy:
-    httpProxy: ""
-    httpsProxy: ""
-    allProxy: ""
-    noProxy: ""
   intervalSeconds: 86400
-  insecureTls: false
-  # Maximum number of target inventory or attestation workflows run concurrently.
   targetConcurrency: 64
-  # Maximum number of concurrent Redfish requests to a single BMC.
-  bmcMaxInFlight: 4
-  # Sustained Redfish request rate allowed for each BMC.
-  bmcRequestsPerSecond: 10
-  # Per-BMC Redfish request burst capacity.
-  bmcBurst: 10
-  # Timeout for each Redfish request.
-  timeoutSeconds: 30
-  # Measure collector-to-BMC TCP connect time after each inventory collection.
-  latencyProbe: true
+  redfish:
+    maxInFlight: 4
+    requestsPerSecond: 10
+    timeoutSeconds: 30
+    # Disables verification and permits interception; collector only; NICo does not verify BMC certificates.
+    insecureTls: false
+  latencyProbe:
+    enabled: true
 
-# Optional NICo Redfish hardware-health service. Its generated TOML
-# configuration references the shared JSON credentials and is kept in a memory-backed
-# pod-local volume.
 nicoHardwareHealth:
   enabled: true
-  # External OTLP/gRPC endpoint used only when otelGateway.enabled is false.
-  otlpEndpoint: ""
-  metricsPrefix: fleetint
   image:
     repository: ghcr.io/dsx-ai-factory/nico-hardware-health
-    # Defaults to the chart version when empty.
+    # An empty tag uses the chart version.
     tag: ""
     pullPolicy: IfNotPresent
-  # Optional Secret with ca.crt, tls.crt, and tls.key for NICo API mTLS.
-  tlsSecretName: ""
-  service:
-    enabled: true
-    port: 9009
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  logLevel: info
 
-# Authenticated OpenTelemetry gateway for NICo and future OOB OTLP export.
-# NICo is pointed at this gateway automatically when it is enabled.
 otelGateway:
   enabled: true
   image:
     repository: ghcr.io/nvidia/fleetint-otelcol
     tag: 1.4.0
     pullPolicy: IfNotPresent
-  replicas: 1
-  terminationGracePeriodSeconds: 30
-
-  # Optional overrides. Empty values derive from bmcCollector.backendUrl and
-  # bmcCollector.agentTokenSecretName.
-  enroll:
-    endpoint: ""
-    existingSecret: ""
-    secretKey: agent-token
-  backendEndpoint: ""
-
-  service:
-    grpcPort: 4317
-    httpPort: 4318
-  networkPolicy:
-    enabled: true
-  podDisruptionBudget:
-    enabled: false
-    minAvailable: 1
-  memoryLimiter:
-    limitPercentage: 80
-    spikeLimitPercentage: 20
   resources:
     limits:
       cpu: 500m
@@ -106,3 +93,9 @@ otelGateway:
     requests:
       cpu: 100m
       memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  logLevel: warn
+  replicas: 1

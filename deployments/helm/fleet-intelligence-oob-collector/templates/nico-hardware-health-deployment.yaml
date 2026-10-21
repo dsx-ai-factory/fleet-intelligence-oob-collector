@@ -19,10 +19,16 @@ spec:
       app.kubernetes.io/component: nico-hardware-health
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.nicoHardwareHealth.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "fleet-intelligence-oob-collector.nicoHardwareHealthSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: nico-hardware-health
     spec:
+      {{- include "fleet-intelligence-oob-collector.scheduling" .Values.nicoHardwareHealth | nindent 6 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -48,19 +54,19 @@ spec:
           args:
             - render-nico-config
             - --config
-            - /etc/fleet-intelligence/{{ .Values.config.configKey }}
+            - /etc/fleet-intelligence/config.toml
             - --output
             - /etc/nico-health/config.toml
             - --otlp-endpoint
             {{- if .Values.otelGateway.enabled }}
-            - {{ printf "http://%s:%v" (include "fleet-intelligence-oob-collector.otelGatewayName" .) .Values.otelGateway.service.grpcPort | quote }}
+            - {{ printf "http://%s:4317" (include "fleet-intelligence-oob-collector.otelGatewayName" .) | quote }}
             {{- else }}
-            - {{ required "nicoHardwareHealth.otlpEndpoint is required when the OTEL gateway is disabled" (.Values.nicoHardwareHealth.otlpEndpoint | trim) | quote }}
+            - {{ required "telemetry.endpoint is required when the OTEL gateway is disabled" (.Values.telemetry.endpoint | trim) | quote }}
             {{- end }}
             - --metrics-endpoint
-            - {{ printf "0.0.0.0:%v" .Values.nicoHardwareHealth.service.port | quote }}
+            - "0.0.0.0:9009"
             - --metrics-prefix
-            - {{ required "nicoHardwareHealth.metricsPrefix is required" .Values.nicoHardwareHealth.metricsPrefix | quote }}
+            - fleetint
           volumeMounts:
             - name: collector-config
               mountPath: /etc/fleet-intelligence
@@ -82,9 +88,13 @@ spec:
             readOnlyRootFilesystem: true
           args:
             - /etc/nico-health/config.toml
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.nicoHardwareHealth.logLevel | quote }}
+            {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           ports:
             - name: metrics
-              containerPort: {{ .Values.nicoHardwareHealth.service.port }}
+              containerPort: 9009
           livenessProbe:
             httpGet:
               path: /livez
@@ -92,27 +102,24 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 300
             failureThreshold: 3
+          resources:
+            {{- toYaml .Values.nicoHardwareHealth.resources | nindent 12 }}
           volumeMounts:
             - name: nico-hardware-health-config
               mountPath: /etc/nico-health
               readOnly: true
-            - name: tmp
-              mountPath: /tmp
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
-            {{- if .Values.nicoHardwareHealth.tlsSecretName }}
-            - name: tls
-              mountPath: /var/run/secrets/spiffe.io
-              readOnly: true
-            {{- end }}
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: collector-config
           configMap:
-            name: {{ required "config.configMapName is required" .Values.config.configMapName | quote }}
+            name: {{ include "fleet-intelligence-oob-collector.fullname" . }}-config
             items:
-              - key: {{ .Values.config.configKey | quote }}
-                path: {{ .Values.config.configKey | quote }}
+              - key: collector.toml
+                path: config.toml
                 mode: 0440
         - name: nico-hardware-health-config
           emptyDir:
@@ -122,14 +129,10 @@ spec:
           emptyDir: {}
         - name: bmc-credentials
           secret:
-            secretName: {{ required "credentials.existingSecret is required" .Values.credentials.existingSecret | quote }}
+            secretName: {{ .Values.credentials.existingSecret | quote }}
             defaultMode: 0440
             items:
               - key: {{ .Values.credentials.secretKey | quote }}
                 path: credentials.json
-        {{- if .Values.nicoHardwareHealth.tlsSecretName }}
-        - name: tls
-          secret:
-            secretName: {{ .Values.nicoHardwareHealth.tlsSecretName | quote }}
-        {{- end }}
+
 {{- end }}

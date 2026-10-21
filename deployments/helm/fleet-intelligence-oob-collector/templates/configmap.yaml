@@ -1,0 +1,13 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- include "fleet-intelligence-oob-collector.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.fullname" . }}-config
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+data:
+  collector.toml: |
+    {{- regexReplaceAll "(?m)^[ \\t]+$" (include "fleet-intelligence-oob-collector.collectorConfig" . | trim | nindent 4) "" }}
