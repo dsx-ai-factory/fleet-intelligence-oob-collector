@@ -95,9 +95,9 @@ replace placeholder values only in that copy. Keep the credentials file owned
 by root with mode `0600`; the installed documentation example must contain
 placeholders only.
 NICo's `ExecStartPre` uses `bmc-collector render-nico-config` to reference
-`/etc/fleetint-oob/credentials/credentials.json`. Credential values are not copied into generated TOML. Upgrades
-preserve operator files: migrate old username/password file references to
-`[credentials].file` and `credentials_profile` before restarting services.
+`/etc/fleetint-oob/credentials/credentials.json`. Generated NICo TOML contains
+the shared file path and each target's selected profile; credential values stay
+in the JSON file.
 
 Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the
 backend. Environment files do not expand references to other variables.

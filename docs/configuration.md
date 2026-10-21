@@ -140,7 +140,7 @@ state. See [installation](installation.md#configure-targets-and-secrets).
 `bmc-collector render-nico-config` reads the same TOML and JSON files as the
 collector. It writes the JSON file's absolute path and each selected profile
 into NICo TOML, without copying credential values. Kubernetes invokes this
-command in the existing init container; the host package uses its existing
+command in its init container; the host package uses
 systemd `ExecStartPre`. All target kinds render as generic static Redfish
 endpoints without NICo machine, switch, or power-shelf descriptors.
 
@@ -167,8 +167,7 @@ for defaults and [installation](installation.md#configure-targets-and-secrets)
 for an example.
 
 NICo uses the renderer defaults for sensor collection, SSE logs, GPU identity,
-CPER diagnostics, and alert details. Its polling and concurrency settings are
-not exposed as Helm values.
+CPER diagnostics, and alert details.
 
 ## Proxy and TLS
 

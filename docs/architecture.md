@@ -116,8 +116,8 @@ cluster CNI.
 The experimental `fleetint-oob` host package runs the same three components as
 `fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd
 services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's
-`ExecStartPre` replaces the Kubernetes init container and generates a private
-configuration under `/run`. These prototype services run as root; the gateway
+`ExecStartPre` renders NICo's private configuration under `/run` before the
+service starts. These prototype services run as root; the gateway
 listens only on loopback. Rust binaries are built statically with musl and the
 gateway with Go's CGO disabled; package builds verify no ELF interpreter or
 shared-library requirements remain. See the [host package prototype](../deployments/packages/README.md)
