@@ -184,8 +184,7 @@ if they differ, and disable any automation that would reinstall the release.
      -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
-3. Delete the separately created Secrets only if no other workloads use them.
-   The Helm-owned ConfigMap is removed with the release:
+3. Delete credential Secrets that are no longer used:
 
    ```bash
    kubectl delete secret fleet-intelligence-oob-collector-agent-token \
