@@ -41,6 +41,7 @@ jobs:
       - run: make packages-test-hooks packages-test-build
       - run: make debian-test
       - run: make package-snapshot
+      - run: make release-test
       - uses: actions/upload-artifact@v4
         with:
           name: debian-${{ matrix.architecture }}

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+source_dir=$PWD
+root=$(mktemp -d /tmp/oob-signing-tests.XXXXXX)
+trap 'rm -rf "$root"' EXIT
+export GNUPGHOME="$root/gnupg"
+install -d -m700 "$GNUPGHOME"
+gpg --batch --passphrase '' --quick-gen-key 'OOB release test <release@example.test>' ed25519 sign 0
+fingerprint=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+project="$root/project"
+mkdir -p "$project/scripts" "$project/deployments/packages/keys" "$root/bin" "$project/dist" "$root/store"
+cp scripts/*.sh "$project/scripts/"
+# Production scripts retain their approved pin. Only temporary copies use this key.
+sed -i "s/FE0C8B74CA66357C13BE197DCCE3C963087199B3/$fingerprint/g" "$project"/scripts/*.sh
+gpg --batch --armor --export "$fingerprint" > "$project/deployments/packages/keys/fleet-intelligence.pub.asc"
+cp deployments/packages/tests/fixtures/nvsec.sh "$root/bin/nvsec"
+cp deployments/packages/tests/fixtures/curl.sh "$root/bin/curl"
+chmod 755 "$root/bin/"*
+export PATH="$root/bin:$PATH" NVSEC_BIN="$root/bin/nvsec"
+export NVSEC_SSA_CLIENT_ID=test-client NVSEC_SSA_CLIENT_SECRET=test-client-secret
+export SIGN_LOG="$root/sign-log" UPLOAD_STORE="$root/store" HTTP_LOG="$root/requests"
+: > "$SIGN_LOG"
+: > "$HTTP_LOG"
+cd "$project"
+dist="$project/dist"
+key="$project/deployments/packages/keys/fleet-intelligence.pub.asc"
+for arch in amd64 arm64; do
+    tree="$root/$arch"
+    mkdir -p "$tree/DEBIAN"
+    printf 'Package: fleetint-oob\nVersion: 1.2.3\nArchitecture: %s\nMaintainer: Test <test@example.test>\nDescription: offline signing fixture\n' "$arch" > "$tree/DEBIAN/control"
+    printf fixture > "$tree/payload"
+    dpkg-deb --build --root-owner-group "$tree" "$dist/fleetint-oob_1.2.3_$arch.deb"
+done
+cp -r "$dist" "$root/original"
+scripts/prepare-debian-release.sh "$dist" 1.2.3
+[ "$(wc -l < "$SIGN_LOG")" -eq 3 ]
+scripts/verify-debian-release.sh "$dist"
+cp -r "$dist" "$root/baseline"
+restore() {
+    rm -f "$dist/"*
+    cp "$root/baseline/"* "$dist/"
+}
+reject() {
+    if "$@"; then
+        printf 'Unexpected success: %s\n' "$*" >&2
+        exit 1
+    fi
+}
+package="$dist/fleetint-oob_1.2.3_amd64.deb"
+for mode in empty missing; do
+    cp "$root/original/${package##*/}" "$package"
+    export SIGN_MODE=$mode
+    reject scripts/sign-linux-packages.sh "$dist" "$key"
+    cmp "$root/original/${package##*/}" "$package"
+    unset SIGN_MODE
+    restore
+done
+reject scripts/verify-linux-package-signature.sh "$package" "$source_dir/deployments/packages/keys/fleet-intelligence.pub.asc"
+printf unsigned > "$root/extra"
+ar q "$package" "$root/extra"
+reject scripts/verify-linux-package-signature.sh "$package" "$key"
+restore
+member=$(ar t "$package" | grep '^data.tar')
+printf 'altered signed payload' > "$root/$member"
+ar r "$package" "$root/$member"
+reject scripts/verify-debian-release.sh "$dist"
+restore
+printf '%064d  fake.deb\n' 0 > "$dist/checksums.txt"
+reject scripts/verify-debian-release.sh "$dist"
+restore
+export ARTIFACTORY_URL=https://packages.example.test/oob
+export ARTIFACTORY_USER=test-user ARTIFACTORY_TOKEN=test-repository-token
+scripts/publish-deb-artifactory.sh "$dist"
+[ "$(find "$UPLOAD_STORE" -type f | wc -l)" -eq 2 ]
+puts=$(grep -c '^PUT ' "$HTTP_LOG")
+scripts/publish-deb-artifactory.sh "$dist"
+[ "$(grep -c '^PUT ' "$HTTP_LOG")" -eq "$puts" ]
+for problem in redirect changed signature http; do
+    restore
+    : > "$HTTP_LOG"
+    case "$problem" in
+        redirect) export REDIRECT=1 ;;
+        changed) printf 'different published bytes' > "$UPLOAD_STORE/${package##*/}" ;;
+        signature) printf 'not a signature' > "$dist/checksums.txt.asc" ;;
+        http) export ARTIFACTORY_URL=http://packages.example.test/oob ;;
+    esac
+    reject scripts/publish-deb-artifactory.sh "$dist"
+    if grep '^PUT ' "$HTTP_LOG"; then
+        echo 'Publication proceeded after validation failure' >&2; exit 1
+    else
+        [[ $? == 1 ]]
+    fi
+    unset REDIRECT
+done
+# Reject malformed destinations before creating credentials or issuing requests.
+for destination in 'https://user:password@example.test/oob' 'https://example.test/oob?query' 'https://example.test/oob#fragment' 'https://example.test:invalid/oob' 'https://example.test:70000/oob' 'https://example.test/white space'; do
+    ARTIFACTORY_URL="$destination" reject scripts/publish-deb-artifactory.sh --check-config
+done
+printf 'Offline signing, authentication, tamper rejection and immutable publication checks passed\n'
