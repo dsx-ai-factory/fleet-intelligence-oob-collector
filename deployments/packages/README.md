@@ -168,8 +168,8 @@ Run `make packages-test-hooks packages-test-build` for isolated lifecycle and bu
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
 Real service startup, upgrade/rollback, and shutdown during collection still
-need validation in a disposable VM before production use. Signing and release
-publishing are outside this prototype.
+need validation in a disposable VM before production use. For the signed Debian release flow and signing runner configuration, see
+[signed host-package releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-package-release.md).
 
 ## Docker validation
 
