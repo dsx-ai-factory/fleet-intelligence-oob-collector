@@ -144,8 +144,8 @@ as inventory `computeZone` and `nodeGroup` and mirrors them to NICo telemetry as
 `compute_zone` and `node_group`. Custom labels remain telemetry-only.
 
 An init container runs `bmc-collector render-nico-config` to translate the shared
-config into NICo static endpoints. Compute targets use `machine` descriptors;
-other kinds use generic Redfish endpoints without NICo IDs or serials.
+config into NICo static endpoints. All target kinds use generic Redfish endpoints
+without NICo machine, switch, or power-shelf descriptors.
 NICo then emits the shared labels
 and discovered Redfish identity on OTLP resources. Per-target labels can add to
 or override the shared labels. The collector adds the reserved

@@ -141,8 +141,8 @@ state. See [installation](installation.md#create-configmap-and-secrets).
 collector. It writes the JSON file's absolute path and each selected profile
 into NICo TOML, without copying credential values. Kubernetes invokes this
 command in the existing init container; the host package uses its existing
-systemd `ExecStartPre`. Non-compute targets use generic Redfish endpoints when
-NICo IDs and serial numbers are unavailable.
+systemd `ExecStartPre`. All target kinds render as generic static Redfish
+endpoints without NICo machine, switch, or power-shelf descriptors.
 
 ## Helm values
 

@@ -20,7 +20,7 @@ use std::net::IpAddr;
 
 use serde::Serialize;
 
-use super::{CollectorConfig, TargetKind};
+use super::CollectorConfig;
 
 #[derive(Clone, Debug)]
 pub struct NicoConfigOptions {
@@ -65,9 +65,6 @@ pub fn render_nico_config(
             mac: target.mac.to_string(),
             credentials_profile: target.credentials_profile.as_deref(),
             labels: target.labels.clone(),
-            // Switch/power-shelf descriptors require NICo IDs or serials.
-            // Standalone targets without those identities stay generic.
-            machine: (target.kind == TargetKind::Compute).then_some(NicoEndpointKind {}),
         })
         .collect();
 
@@ -140,12 +137,7 @@ struct NicoStaticBmcEndpoint<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     credentials_profile: Option<&'a str>,
     labels: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    machine: Option<NicoEndpointKind>,
 }
-
-#[derive(Serialize)]
-struct NicoEndpointKind {}
 
 /// NICo's opt-in telemetry attributes.
 ///
@@ -289,7 +281,7 @@ mod tests {
         assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
         assert_eq!(endpoint["labels"]["machine_name"].as_str(), Some("node-01"));
         assert_eq!(endpoint["labels"]["site"].as_str(), Some("dev"));
-        assert!(endpoint.get("machine").is_some());
+        assert!(endpoint.get("machine").is_none());
         assert_eq!(
             rendered["sinks"]["otlp"]["targets"]
                 .as_array()
@@ -311,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_compute_and_generic_endpoints() {
+    fn renders_all_target_kinds_as_generic_static_endpoints() {
         let collector = parse_test_config(
             r#"
             [[targets]]
@@ -348,14 +340,15 @@ mod tests {
             .as_array()
             .expect("static endpoints");
 
-        assert!(endpoints[0].get("unknown").is_none());
-        assert!(endpoints[0].get("machine").is_none());
-        assert!(endpoints[0].get("switch").is_none());
-        assert!(endpoints[0].get("power_shelf").is_none());
-        assert!(endpoints[1].get("unknown").is_none());
-        assert!(endpoints[1].get("machine").is_some());
-        assert!(endpoints[2].get("switch").is_none());
-        assert!(endpoints[3].get("power_shelf").is_none());
+        assert_eq!(endpoints.len(), 4);
+        for endpoint in endpoints {
+            for descriptor in ["unknown", "machine", "switch", "power_shelf"] {
+                assert!(
+                    endpoint.get(descriptor).is_none(),
+                    "unexpected {descriptor}"
+                );
+            }
+        }
     }
 
     #[test]
