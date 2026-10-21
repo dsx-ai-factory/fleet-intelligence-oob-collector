@@ -18,6 +18,7 @@ mod backend;
 
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +36,7 @@ use bmc_inventory::sink::{
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
+use tokio::sync::watch;
 
 use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
 
@@ -75,7 +77,53 @@ pub struct RuntimeOptions {
     pub interval_seconds: u64,
 }
 
+#[derive(Clone)]
+struct Shutdown(watch::Receiver<bool>);
+
+impl Shutdown {
+    fn is_requested(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    async fn wait(&mut self) {
+        let _ = self.0.wait_for(|requested| *requested).await;
+    }
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await
+}
+
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
+    let (sender, receiver) = watch::channel(false);
+    let runtime = run_runtime_until_shutdown(options, Shutdown(receiver));
+    tokio::pin!(runtime);
+    tokio::select! {
+        biased;
+        signal = shutdown_signal() => {
+            signal?;
+            tracing::info!("shutdown requested; stopping collection and draining inventory uploads");
+            sender.send_replace(true);
+            runtime.await
+        }
+        result = &mut runtime => result,
+    }
+}
+
+async fn run_runtime_until_shutdown(
+    options: RuntimeOptions,
+    mut shutdown: Shutdown,
+) -> Result<(), Box<dyn Error>> {
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -83,8 +131,11 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
-    let mut session =
-        BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token).await?;
+    let mut session = tokio::select! {
+        biased;
+        () = shutdown.wait() => return Ok(()),
+        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token) => session?,
+    };
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
     let attestation_settings = {
@@ -96,6 +147,9 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     };
 
     loop {
+        if shutdown.is_requested() {
+            return Ok(());
+        }
         let started_at = std::time::Instant::now();
 
         // Phase 1: Collect and upload inventory
@@ -104,10 +158,14 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
             Arc::clone(&dispatcher),
+            shutdown.clone(),
         )
         .await
         {
             Ok(outcome) => {
+                if shutdown.is_requested() {
+                    return Ok(());
+                }
                 if outcome.failed_uploads > 0 {
                     tracing::warn!(
                         elapsed_seconds = started_at.elapsed().as_secs_f64(),
@@ -139,6 +197,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
                             &endpoints,
                             &mut session,
                             dispatcher.as_ref(),
+                            shutdown.clone(),
                         )
                         .await
                         {
@@ -170,13 +229,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
         );
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
-            signal = tokio::signal::ctrl_c() => {
-                if let Err(err) = signal {
-                    return Err(format!("failed to listen for shutdown signal: {err}").into());
-                }
-                tracing::info!("shutdown signal received; stopping OOB runtime");
-                return Ok(());
-            }
+            () = shutdown.wait() => return Ok(()),
         }
     }
 }
@@ -209,33 +262,26 @@ async fn collect_and_upload_attestation(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
+    mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let outcome = match collect_attestation(
-        targets,
-        attestation_settings,
-        endpoints,
-        session.jwt(),
-        dispatcher,
-    )
-    .await
-    {
+    let collect = |jwt: String| async move {
+        collect_attestation(targets, attestation_settings, endpoints, &jwt, dispatcher).await
+    };
+    let result = tokio::select! {
+        biased;
+        () = shutdown.wait() => return Ok(()),
+        result = collect(session.jwt().to_string()) => result,
+    };
+    let outcome = match result {
         Ok(outcome) => outcome,
-        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
-        // and re-run the whole batch with a fresh token before giving up.
         Err(err) if is_auth_failure(err.as_ref()) => {
-            tracing::warn!(
-                error = %err,
-                "backend JWT rejected during nonce collection; enrolling again before retry"
-            );
+            tracing::warn!(error = %err, "backend JWT rejected during nonce collection; enrolling again before retry");
             session.reenroll().await?;
-            collect_attestation(
-                targets,
-                attestation_settings,
-                endpoints,
-                session.jwt(),
-                dispatcher,
-            )
-            .await?
+            tokio::select! {
+                biased;
+                () = shutdown.wait() => return Ok(()),
+                result = collect(session.jwt().to_string()) => result?,
+            }
         }
         Err(err) => return Err(err),
     };
@@ -271,6 +317,7 @@ async fn collect_and_upload_attestation(
         &outcome.batch,
         attestation_settings.redfish_timeout,
         attestation_settings.concurrency,
+        &shutdown,
     )
     .await
 }
@@ -281,12 +328,16 @@ async fn upload_attestation_batches(
     batch: &BatchAttestation,
     timeout: Duration,
     batch_size: usize,
+    shutdown: &Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let batches = split_attestation_batch(batch, batch_size);
     let batch_count = batches.len();
     let mut failures = Vec::new();
 
     for (index, batch) in batches.into_iter().enumerate() {
+        if shutdown.is_requested() {
+            break;
+        }
         let node_count = batch.results_by_node_uuid.len();
         let mut result = upload_attestation(endpoints, session.jwt(), &batch, timeout).await;
         if let Err(err) = &result
@@ -400,6 +451,7 @@ async fn collect_and_upload_inventory(
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
+    shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
     let collector_config = config::load_config(&options.config)?;
     dispatcher.sync_endpoints(
@@ -416,19 +468,16 @@ async fn collect_and_upload_inventory(
     );
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
-    let producer = tokio::spawn(async move {
-        let mut collections = inventory_collections(
+    // JoinSet aborts the producer if an upload error exits this scope early.
+    let mut producer = tokio::task::JoinSet::new();
+    producer.spawn(async move {
+        let collections = inventory_collections(
             &source,
             collector_config.targets,
             target_concurrency,
             CollectionOrder::Completion,
         );
-        while let Some(inventory) = collections.next().await {
-            if tx.send(inventory).await.is_err() {
-                return Err("inventory export worker stopped before collection completed");
-            }
-        }
-        Ok::<(), &'static str>(())
+        forward_inventory(collections, tx, shutdown).await
     });
 
     let mut inventory_vec = Vec::new();
@@ -491,7 +540,9 @@ async fn collect_and_upload_inventory(
         }
     }
     producer
+        .join_next()
         .await
+        .expect("inventory producer was started")
         .map_err(|err| format!("inventory collection task failed: {err}"))?
         .map_err(|err| -> Box<dyn Error> { err.into() })?;
 
@@ -516,6 +567,31 @@ async fn collect_and_upload_inventory(
         nodes: inventory_vec,
         failed_uploads,
     })
+}
+
+async fn forward_inventory(
+    mut collections: impl Stream<Item = NodeInventory> + Unpin,
+    sender: tokio::sync::mpsc::Sender<NodeInventory>,
+    mut shutdown: Shutdown,
+) -> Result<(), &'static str> {
+    loop {
+        let inventory = tokio::select! {
+            biased;
+            () = shutdown.wait() => break,
+            inventory = collections.next() => match inventory {
+                Some(inventory) => inventory,
+                None => break,
+            },
+        };
+        tokio::select! {
+            biased;
+            () = shutdown.wait() => break,
+            result = sender.send(inventory) => {
+                result.map_err(|_| "inventory export worker stopped before collection completed")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 struct InventorySyncOutcome {

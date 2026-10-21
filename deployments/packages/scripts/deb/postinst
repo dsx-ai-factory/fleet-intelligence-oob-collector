@@ -1,0 +1,24 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+case "${1:-}" in
+    configure|abort-upgrade|abort-deconfigure|abort-remove) ;;
+    *) exit 0 ;;
+esac
+if [ -f "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf" ]; then
+    chmod 0600 "${DPKG_ROOT:-}/etc/fleetint-oob/service.conf"
+fi
+# Preserve administrator enablement and masks; never enable on first install.
+for unit in fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service; do
+    if deb-systemd-helper debian-installed "$unit"; then
+        deb-systemd-helper unmask "$unit" >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled "$unit"; then
+            deb-systemd-helper enable "$unit" >/dev/null || true
+        fi
+    fi
+    deb-systemd-helper update-state "$unit" >/dev/null || true
+done
+if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi

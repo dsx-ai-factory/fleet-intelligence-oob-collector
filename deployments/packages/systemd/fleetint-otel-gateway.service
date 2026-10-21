@@ -1,0 +1,16 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Fleet Intelligence authenticated telemetry gateway
+Wants=network-online.target
+After=network-online.target
+PartOf=fleetint-oob.target
+
+[Service]
+EnvironmentFile=/etc/fleetint-oob/service.conf
+ExecStart=/usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,9 @@ The supported deployment uses the OCI Helm chart. It installs the OOB
 collector and, by default, NICo hardware health and an authenticated
 OpenTelemetry gateway.
 
+For the experimental bare-metal/VM DEB/RPM installer, see the
+[host package prototype](../deployments/packages/README.md).
+
 ## Prerequisites
 
 - Kubernetes cluster access through `kubectl`
