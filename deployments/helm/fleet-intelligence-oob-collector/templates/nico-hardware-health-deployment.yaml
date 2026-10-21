@@ -65,11 +65,9 @@ spec:
             - name: collector-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
-            {{- if .Values.credentials.secrets }}
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
-            {{- end }}
             - name: nico-hardware-health-config
               mountPath: /etc/nico-health
       containers:
@@ -100,6 +98,9 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: bmc-credentials
+              mountPath: /run/secrets/bmc
+              readOnly: true
             {{- if .Values.nicoHardwareHealth.tlsSecretName }}
             - name: tls
               mountPath: /var/run/secrets/spiffe.io
@@ -119,21 +120,13 @@ spec:
             sizeLimit: 1Mi
         - name: tmp
           emptyDir: {}
-        {{- if .Values.credentials.secrets }}
         - name: bmc-credentials
-          projected:
+          secret:
+            secretName: {{ required "credentials.existingSecret is required" .Values.credentials.existingSecret | quote }}
             defaultMode: 0440
-            sources:
-              {{- range .Values.credentials.secrets }}
-              - secret:
-                  name: {{ required "credentials.secrets[].name is required" .name | quote }}
-                  items:
-                    - key: username
-                      path: {{ printf "%s/username" .target | quote }}
-                    - key: password
-                      path: {{ printf "%s/password" .target | quote }}
-              {{- end }}
-        {{- end }}
+            items:
+              - key: {{ .Values.credentials.secretKey | quote }}
+                path: credentials.json
         {{- if .Values.nicoHardwareHealth.tlsSecretName }}
         - name: tls
           secret:

@@ -44,7 +44,7 @@ for project in nico agent; do
 done
 export GIT_CONFIG_COUNT=2
 export GIT_CONFIG_KEY_0="url.file://$test_root/nico.insteadOf"
-export GIT_CONFIG_VALUE_0=https://github.com/NVIDIA/infra-controller.git
+export GIT_CONFIG_VALUE_0=https://github.com/dsx-ai-factory/infra-controller.git
 export GIT_CONFIG_KEY_1="url.file://$test_root/agent.insteadOf"
 export GIT_CONFIG_VALUE_1=https://github.com/dsx-ai-factory/fleet-intelligence-agent.git
 

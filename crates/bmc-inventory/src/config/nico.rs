@@ -63,19 +63,18 @@ pub fn render_nico_config(
             ip: target.ip,
             port: target.port,
             mac: target.mac.to_string(),
-            username: &target.username,
-            password: &target.password,
+            credentials_profile: target.credentials_profile.as_deref(),
             labels: target.labels.clone(),
-            unknown: (target.kind == TargetKind::Unknown).then_some(NicoEndpointKind {}),
+            // Switch/power-shelf descriptors require NICo IDs or serials.
+            // Standalone targets without those identities stay generic.
             machine: (target.kind == TargetKind::Compute).then_some(NicoEndpointKind {}),
-            switch: (target.kind == TargetKind::NvSwitch).then_some(NicoEndpointKind {}),
-            power_shelf: (target.kind == TargetKind::PowerShelf).then_some(NicoEndpointKind {}),
         })
         .collect();
 
     let nico_config = NicoConfig {
         endpoint_sources: NicoEndpointSources {
-            carbide_api: NicoEnabled { enabled: false },
+            nico_api: NicoEnabled { enabled: false },
+            static_credentials_file: &config.credentials_file,
             static_bmc_endpoints,
         },
         collectors: NicoCollectors {
@@ -127,7 +126,8 @@ struct NicoConfig<'a> {
 
 #[derive(Serialize)]
 struct NicoEndpointSources<'a> {
-    carbide_api: NicoEnabled,
+    nico_api: NicoEnabled,
+    static_credentials_file: &'a std::path::Path,
     static_bmc_endpoints: Vec<NicoStaticBmcEndpoint<'a>>,
 }
 
@@ -137,17 +137,11 @@ struct NicoStaticBmcEndpoint<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
     mac: String,
-    username: &'a str,
-    password: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credentials_profile: Option<&'a str>,
     labels: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    unknown: Option<NicoEndpointKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     machine: Option<NicoEndpointKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    switch: Option<NicoEndpointKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    power_shelf: Option<NicoEndpointKind>,
 }
 
 #[derive(Serialize)]
@@ -237,20 +231,40 @@ mod tests {
     use super::super::targets::parse_config;
     use super::*;
 
+    fn parse_test_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let file = std::env::temp_dir().join(format!(
+            "fleetint-nico-credentials-{}-{}.json",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
+        std::fs::write(
+            &file,
+            r#"{"profiles":{"bmc":{"username":"example-user","password":"example-password"}}}"#,
+        )?;
+        let input = format!(
+            "{contents}\n[credentials]\nfile = {:?}",
+            file.to_str().unwrap()
+        );
+        let result = parse_config(&input, path);
+        std::fs::remove_file(file)?;
+        result
+    }
+
     #[test]
     fn renders_nico_static_config_from_collector_config() {
-        let collector = parse_config(
+        let collector = parse_test_config(
             r#"
             compute_zone = "us-west-dc1"
             node_group = "gb200-training"
 
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             name = "node-01"
             ip = "10.0.0.1"
             mac = " AA-BB-CC-DD-EE-FF "
             port = 8443
-            username = "admin"
-            password = "secret"
             labels = { site = "dev" }
             "#,
             "test.toml",
@@ -297,36 +311,32 @@ mod tests {
     }
 
     #[test]
-    fn renders_nico_endpoint_discriminator_for_each_target_kind() {
-        let collector = parse_config(
+    fn renders_compute_and_generic_endpoints() {
+        let collector = parse_test_config(
             r#"
             [[targets]]
+            credentials_profile = "bmc"
             kind = "unknown"
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
 
             [[targets]]
+            credentials_profile = "bmc"
             kind = "compute"
             ip = "10.0.0.2"
             mac = "02:00:0a:00:00:02"
-            username = "admin"
-            password = "secret"
 
             [[targets]]
+            credentials_profile = "bmc"
             kind = "nvswitch"
             ip = "10.0.0.3"
             mac = "02:00:0a:00:00:03"
-            username = "admin"
-            password = "secret"
 
             [[targets]]
+            credentials_profile = "bmc"
             kind = "power_shelf"
             ip = "10.0.0.4"
             mac = "02:00:0a:00:00:04"
-            username = "admin"
-            password = "secret"
             "#,
             "test.toml",
         )
@@ -338,25 +348,25 @@ mod tests {
             .as_array()
             .expect("static endpoints");
 
-        assert!(endpoints[0].get("unknown").is_some());
+        assert!(endpoints[0].get("unknown").is_none());
         assert!(endpoints[0].get("machine").is_none());
         assert!(endpoints[0].get("switch").is_none());
         assert!(endpoints[0].get("power_shelf").is_none());
         assert!(endpoints[1].get("unknown").is_none());
         assert!(endpoints[1].get("machine").is_some());
-        assert!(endpoints[2].get("switch").is_some());
-        assert!(endpoints[3].get("power_shelf").is_some());
+        assert!(endpoints[2].get("switch").is_none());
+        assert!(endpoints[3].get("power_shelf").is_none());
     }
 
     #[test]
     fn rendered_nico_config_enables_logs_collector() {
-        let collector = parse_config(
+        let collector = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
             "#,
             "test.toml",
         )
@@ -374,13 +384,13 @@ mod tests {
 
     #[test]
     fn rendered_nico_config_always_enables_gpu_identity() {
-        let collector = parse_config(
+        let collector = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
             "#,
             "test.toml",
         )
@@ -394,13 +404,13 @@ mod tests {
 
     #[test]
     fn rendered_nico_config_enables_tracing_sink() {
-        let collector = parse_config(
+        let collector = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
             "#,
             "test.toml",
         )
@@ -417,13 +427,13 @@ mod tests {
 
     #[test]
     fn rendered_nico_config_trims_sink_options() {
-        let collector = parse_config(
+        let collector = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
             "#,
             "test.toml",
         )
@@ -451,25 +461,36 @@ mod tests {
     }
 
     #[test]
-    fn rendered_nico_config_escapes_credentials_and_omits_empty_labels() {
-        let collector = parse_config(
+    fn rendered_nico_config_references_credentials_without_inlining() {
+        let collector = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
             ip = "2001:db8::1"
             mac = "00:11:22:33:44:55"
-            username = 'admin"name'
-            password = 'secret"value'
             "#,
             "test.toml",
         )
         .expect("collector config");
         let rendered =
             render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+        assert!(!rendered.contains("example-user"));
+        assert!(!rendered.contains("example-password"));
         let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
         let endpoint = &rendered["endpoint_sources"]["static_bmc_endpoints"][0];
 
-        assert_eq!(endpoint["username"].as_str(), Some("admin\"name"));
-        assert_eq!(endpoint["password"].as_str(), Some("secret\"value"));
+        assert_eq!(
+            rendered["endpoint_sources"]["static_credentials_file"].as_str(),
+            collector.credentials_file.to_str()
+        );
+        assert_eq!(
+            rendered["endpoint_sources"]["nico_api"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(endpoint.get("username").is_none());
+        assert!(endpoint.get("password").is_none());
+        assert_eq!(endpoint["credentials_profile"].as_str(), Some("bmc"));
         assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
         assert!(endpoint["labels"].get("machine_name").is_none());
         assert!(endpoint.get("port").is_none());

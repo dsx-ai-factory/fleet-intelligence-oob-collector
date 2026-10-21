@@ -5,13 +5,13 @@
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
-# Credentials are read from the mounted Kubernetes Secret.
+# Same JSON credentials file as NICo health (profiles and per-MAC overrides).
 [credentials]
-username_file = "/run/secrets/bmc/default/username"
-password_file = "/run/secrets/bmc/default/password"
+file = "/run/secrets/bmc/credentials.json"
 
 [[targets]]
 kind = "compute"
+credentials_profile = "bmc"
 # Optional: inventory `name` and telemetry `machine_name`.
 name = "node-01"
 ip = "10.0.0.10"
@@ -21,15 +21,15 @@ labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "nvswitch"
+credentials_profile = "switch"
 name = "switch-tray-01"
 ip = "10.0.0.11"
 mac = "02:00:0a:00:00:0b"
-username_file = "/run/secrets/bmc/switch-tray-01/username"
-password_file = "/run/secrets/bmc/switch-tray-01/password"
 labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "power_shelf"
+credentials_profile = "bmc"
 name = "power-shelf-01"
 ip = "10.0.0.12"
 mac = "02:00:0a:00:00:0c"

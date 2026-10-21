@@ -50,6 +50,10 @@ contents:
   dst: /usr/share/doc/fleetint-oob/README.md
   file_info:
     mode: 0644
+- src: credentials.example.json
+  dst: /usr/share/doc/fleetint-oob/credentials.example.json
+  file_info:
+    mode: 0644
 - src: deployments/packages/systemd/fleetint-nico-health.service
   dst: /usr/lib/systemd/system/fleetint-nico-health.service
   file_info:

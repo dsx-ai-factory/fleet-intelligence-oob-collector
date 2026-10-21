@@ -27,24 +27,10 @@
     "credentials": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["secrets"],
+      "required": ["existingSecret", "secretKey"],
       "properties": {
-        "secrets": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["name", "target"],
-            "properties": {
-              "name": { "type": "string", "minLength": 1 },
-              "target": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9._-]+$",
-                "not": { "enum": [".", ".."] }
-              }
-            }
-          }
-        }
+        "existingSecret": { "type": "string", "minLength": 1 },
+        "secretKey": { "type": "string", "minLength": 1 }
       }
     },
     "bmcCollector": {

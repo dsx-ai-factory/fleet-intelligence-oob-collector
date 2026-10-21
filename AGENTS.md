@@ -56,8 +56,9 @@ release permissions and publication behavior.
 
 ## Required Invariants
 
-- Preserve existing CLI, TOML, environment-variable, JSON, and Helm behavior.
-  In particular, legacy `[[machines]]` configuration remains supported.
+- Configure targets through `[[targets]]` and credentials through a separate
+  shared JSON file. Reject inline credentials, separate username/password
+  files, and legacy `[[machines]]` configuration.
 - Route inventory and attestation Redfish work through `bmc-dispatch`; do not
   create a separate path that bypasses shared per-BMC limits.
 - Preserve successfully collected inventory when one Redfish domain fails.

@@ -33,7 +33,11 @@ const MACHINE_NAME_LABEL_NAME: &str = "machine_name";
 const COMPUTE_ZONE_LABEL_NAME: &str = "compute_zone";
 const NODE_GROUP_LABEL_NAME: &str = "node_group";
 const RESERVED_NICO_LABELS: &[&str] = &[
+    "bmc_endpoint",
+    "bmc_ip",
     "collector_type",
+    "component_type",
+    "driver_version",
     "endpoint_ip",
     "endpoint_key",
     "endpoint_mac",
@@ -42,6 +46,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     "gpu_serial",
     "gpu_uuid",
     "machine_id",
+    "machine_serial",
     "machine_slot_number",
     "machine_tray_index",
     MACHINE_NAME_LABEL_NAME,
@@ -49,9 +54,16 @@ const RESERVED_NICO_LABELS: &[&str] = &[
     NODE_GROUP_LABEL_NAME,
     "nvlink_domain_uuid",
     OOB_LABEL_NAME,
+    "power_shelf_id",
+    "power_shelf_serial_number",
     "rack_id",
     "serial_number",
+    "switch_endpoint",
+    "switch_endpoint_role",
     "switch_id",
+    "switch_ip",
+    "switch_is_primary",
+    "switch_serial_number",
     "switch_slot_number",
     "switch_tray_index",
     "system_uuid",
@@ -60,6 +72,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
 #[derive(Clone, Debug)]
 pub struct CollectorConfig {
     pub targets: Vec<Target>,
+    pub credentials_file: PathBuf,
 }
 
 #[derive(Clone)]
@@ -72,6 +85,7 @@ pub struct Target {
     pub port: Option<u16>,
     pub mac: MacAddress,
     pub address: String,
+    pub credentials_profile: Option<String>,
     pub username: String,
     pub password: String,
     pub labels: BTreeMap<String, String>,
@@ -103,22 +117,15 @@ struct Config {
     node_group: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
-    #[serde(default)]
-    credentials: Option<FileCredentialConfig>,
-    #[serde(default)]
-    machines: Vec<RawTargetConfig>,
+    credentials: CredentialsConfig,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
 }
 
-/// Paths containing a complete BMC username and password pair.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileCredentialConfig {
-    #[serde(default)]
-    username_file: Option<PathBuf>,
-    #[serde(default)]
-    password_file: Option<PathBuf>,
+struct CredentialsConfig {
+    file: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -138,13 +145,7 @@ struct RawTargetConfig {
     #[serde(default)]
     mac: Option<String>,
     #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
-    #[serde(default)]
-    username_file: Option<PathBuf>,
-    #[serde(default)]
-    password_file: Option<PathBuf>,
+    credentials_profile: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
 }
@@ -159,50 +160,37 @@ pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
 }
 
 pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
-    let config: Config = toml::from_str(contents)
-        .map_err(|error| format!("failed to parse TOML config {path}: {error}"))?;
-
-    if config.machines.is_empty() && config.targets.is_empty() {
-        return Err(format!(
-            "no BMC targets found in {path}; configure [[targets]] (legacy [[machines]] is also accepted)"
+    let config: Config = toml::from_str(contents).map_err(|error| {
+        // Invalid input may contain secrets; never echo TOML input.
+        let offset = error.span().map(|span| span.start).unwrap_or_default();
+        format!(
+            "invalid TOML config {path} at byte {offset}; \
+             expected [[targets]] and [credentials].file"
         )
-        .into());
+    })?;
+
+    if config.targets.is_empty() {
+        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
     }
 
     validate_nico_labels("labels", &config.labels)?;
     let default_compute_zone = normalize_config_value("compute_zone", config.compute_zone)?;
     let default_node_group = normalize_config_value("node_group", config.node_group)?;
     let config_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
-    let default_credentials = config
-        .credentials
-        .as_ref()
-        .map(|credentials| credentials.resolve("credentials", config_dir))
-        .transpose()?;
-
-    let target_count = config.machines.len() + config.targets.len();
-    let mut configured_targets = Vec::with_capacity(target_count);
-    for (index, machine) in config.machines.into_iter().enumerate() {
-        if machine.kind.is_some() {
-            return Err(format!(
-                "machines[{index}].kind is not supported; use [[targets]] to configure a target kind"
-            )
-            .into());
-        }
-        configured_targets.push((machine, TargetKind::Compute, format!("machines[{index}]")));
-    }
-    for (index, target) in config.targets.into_iter().enumerate() {
-        let kind = target.kind.unwrap_or_default();
-        configured_targets.push((target, kind, format!("targets[{index}]")));
-    }
+    // NICo resolves relative credential paths from its working directory. Export
+    // the absolute path without resolving symlinks, so secret rotation still works.
+    let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
+    let credentials = SharedCredentials::load(&config.credentials.file, config_dir)?;
 
     let mut macs = HashSet::new();
-    let mut targets = Vec::with_capacity(target_count);
-    for (configured_target, kind, context) in configured_targets {
+    let mut targets = Vec::with_capacity(config.targets.len());
+    for (index, configured_target) in config.targets.into_iter().enumerate() {
+        let kind = configured_target.kind.unwrap_or_default();
+        let context = format!("targets[{index}]");
         let mut target = configured_target.into_target(
             kind,
             &context,
-            default_credentials.as_ref(),
-            config_dir,
+            &credentials,
             default_compute_zone.as_deref(),
             default_node_group.as_deref(),
         )?;
@@ -237,7 +225,10 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
         targets.push(target);
     }
 
-    Ok(CollectorConfig { targets })
+    Ok(CollectorConfig {
+        targets,
+        credentials_file,
+    })
 }
 
 fn validate_nico_labels(
@@ -292,12 +283,22 @@ impl RawTargetConfig {
         self,
         kind: TargetKind,
         context: &str,
-        default_credentials: Option<&ResolvedCredentials>,
-        config_dir: &Path,
+        credentials: &SharedCredentials,
         default_compute_zone: Option<&str>,
         default_node_group: Option<&str>,
     ) -> Result<Target, Box<dyn Error>> {
-        let credentials = self.resolve_credentials(context, default_credentials, config_dir)?;
+        let mac = self
+            .mac
+            .as_deref()
+            .ok_or_else(|| format!("{context}.mac is required"))?;
+        if mac.trim().is_empty() {
+            return Err(format!("{context}.mac cannot be blank").into());
+        }
+        let mac = mac
+            .trim()
+            .parse::<MacAddress>()
+            .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
+        let credentials = credentials.resolve(mac, self.credentials_profile.as_deref())?;
         let name = normalize_config_value(&format!("{context}.name"), self.name)?;
         let compute_zone = normalize_config_value(
             &format!("{context}.compute_zone"),
@@ -309,16 +310,6 @@ impl RawTargetConfig {
             self.node_group
                 .or_else(|| default_node_group.map(str::to_string)),
         )?;
-        let mac = self
-            .mac
-            .ok_or_else(|| format!("{context}.mac is required"))?;
-        if mac.trim().is_empty() {
-            return Err(format!("{context}.mac cannot be blank").into());
-        }
-        let mac = mac
-            .trim()
-            .parse::<MacAddress>()
-            .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
         let address = match (self.ip, self.port) {
             (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
             (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
@@ -335,137 +326,94 @@ impl RawTargetConfig {
             port: self.port,
             mac,
             address,
+            credentials_profile: self.credentials_profile,
             username: credentials.username,
             password: credentials.password,
             labels: self.labels,
         })
     }
+}
 
-    /// Resolve a complete machine override or inherit the default credential pair.
-    fn resolve_credentials(
-        &self,
-        context: &str,
-        default_credentials: Option<&ResolvedCredentials>,
-        config_dir: &Path,
-    ) -> Result<ResolvedCredentials, Box<dyn Error>> {
-        let has_inline = self.username.is_some() || self.password.is_some();
-        let has_files = self.username_file.is_some() || self.password_file.is_some();
+// Same JSON schema and field precedence as NICo health's static endpoint credentials.
+// No Debug implementation: credential values must never appear in diagnostics.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CredentialFields {
+    username: Option<String>,
+    password: Option<String>,
+}
 
-        if has_inline && has_files {
-            return Err(format!(
-                "{context} must use either username/password or username_file/password_file, not both"
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct SharedCredentials {
+    profiles: BTreeMap<String, CredentialFields>,
+    overrides: BTreeMap<String, CredentialFields>,
+}
+
+impl SharedCredentials {
+    fn load(path: &Path, config_dir: &Path) -> Result<Self, Box<dyn Error>> {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            config_dir.join(path)
+        };
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "failed to read credentials.file {}: {error}",
+                path.display()
             )
-            .into());
-        }
-        if has_inline {
-            return ResolvedCredentials::from_inline(
-                self.username.as_deref(),
-                self.password.as_deref(),
-                context,
-            );
-        }
-        if has_files {
-            return FileCredentialConfig {
-                username_file: self.username_file.clone(),
-                password_file: self.password_file.clone(),
+        })?;
+        let mut credentials: Self = serde_json::from_str(&content).map_err(|error| {
+            // serde errors can contain secrets (for example, an invalid field type).
+            format!(
+                "invalid credentials JSON {} at line {}, column {}",
+                path.display(),
+                error.line(),
+                error.column()
+            )
+        })?;
+        let mut normalized = BTreeMap::new();
+        for (key, fields) in credentials.overrides {
+            let mac = key
+                .parse::<MacAddress>()
+                .map_err(|_| "invalid MAC key in credentials.file overrides")?;
+            if normalized.insert(mac.to_string(), fields).is_some() {
+                return Err("duplicate MAC key in credentials.file overrides".into());
             }
-            .resolve(context, config_dir);
         }
+        credentials.overrides = normalized;
+        Ok(credentials)
+    }
 
-        default_credentials.cloned().ok_or_else(|| {
-            format!("{context} requires credentials or a top-level [credentials] file pair").into()
-        })
+    fn resolve(
+        &self,
+        mac: MacAddress,
+        profile: Option<&str>,
+    ) -> Result<ResolvedCredentials, Box<dyn Error>> {
+        let profile = profile
+            .map(|name| {
+                self.profiles
+                    .get(name)
+                    .ok_or_else(|| format!("unknown credentials_profile {name:?}"))
+            })
+            .transpose()?;
+        let entry = self.overrides.get(&mac.to_string());
+        let username = entry
+            .and_then(|fields| fields.username.clone())
+            .or_else(|| profile.and_then(|fields| fields.username.clone()))
+            .ok_or_else(|| format!("no username configured for BMC {mac}"))?;
+        let password = entry
+            .and_then(|fields| fields.password.clone())
+            .or_else(|| profile.and_then(|fields| fields.password.clone()))
+            .unwrap_or_default();
+        Ok(ResolvedCredentials { username, password })
     }
 }
 
-/// BMC credentials resolved from inline values or mounted files.
-#[derive(Clone)]
+/// BMC credentials resolved from the shared JSON secret file.
 struct ResolvedCredentials {
     username: String,
     password: String,
-}
-
-impl ResolvedCredentials {
-    /// Validate and materialize a complete inline credential pair.
-    fn from_inline(
-        username: Option<&str>,
-        password: Option<&str>,
-        context: &str,
-    ) -> Result<Self, Box<dyn Error>> {
-        let username = username.ok_or_else(|| format!("{context}.username is required"))?;
-        let password = password.ok_or_else(|| format!("{context}.password is required"))?;
-        validate_credentials(username, password, context)
-    }
-}
-
-impl FileCredentialConfig {
-    /// Read and validate a complete credential pair from its configured files.
-    fn resolve(
-        &self,
-        context: &str,
-        config_dir: &Path,
-    ) -> Result<ResolvedCredentials, Box<dyn Error>> {
-        let username_path = self
-            .username_file
-            .as_deref()
-            .ok_or_else(|| format!("{context}.username_file is required"))?;
-        let password_path = self
-            .password_file
-            .as_deref()
-            .ok_or_else(|| format!("{context}.password_file is required"))?;
-        let username = read_credential_file(username_path, config_dir, context, "username_file")?;
-        let password = read_credential_file(password_path, config_dir, context, "password_file")?;
-        validate_credentials(&username, &password, context)
-    }
-}
-
-/// Read one credential file, resolving relative paths from the config directory.
-fn read_credential_file(
-    path: &Path,
-    config_dir: &Path,
-    context: &str,
-    field: &str,
-) -> Result<String, Box<dyn Error>> {
-    let resolved_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        config_dir.join(path)
-    };
-    let value = std::fs::read_to_string(&resolved_path).map_err(|error| {
-        format!(
-            "failed to read {context}.{field} {}: {error}",
-            resolved_path.display()
-        )
-    })?;
-    Ok(strip_one_line_ending(value))
-}
-
-/// Remove one conventional trailing line ending while preserving credential data.
-fn strip_one_line_ending(mut value: String) -> String {
-    if value.ends_with("\r\n") {
-        value.truncate(value.len() - 2);
-    } else if value.ends_with('\n') {
-        value.pop();
-    }
-    value
-}
-
-/// Validate resolved values without exposing either credential in errors.
-fn validate_credentials(
-    username: &str,
-    password: &str,
-    context: &str,
-) -> Result<ResolvedCredentials, Box<dyn Error>> {
-    if username.trim().is_empty() {
-        return Err(format!("{context}.username is required").into());
-    }
-    if password.is_empty() || password.chars().all(char::is_whitespace) {
-        return Err(format!("{context}.password is required by the OOB collector").into());
-    }
-    Ok(ResolvedCredentials {
-        username: username.to_string(),
-        password: password.to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -473,35 +421,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_target_kinds_and_normalizes_legacy_machines_to_compute() {
-        let config = parse_config(
+    fn parses_target_kinds() {
+        let config = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
 
             [[targets]]
             kind = "compute"
             ip = "10.0.0.2"
             mac = "02:00:0a:00:00:02"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
 
             [[targets]]
             kind = "nvswitch"
             ip = "10.0.0.3"
             mac = "02:00:0a:00:00:03"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
 
             [[targets]]
             kind = "power_shelf"
             ip = "10.0.0.4"
             mac = "02:00:0a:00:00:04"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
@@ -514,7 +458,7 @@ mod tests {
                 .map(|target| target.kind)
                 .collect::<Vec<_>>(),
             vec![
-                TargetKind::Compute,
+                TargetKind::Unknown,
                 TargetKind::Compute,
                 TargetKind::NvSwitch,
                 TargetKind::PowerShelf,
@@ -523,39 +467,23 @@ mod tests {
     }
 
     #[test]
-    fn omitted_target_kind_defaults_to_unknown_and_legacy_machines_cannot_set_kind() {
-        let config = parse_config(
+    fn omitted_target_kind_defaults_to_unknown() {
+        let config = parse_test_config(
             r#"
             [[targets]]
             ip = "10.0.0.1"
             mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
         .expect("target kind should be optional");
         assert_eq!(config.targets[0].kind, TargetKind::Unknown);
-
-        let legacy = parse_config(
-            r#"
-            [[machines]]
-            kind = "nvswitch"
-            ip = "10.0.0.1"
-            mac = "02:00:0a:00:00:01"
-            username = "admin"
-            password = "secret"
-            "#,
-            "test.toml",
-        )
-        .expect_err("legacy machine kind should be rejected")
-        .to_string();
-        assert!(legacy.contains("use [[targets]]"));
     }
 
     #[test]
-    fn applies_shared_placement_and_machine_label_overrides() {
-        let path = write_config(
+    fn applies_shared_placement_and_target_label_overrides() {
+        let path = write_test_config(
             "valid",
             r#"
             compute_zone = "us-west-dc1"
@@ -564,21 +492,19 @@ mod tests {
             [labels]
             site = "shared"
 
-            [[machines]]
+            [[targets]]
             name = "node-01"
             compute_zone = "us-west-dc2"
             ip = "10.0.0.1"
             port = 8443
             mac = "00:11:22:33:44:55"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             labels = { site = "dev", environment = "development" }
 
-            [[machines]]
+            [[targets]]
             ip = "2001:db8::1"
             mac = "00:11:22:33:44:66"
-            username = "root"
-            password = "pass"
+            credentials_profile = "bmc"
             "#,
         );
 
@@ -641,20 +567,17 @@ mod tests {
     }
 
     #[test]
-    fn requires_mac_for_targets_and_legacy_machines() {
-        for collection in ["targets", "machines"] {
-            for ip in ["10.0.0.10", "2001:db8::102:304"] {
-                let input = format!(
-                    r#"
-                    [[{collection}]]
-                    ip = "{ip}"
-                    username = "admin"
-                    password = "secret"
+    fn requires_mac_for_targets() {
+        for ip in ["10.0.0.10", "2001:db8::102:304"] {
+            let input = format!(
+                r#"
+                [[targets]]
+                ip = "{ip}"
+                credentials_profile = "bmc"
                 "#
-                );
-                let error = parse_config(&input, "test.toml").expect_err("MAC is required");
-                assert!(error.to_string().contains("mac is required"));
-            }
+            );
+            let error = parse_test_config(&input, "test.toml").expect_err("MAC is required");
+            assert!(error.to_string().contains("mac is required"));
         }
     }
 
@@ -671,11 +594,10 @@ mod tests {
                 [[targets]]
                 ip = "10.0.0.10"
                 mac = "{mac}"
-                username = "admin"
-                password = "secret"
+                credentials_profile = "bmc"
                 "#
             );
-            let config = parse_config(&input, "test.toml").expect("valid MAC");
+            let config = parse_test_config(&input, "test.toml").expect("valid MAC");
             assert_eq!(
                 config.targets[0].mac.bytes(),
                 [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]
@@ -698,11 +620,10 @@ mod tests {
                 [[targets]]
                 ip = "10.0.0.10"
                 mac = "{mac}"
-                username = "admin"
-                password = "secret"
+                credentials_profile = "bmc"
                 "#
             );
-            let error = parse_config(&input, "test.toml").expect_err("invalid MAC");
+            let error = parse_test_config(&input, "test.toml").expect_err("invalid MAC");
             assert!(error.to_string().contains("targets[0].mac"), "{error}");
         }
     }
@@ -719,108 +640,33 @@ mod tests {
                 [[targets]]
                 ip = "10.0.0.10"
                 mac = "{mac}"
-                username = "admin"
-                password = "secret"
+                credentials_profile = "bmc"
                 "#
             );
-            assert!(parse_config(&input, "test.toml").is_ok(), "{mac}");
+            assert!(parse_test_config(&input, "test.toml").is_ok(), "{mac}");
         }
     }
 
     #[test]
-    fn applies_top_level_file_credentials_and_machine_override() {
-        let default_username = write_credential("default-username", "default-admin\n");
-        let default_password = write_credential("default-password", "default-secret\n");
-        let override_username = write_credential("override-username", "node-admin\r\n");
-        let override_password = write_credential("override-password", "node-secret\r\n");
-        let path = write_config(
-            "file-credentials",
-            &format!(
-                r#"
-                [credentials]
-                username_file = "{}"
-                password_file = "{}"
-
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "02:00:0a:00:00:01"
-
-                [[machines]]
-                ip = "10.0.0.2"
-                mac = "02:00:0a:00:00:02"
-                username_file = "{}"
-                password_file = "{}"
-                "#,
-                default_username.display(),
-                default_password.display(),
-                override_username.display(),
-                override_password.display(),
-            ),
-        );
-
-        let config = load_config(path.to_str().expect("path")).expect("config");
-
-        assert_eq!(config.targets[0].username, "default-admin");
-        assert_eq!(config.targets[0].password, "default-secret");
-        assert_eq!(config.targets[1].username, "node-admin");
-        assert_eq!(config.targets[1].password, "node-secret");
-    }
-
-    #[test]
-    fn resolves_relative_credential_paths_from_config_directory() {
-        let mut directory = std::env::temp_dir();
-        directory.push(format!(
-            "fleet-intelligence-oob-relative-credentials-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(directory.join("secrets")).expect("credential directory");
-        std::fs::write(directory.join("secrets/username"), "admin\n").expect("username");
-        std::fs::write(directory.join("secrets/password"), "secret\n").expect("password");
-        let config_path = directory.join("config.toml");
-        std::fs::write(
-            &config_path,
-            unindent(
-                r#"
-                [credentials]
-                username_file = "secrets/username"
-                password_file = "secrets/password"
-
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "02:00:0a:00:00:01"
-                "#,
-            ),
-        )
-        .expect("config");
-
-        let config = load_config(config_path.to_str().expect("path")).expect("config");
-
-        assert_eq!(config.targets[0].username, "admin");
-        assert_eq!(config.targets[0].password, "secret");
-    }
-
-    #[test]
     fn explicit_mac_is_formatted_and_blank_mac_is_rejected() {
-        let explicit = parse_config(
+        let explicit = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
             ip = "10.0.0.10"
             mac = " AA-BB-CC-DD-EE-FF "
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
         .expect("config");
         assert_eq!(explicit.targets[0].mac.to_string(), "AA:BB:CC:DD:EE:FF");
 
-        let error = parse_config(
+        let error = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
             ip = "10.0.0.10"
             mac = " "
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
@@ -831,18 +677,17 @@ mod tests {
 
     #[test]
     fn trims_named_fields_and_rejects_blank_values() {
-        let config = parse_config(
+        let config = parse_test_config(
             r#"
             compute_zone = "  us-west-dc1  "
             node_group = "  shared-group  "
 
-            [[machines]]
+            [[targets]]
             name = "  node-01  "
             node_group = "  gb200-training  "
             ip = "10.0.0.10"
             mac = "02:00:0a:00:00:0a"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
@@ -864,14 +709,13 @@ mod tests {
             Some("node-01")
         );
 
-        let error = parse_config(
+        let error = parse_test_config(
             r#"
-            [[machines]]
+            [[targets]]
             name = "   "
             ip = "10.0.0.10"
             mac = "02:00:0a:00:00:0a"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
             "test.toml",
         )
@@ -880,16 +724,15 @@ mod tests {
         assert!(error.contains("name cannot be blank"));
 
         for field in ["compute_zone", "node_group"] {
-            let error = parse_config(
+            let error = parse_test_config(
                 &format!(
                     r#"
                     {field} = "   "
 
-                    [[machines]]
+                    [[targets]]
                     ip = "10.0.0.10"
                     mac = "02:00:0a:00:00:0a"
-                    username = "admin"
-                    password = "secret"
+                    credentials_profile = "bmc"
                     "#
                 ),
                 "test.toml",
@@ -902,29 +745,14 @@ mod tests {
 
     #[test]
     fn repository_oob_config_example_is_valid() {
-        let username = write_credential("example-username", "admin\n");
-        let password = write_credential("example-password", "secret\n");
-        let override_username =
-            write_credential("example-switch-tray-01-username", "switch-admin\n");
-        let override_password =
-            write_credential("example-switch-tray-01-password", "switch-secret\n");
-        let contents = include_str!("../../../../config.example.toml")
-            .replace(
-                "/run/secrets/bmc/default/username",
-                username.to_str().expect("username path"),
-            )
-            .replace(
-                "/run/secrets/bmc/default/password",
-                password.to_str().expect("password path"),
-            )
-            .replace(
-                "/run/secrets/bmc/switch-tray-01/username",
-                override_username.to_str().expect("override username path"),
-            )
-            .replace(
-                "/run/secrets/bmc/switch-tray-01/password",
-                override_password.to_str().expect("override password path"),
-            );
+        let credentials = write_credential(
+            "example-json",
+            include_str!("../../../../credentials.example.json"),
+        );
+        let contents = include_str!("../../../../config.example.toml").replace(
+            "/run/secrets/bmc/credentials.json",
+            credentials.to_str().unwrap(),
+        );
         let config = parse_config(&contents, "config.example.toml").expect("OOB config example");
 
         assert_eq!(config.targets.len(), 3);
@@ -954,173 +782,72 @@ mod tests {
         assert_eq!(config.targets[2].kind, TargetKind::PowerShelf);
         assert_eq!(config.targets[2].name.as_deref(), Some("power-shelf-01"));
         assert_eq!(config.targets[2].mac.to_string(), "02:00:0A:00:00:0C");
+        assert_eq!(config.targets[1].password, "replace-with-target-password");
+        std::fs::remove_file(credentials).unwrap();
     }
 
     #[test]
-    fn rejects_missing_password() {
-        let path = write_config(
-            "missing-password",
-            r#"
-            [[machines]]
-            ip = "10.0.0.1"
-            mac = "00:11:22:33:44:55"
-            username = "admin"
-            "#,
-        );
-
-        let error = load_config(path.to_str().expect("path"))
-            .expect_err("missing password should fail")
-            .to_string();
-
-        assert!(error.contains("machines[0].password is required"));
-    }
-
-    #[test]
-    fn rejects_partial_and_mixed_credential_sources() {
-        for (name, content, expected) in [
-            (
-                "partial-default",
-                r#"
-                [credentials]
-                username_file = "/run/secrets/bmc/username"
-
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "02:00:0a:00:00:01"
-                "#,
-                "credentials.password_file is required",
-            ),
-            (
-                "partial-machine-files",
-                r#"
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "02:00:0a:00:00:01"
-                username_file = "/run/secrets/bmc/username"
-                "#,
-                "machines[0].password_file is required",
-            ),
-            (
-                "mixed-machine",
-                r#"
-                [[machines]]
-                ip = "10.0.0.1"
-                mac = "02:00:0a:00:00:01"
-                username = "admin"
-                password_file = "/run/secrets/bmc/password"
-                "#,
-                "must use either username/password or username_file/password_file",
-            ),
-        ] {
-            let path = write_config(name, content);
-            let error = load_config(path.to_str().expect("path"))
-                .expect_err("invalid credentials should fail")
-                .to_string();
-            assert!(error.contains(expected), "unexpected error: {error}");
-        }
-    }
-
-    #[test]
-    fn rejects_blank_password() {
-        let path = write_config(
-            "blank-password",
-            r#"
-            [[machines]]
-            ip = "10.0.0.1"
-            mac = "00:11:22:33:44:55"
-            username = "admin"
-            password = "   "
-            "#,
-        );
-
-        let error = load_config(path.to_str().expect("path"))
-            .expect_err("blank password should fail")
-            .to_string();
-
-        assert!(error.contains("password is required by the OOB collector"));
-    }
-
-    #[test]
-    fn rejects_empty_machine_list() {
-        let path = write_config("empty", "machines = []");
+    fn rejects_empty_target_list() {
+        let path = write_test_config("empty", "targets = []");
 
         let error = load_config(path.to_str().expect("path"))
             .expect_err("empty config should fail")
             .to_string();
 
-        assert!(error.contains("[[machines]]"));
+        assert!(error.contains("[[targets]]"));
     }
 
     #[test]
-    fn rejects_duplicate_macs_across_lists_and_formats() {
-        for (first_list, second_list) in [
-            ("machines", "machines"),
-            ("machines", "targets"),
-            ("targets", "targets"),
-        ] {
-            for second_mac in ["aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "aabbccddeeff"] {
-                let input = format!(
-                    r#"
-                    [[{first_list}]]
-                    ip = "10.0.0.1"
-                    mac = "AA:BB:CC:DD:EE:FF"
-                    username = "admin"
-                    password = "secret"
+    fn rejects_duplicate_macs_across_formats() {
+        for second_mac in ["aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF", "aabbccddeeff"] {
+            let input = format!(
+                r#"
+                [[targets]]
+                ip = "10.0.0.1"
+                mac = "AA:BB:CC:DD:EE:FF"
+                credentials_profile = "bmc"
 
-                    [[{second_list}]]
-                    ip = "10.0.0.2"
-                    mac = "{second_mac}"
-                    username = "admin"
-                    password = "secret"
-                    "#
-                );
-                let error = parse_config(&input, "test.toml").expect_err("duplicate MAC");
-                assert!(error.to_string().contains("duplicates BMC MAC"), "{error}");
-                assert!(error.to_string().contains(second_list), "{error}");
-            }
+                [[targets]]
+                ip = "10.0.0.2"
+                mac = "{second_mac}"
+                credentials_profile = "bmc"
+                "#
+            );
+            let error = parse_test_config(&input, "test.toml").expect_err("duplicate MAC");
+            assert!(error.to_string().contains("duplicates BMC MAC"), "{error}");
+            assert!(error.to_string().contains("targets[1]"), "{error}");
         }
     }
 
     #[test]
-    fn loading_and_rendering_config_keeps_original_mac_text() {
-        let path = write_config(
+    fn loading_config_keeps_original_mac_text() {
+        let path = write_test_config(
             "mac-original-text",
             r#"
             [[targets]]
             ip = "10.0.0.1"
             mac = "aabbccddeeff"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
         );
         let original = std::fs::read_to_string(&path).expect("original config");
         let config = load_config(path.to_str().unwrap()).expect("config");
-        let rendered = crate::config::render_nico_config(
-            &config,
-            &crate::config::NicoConfigOptions::default(),
-        )
-        .expect("NICo config");
-        let rendered: toml::Value = toml::from_str(&rendered).expect("NICo TOML");
-        assert_eq!(
-            rendered["endpoint_sources"]["static_bmc_endpoints"][0]["mac"].as_str(),
-            Some("AA:BB:CC:DD:EE:FF"),
-        );
+        assert_eq!(config.targets[0].mac.to_string(), "AA:BB:CC:DD:EE:FF");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         std::fs::remove_file(path).expect("remove config");
     }
 
     #[test]
     fn rejects_unknown_fields() {
-        let path = write_config(
+        let path = write_test_config(
             "unknown",
             r#"
             unexpected = true
 
-            [[machines]]
+            [[targets]]
             ip = "10.0.0.1"
             mac = "00:11:22:33:44:55"
-            username = "admin"
-            password = "secret"
+            credentials_profile = "bmc"
             "#,
         );
 
@@ -1128,7 +855,7 @@ mod tests {
             .expect_err("unknown field should fail")
             .to_string();
 
-        assert!(error.contains("unknown field"));
+        assert!(error.contains("invalid TOML config"));
     }
 
     #[test]
@@ -1144,16 +871,15 @@ mod tests {
             "oob",
             "system_uuid",
         ] {
-            let error = parse_config(
+            let error = parse_test_config(
                 &format!(
                     r#"
                     labels = {{ {label} = "override" }}
 
-                    [[machines]]
+                    [[targets]]
                     ip = "10.0.0.1"
                     mac = "00:11:22:33:44:55"
-                    username = "admin"
-                    password = "secret"
+                    credentials_profile = "bmc"
                     "#
                 ),
                 "test.toml",
@@ -1164,6 +890,201 @@ mod tests {
             assert!(error.contains(label));
         }
     }
+    #[test]
+    fn shared_json_credentials_follow_nico_profile_and_mac_precedence() {
+        let path = write_credential(
+            "shared-json-precedence",
+            r#"{
+            "profiles": {
+                "bmc": {"username":"admin","password":"shared"},
+                "switch": {"username":"switch-admin","password":"switch-pass"}
+            },
+            "overrides": {
+                "aa:bb:cc:dd:ee:01": {"password":"individual"},
+                "aa:bb:cc:dd:ee:02": {"username":"standalone"},
+                "aa:bb:cc:dd:ee:03": {"password":""},
+                "aa:bb:cc:dd:ee:04": {"username":null,"password":null},
+                "aa:bb:cc:dd:ee:05": {"username":""},
+                "aa:bb:cc:dd:ee:06": {"username":"node-admin","password":"node-pass"}
+            }
+        }"#,
+        );
+        for (mac, profile, username, password) in [
+            (
+                "AA:BB:CC:DD:EE:00",
+                Some("switch"),
+                "switch-admin",
+                "switch-pass",
+            ),
+            ("AA:BB:CC:DD:EE:01", Some("bmc"), "admin", "individual"),
+            ("AA:BB:CC:DD:EE:02", None, "standalone", ""),
+            ("AA:BB:CC:DD:EE:02", Some("bmc"), "standalone", "shared"),
+            ("AA:BB:CC:DD:EE:03", Some("bmc"), "admin", ""),
+            ("AA:BB:CC:DD:EE:04", Some("bmc"), "admin", "shared"),
+            ("AA:BB:CC:DD:EE:05", Some("bmc"), "", "shared"),
+            ("AA:BB:CC:DD:EE:06", Some("bmc"), "node-admin", "node-pass"),
+            ("AA:BB:CC:DD:EE:06", None, "node-admin", "node-pass"),
+        ] {
+            let profile = profile
+                .map(|name| format!("credentials_profile = {name:?}"))
+                .unwrap_or_default();
+            let config = parse_config(
+                &format!(
+                    r#"
+                [credentials]
+                file = {:?}
+                [[targets]]
+                ip = "192.0.2.1"
+                mac = {mac:?}
+                {profile}
+            "#,
+                    path.to_str().unwrap()
+                ),
+                "test.toml",
+            )
+            .expect("shared JSON config");
+            assert_eq!(config.targets[0].username, username);
+            assert_eq!(config.targets[0].password, password);
+            assert!(!format!("{:?}", config.targets[0]).contains("individual"));
+        }
+        for (profile, expected) in [
+            ("", "no username configured"),
+            (
+                "credentials_profile = 'missing'",
+                "unknown credentials_profile",
+            ),
+        ] {
+            let error = parse_config(
+                &format!(
+                    r#"
+                [credentials]
+                file = {:?}
+                [[targets]]
+                ip = "192.0.2.1"
+                mac = "AA:BB:CC:DD:EE:00"
+                {profile}
+            "#,
+                    path.to_str().unwrap()
+                ),
+                "test.toml",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn shared_json_credentials_reject_invalid_snapshots_without_leaking_values() {
+        let path = write_credential("shared-json-invalid", "{}");
+        for input in [
+            r#"{"profiles":{"bmc":{"password":["sensitive-value"]}}}"#,
+            r#"{"profiles":{"bmc":{"pasword":"sensitive-value"}}}"#,
+            r#"{"overrides":{"sensitive-value":{"password":"sensitive-value"}}}"#,
+            r#"{"overrides":{"AA:BB:CC:DD:EE:FF":{},"aa:bb:cc:dd:ee:ff":{}}}"#,
+            r#"{"profiles":{"bmc":{"password":"sensitive-value"}}"#,
+            r#"{"unexpected":"sensitive-value"}"#,
+        ] {
+            std::fs::write(&path, input).unwrap();
+            let error = SharedCredentials::load(&path, Path::new("."))
+                .err()
+                .expect("invalid snapshot");
+            assert!(!error.to_string().contains("sensitive-value"));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn shared_json_credentials_reload_atomic_replacements_and_relative_paths() {
+        let path = write_credential(
+            "shared-json-rotation",
+            r#"{"profiles":{"bmc":{"username":"admin","password":"first"}}}"#,
+        );
+        let config = write_config(
+            "shared-json-rotation",
+            &format!(
+                r#"
+            [credentials]
+            file = {:?}
+            [[targets]]
+            ip = "192.0.2.1"
+            mac = "00:11:22:33:44:55"
+            credentials_profile = "bmc"
+        "#,
+                path.file_name().unwrap().to_str().unwrap()
+            ),
+        );
+        assert_eq!(
+            load_config(config.to_str().unwrap()).unwrap().targets[0].password,
+            "first"
+        );
+        let replacement = path.with_extension("next");
+        std::fs::write(
+            &replacement,
+            r#"{"profiles":{"bmc":{"username":"admin","password":"second"}}}"#,
+        )
+        .unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        assert_eq!(
+            load_config(config.to_str().unwrap()).unwrap().targets[0].password,
+            "second"
+        );
+        std::fs::remove_file(config).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn requires_secret_file_and_rejects_unsupported_config_fields() {
+        for field in ["username", "password", "username_file", "password_file"] {
+            let input = format!(
+                "[credentials]\nfile = 'unused.json'\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\n{field} = 'sensitive-value'"
+            );
+            let error = parse_config(&input, "test.toml").unwrap_err().to_string();
+            assert!(error.contains("invalid TOML config"), "{error}");
+            assert!(!error.contains("sensitive-value"));
+        }
+        for input in [
+            "[credentials]\nfile = 'unused.json'\nusername_file = 'sensitive-value'\npassword_file = 'sensitive-value'",
+            "[credentials]\nfile = 'unused.json'\n[[machines]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
+            "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'",
+        ] {
+            let error = parse_config(input, "test.toml").unwrap_err().to_string();
+            assert!(error.contains("invalid TOML config"), "{error}");
+            assert!(!error.contains("sensitive-value"));
+        }
+        let input = "[credentials]\nfile = 'missing-secret-file.json'\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'";
+        assert!(
+            parse_config(input, "test.toml")
+                .unwrap_err()
+                .to_string()
+                .contains("failed to read credentials.file")
+        );
+    }
+
+    // Metadata tests use the same file-only credential path as production.
+    fn with_test_credentials(content: &str) -> String {
+        static SECRET: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let path = SECRET.get_or_init(|| {
+            write_credential(
+                "metadata-credentials",
+                r#"{"profiles":{"bmc":{"username":"admin","password":"secret"}}}"#,
+            )
+        });
+        format!(
+            "{content}\n[credentials]\nfile = {:?}",
+            path.to_str().unwrap()
+        )
+    }
+
+    fn parse_test_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
+        parse_config(&with_test_credentials(contents), path)
+    }
+
+    fn write_test_config(name: &str, content: &str) -> PathBuf {
+        write_config(name, &with_test_credentials(content))
+    }
+
     fn write_config(name: &str, content: &str) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(

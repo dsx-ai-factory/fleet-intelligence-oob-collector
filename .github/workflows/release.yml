@@ -19,9 +19,8 @@ env:
   IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
   NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
-  # 2dab104 is the merge of NVIDIA/infra-controller#5686, which adds the
-  # [attributes] gpu_identity gate this chart enables by default.
-  NICO_SOURCE_REF: 2dab10498f21b47c5f26c39405e5200a2a2168f0
+  # Shared JSON credential support from dsx-ai-factory/infra-controller#7730.
+  NICO_SOURCE_REF: 7f55623984648e0d713bfb5c19086f349b32e669
   CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
@@ -182,7 +181,7 @@ jobs:
       - name: Check out pinned NICo source
         uses: actions/checkout@v4
         with:
-          repository: NVIDIA/infra-controller
+          repository: dsx-ai-factory/infra-controller
           ref: ${{ env.NICO_SOURCE_REF }}
           path: nico-source
           persist-credentials: false
