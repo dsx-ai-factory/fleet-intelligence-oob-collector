@@ -116,6 +116,8 @@ mod tests {
             memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            memory: Vec::new(),
+            storage: Vec::new(),
             links: BTreeMap::new(),
         }
     }

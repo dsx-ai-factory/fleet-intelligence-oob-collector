@@ -813,6 +813,108 @@ fn write_node_details(out: &mut String, inventory: &NodeInventory) {
         pcie_device_rows,
     ));
 
+    out.push_str("Memory\n");
+    out.push_str(&render_table(
+        &[
+            "System",
+            "ID",
+            "Type",
+            "MiB",
+            "Serial",
+            "Part",
+            "Manufacturer",
+            "Locator",
+            "Status",
+            "Health",
+        ],
+        inventory
+            .systems
+            .iter()
+            .flat_map(|system| system.memory.iter())
+            .map(|memory| {
+                [
+                    memory.system_id.clone(),
+                    memory.id.clone(),
+                    memory.memory_device_type.clone().unwrap_or_default(),
+                    memory
+                        .capacity_mib
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    memory.serial_number.clone().unwrap_or_default(),
+                    memory.part_number.clone().unwrap_or_default(),
+                    memory.manufacturer.clone().unwrap_or_default(),
+                    memory.device_locator.clone().unwrap_or_default(),
+                    status_state(memory.status.as_ref()),
+                    status_health(memory.status.as_ref()),
+                ]
+            }),
+    ));
+    out.push_str("Storage\n");
+    out.push_str(&render_table(
+        &["System", "ID"],
+        inventory
+            .systems
+            .iter()
+            .flat_map(|system| system.storage.iter())
+            .map(|storage| [storage.system_id.clone(), storage.id.clone()]),
+    ));
+    out.push_str("Drives\n");
+    out.push_str(&render_table(
+        &[
+            "System", "Storage", "ID", "Model", "Serial", "Bytes", "Protocol", "Media", "Revision",
+            "Status", "Health",
+        ],
+        inventory
+            .systems
+            .iter()
+            .flat_map(|system| system.storage.iter())
+            .flat_map(|storage| storage.drives.iter())
+            .map(|drive| {
+                [
+                    drive.system_id.clone(),
+                    drive.storage_id.clone(),
+                    drive.id.clone(),
+                    drive.model.clone().unwrap_or_default(),
+                    drive.serial_number.clone().unwrap_or_default(),
+                    drive
+                        .capacity_bytes
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    drive.protocol.clone().unwrap_or_default(),
+                    drive.media_type.clone().unwrap_or_default(),
+                    drive.revision.clone().unwrap_or_default(),
+                    status_state(drive.status.as_ref()),
+                    status_health(drive.status.as_ref()),
+                ]
+            }),
+    ));
+    out.push_str("Power Supplies\n");
+    out.push_str(&render_table(
+        &[
+            "Chassis", "ID", "Model", "Serial", "Part", "Firmware", "Watts", "Status", "Health",
+        ],
+        inventory
+            .chassis
+            .iter()
+            .flat_map(|chassis| chassis.power_supplies.iter())
+            .map(|supply| {
+                [
+                    supply.chassis_id.clone(),
+                    supply.id.clone(),
+                    supply.model.clone().unwrap_or_default(),
+                    supply.serial_number.clone().unwrap_or_default(),
+                    supply.part_number.clone().unwrap_or_default(),
+                    supply.firmware_version.clone().unwrap_or_default(),
+                    supply
+                        .power_capacity_watts
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    status_state(supply.status.as_ref()),
+                    status_health(supply.status.as_ref()),
+                ]
+            }),
+    ));
+
     let firmware_rows = inventory
         .firmware
         .iter()
@@ -1319,6 +1421,8 @@ mod tests {
                     ..Default::default()
                 }),
                 secure_boot_enabled: Some(true),
+                memory: Vec::new(),
+                storage: Vec::new(),
                 processors: vec![ProcessorInventory {
                     name: "Processor".into(),
                     description: None,
@@ -1379,6 +1483,7 @@ mod tests {
                 power_state: Some("on".to_string()),
                 status: Some(inventory_status("Enabled", "OK", "OK")),
                 location: None,
+                power_supplies: Vec::new(),
                 pcie_devices: vec![PcieDeviceInventory {
                     name: "PcieDevice".into(),
                     description: None,
@@ -1448,6 +1553,8 @@ mod tests {
             memory_summary: None,
             secure_boot_enabled: None,
             processors: Vec::new(),
+            memory: Vec::new(),
+            storage: Vec::new(),
             links: Default::default(),
         }
     }

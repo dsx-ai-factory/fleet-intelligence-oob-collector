@@ -8,7 +8,7 @@ information must be collected independently of the host operating system.
 ## What it provides
 
 - Inventory collection for systems, managers, chassis, processors, PCIe
-  devices, firmware, and secure boot state.
+  devices, memory modules, storage/drives, power supplies, firmware, and secure boot state.
 - GPU attestation using backend-issued nonces and Redfish evidence collection.
 - Per-BMC concurrency and rate limiting shared by inventory and attestation.
 - [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health)
