@@ -57,8 +57,8 @@ release permissions and publication behavior.
 ## Required Invariants
 
 - Configure targets through `[[targets]]` and credentials through a separate
-  shared JSON file. Reject inline credentials, separate username/password
-  files, and legacy `[[machines]]` configuration.
+  shared JSON file. Resolve all credential values from its profiles and
+  per-MAC overrides.
 - Route inventory and attestation Redfish work through `bmc-dispatch`; do not
   create a separate path that bypasses shared per-BMC limits.
 - Preserve successfully collected inventory when one Redfish domain fails.

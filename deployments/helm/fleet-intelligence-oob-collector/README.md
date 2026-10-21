@@ -9,11 +9,10 @@ not run during an update.
 ## Prerequisites
 
 Create a ConfigMap for the password-free collector configuration and separate
-Secrets for the backend bootstrap token and BMC credentials:
+Secrets for the backend bootstrap token and BMC credentials.
 
 The ConfigMap contains targets and a reference to the shared JSON credentials
-file. Inline usernames/passwords and separate username/password files are not
-supported.
+file. Store credential values in the JSON file's profiles and per-MAC overrides.
 
 ```bash
 kubectl create namespace fleet-intelligence \
@@ -146,14 +145,11 @@ as inventory `computeZone` and `nodeGroup` and mirrors them to NICo telemetry as
 An init container runs `bmc-collector render-nico-config` to translate the shared
 config into NICo static endpoints. All target kinds use generic Redfish endpoints
 without NICo machine, switch, or power-shelf descriptors.
-NICo then emits the shared labels
-and discovered Redfish identity on OTLP resources. Per-target labels can add to
+NICo then emits the shared labels on metrics and logs. Per-target labels can add to
 or override the shared labels. The collector adds the reserved
 `oob="true"` label to every endpoint, plus the
 reserved `machine_name` label for named targets, so both are present on NICo
 metrics and logs.
-
-Use `[[targets]]`; legacy `[[machines]]` entries are not supported.
 
 ## Proxy configuration
 
@@ -206,8 +202,8 @@ image tag.
 ## NICo hardware health
 
 NICo hardware health is enabled by default. Its generated configuration is
-written to a memory-backed pod-local `emptyDir`; no second user-managed Secret
-is needed. It can be disabled when only inventory and attestation are needed:
+written to a memory-backed pod-local `emptyDir`. It can be disabled when only
+inventory and attestation are needed:
 
 ```bash
 helm upgrade --install fleet-intelligence-oob-collector \
@@ -258,10 +254,7 @@ otelGateway:
 The chart supports gateway replica scaling, topology spreading, an optional
 PodDisruptionBudget, resource configuration, and an ingress NetworkPolicy.
 
-Set `nicoHardwareHealth.metricsPrefix` when a non-default metric prefix is
-needed. When using NICo API mTLS, create a Secret containing `ca.crt`,
-`tls.crt`, and `tls.key`, then set `nicoHardwareHealth.tlsSecretName`. The
-files are mounted at `/var/run/secrets/spiffe.io`, matching NICo defaults.
+Set `nicoHardwareHealth.metricsPrefix` to configure the metric prefix.
 
 The release workflow builds this image from the pinned `infra-controller`
 commit configured by `NICO_SOURCE_REF` in `.github/workflows/release.yml`,

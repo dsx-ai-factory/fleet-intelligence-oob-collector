@@ -53,6 +53,9 @@ credentials:
 The JSON file defines named profiles and per-MAC overrides; see
 [configuration](configuration.md). The collector, NICo init container, and NICo
 runtime mount the same file at `/run/secrets/bmc/credentials.json`.
+The collector and NICo init container read target TOML from the ConfigMap.
+The init container runs `bmc-collector render-nico-config` to write NICo TOML
+into a memory-backed pod volume, referencing the shared JSON file and profiles.
 
 If the images are private, create an image pull Secret using a token with
 `read:packages` access:

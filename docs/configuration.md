@@ -140,7 +140,7 @@ state. See [installation](installation.md#create-configmap-and-secrets).
 `bmc-collector render-nico-config` reads the same TOML and JSON files as the
 collector. It writes the JSON file's absolute path and each selected profile
 into NICo TOML, without copying credential values. Kubernetes invokes this
-command in the existing init container; the host package uses its existing
+command in its init container; the host package uses
 systemd `ExecStartPre`. All target kinds render as generic static Redfish
 endpoints without NICo machine, switch, or power-shelf descriptors.
 
