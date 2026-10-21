@@ -203,3 +203,8 @@ debian-test: debian-package
 
 package-snapshot:
 	$(MAKE) debian-package PACKAGE_OUTPUT=dist/snapshot PACKAGE_VERSION="$$(cargo pkgid -p fleet-intelligence-oob | sed 's/.*[#@]//')~snapshot.$$(git rev-parse --short=12 HEAD)"
+
+.PHONY: release-test
+release-test:
+	docker build --file deployments/packages/tests/Dockerfile.release --tag fleetint-oob-release-test .
+	docker run --rm fleetint-oob-release-test

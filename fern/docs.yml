@@ -19,6 +19,9 @@ metadata:
 # it is entirely CI-managed. Update this navigation: block when pages are added
 # or removed from docs/.
 navigation:
+  - page: Signed host-package releases
+    path: ../docs/host-package-release.md
+    slug: host-package-releases
   - page: Host package
     path: ../deployments/packages/README.md
     slug: host-package

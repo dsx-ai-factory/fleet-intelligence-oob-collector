@@ -160,8 +160,8 @@ Git fixtures; they never manage host services or fetch remote sources.
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
 Real service startup, upgrade/rollback, and shutdown during collection still
-need validation in a disposable VM before production use. Signing and release
-publishing are outside this prototype.
+need validation in a disposable VM before production use. For the signed Debian release flow and signing runner configuration, see
+[signed host-package releases](../../docs/host-package-release.md).
 
 ## Docker validation
 
