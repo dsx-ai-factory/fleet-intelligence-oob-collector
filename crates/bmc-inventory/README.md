@@ -18,7 +18,8 @@ Target
 
 Each observation is identified by its required configured BMC MAC in
 `source.mac`, formatted as uppercase colon-separated text. The collector gathers
-managers, systems, processors, secure boot, chassis, PCIe devices, firmware,
+managers, systems, processors, memory modules, storage/drives, secure boot,
+chassis, PCIe devices, power supplies, firmware,
 fabrics, and switches.
 
 A configured target name provides a display label. System hostnames come from
@@ -52,6 +53,9 @@ control flow.
 | `managers` | `null` | Keep stored manager data. |
 | `systems` | `null` | Keep stored system data, including secure boot. |
 | `systems.processors` | system ID | Update system data while keeping stored processors. |
+| `systems.memory` | system ID | Update system data while keeping stored memory modules. |
+| `systems.storage` | system ID | Keep the system's stored storage and drives if any controller/drive read fails. |
+| `chassis.powerSupplies` | chassis ID | Update chassis data while keeping stored power supplies. |
 | `systems.secureBoot` | system ID | Update system data while keeping stored secure boot state. |
 | `chassis` | `null` | Keep stored chassis data, including PCIe devices. |
 | `chassis.pcieDevices` | chassis ID | Update chassis data while keeping stored PCIe devices. |

@@ -34,6 +34,9 @@ pub use tcp_probe::{LatencyProbe, TcpProbeConfig};
 pub mod inventory_domain {
     pub const MANAGERS: &str = "managers";
     pub const SYSTEMS: &str = "systems";
+    pub const SYSTEMS_MEMORY: &str = "systems.memory";
+    pub const SYSTEMS_STORAGE: &str = "systems.storage";
+    pub const CHASSIS_POWER_SUPPLIES: &str = "chassis.powerSupplies";
     pub const SYSTEMS_PROCESSORS: &str = "systems.processors";
     pub const SYSTEMS_SECURE_BOOT: &str = "systems.secureBoot";
     pub const CHASSIS: &str = "chassis";

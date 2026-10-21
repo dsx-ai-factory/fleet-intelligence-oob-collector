@@ -106,17 +106,17 @@ impl RedfishSource {
     }
 
     async fn collect_report(&self, target: &Target) -> Result<RedfishReport, String> {
-        let root = self
+        let (root, bmc) = self
             .service_root(target)
             .await
             .map_err(|err| err.to_string())?;
-        collect_report_from_root(&root).await
+        collect_report_from_root(&root, bmc.as_ref()).await
     }
 
     async fn service_root(
         &self,
         target: &Target,
-    ) -> Result<ServiceRoot<RedfishBmc>, Box<dyn Error>> {
+    ) -> Result<(ServiceRoot<RedfishBmc>, Arc<RedfishBmc>), Box<dyn Error>> {
         let url = bmc_url(&target.address)?;
         let gate = self
             .dispatcher
@@ -128,7 +128,7 @@ impl RedfishSource {
             BmcCredentials::new(target.username.clone(), target.password.clone()),
             CacheSettings::with_capacity(32),
         ));
-        Ok(ServiceRoot::new(bmc).await?)
+        Ok((ServiceRoot::new(bmc.clone()).await?, bmc))
     }
 }
 

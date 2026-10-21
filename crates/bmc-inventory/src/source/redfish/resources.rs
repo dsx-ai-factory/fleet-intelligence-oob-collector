@@ -28,15 +28,16 @@ use super::links::{
 use super::location::location_data;
 use super::status::{redfish_enum_string, status_data};
 use crate::models::{
-    ChassisInventory, DomainError, FabricInventory, FirmwareInventory, InventoryUuid,
-    ManagerInventory, MemorySummary, NvidiaGpuInventory, NvidiaSwitchInventory,
-    NvlinkTopologyInventory, PcieDeviceInventory, ProcessorInventory, ProcessorSummary,
-    SwitchInventory, SystemInventory,
+    ChassisInventory, DomainError, DriveInventory, FabricInventory, FirmwareInventory,
+    InventoryUuid, ManagerInventory, MemoryInventory, MemorySummary, NvidiaGpuInventory,
+    NvidiaSwitchInventory, NvlinkTopologyInventory, PcieDeviceInventory, PowerSupplyInventory,
+    ProcessorInventory, ProcessorSummary, StorageInventory, SwitchInventory, SystemInventory,
 };
 use crate::source::{RedfishReport, ServiceRootData, inventory_domain};
 
 pub(super) async fn collect_report_from_root<B: Bmc>(
     root: &ServiceRoot<B>,
+    bmc: &B,
 ) -> Result<RedfishReport, String> {
     let raw_root = root.root.as_ref();
     let service_root = ServiceRootData {
@@ -54,7 +55,7 @@ pub(super) async fn collect_report_from_root<B: Bmc>(
     );
     let systems_result = collect_systems(root, &mut errors).await;
     let systems = collect_domain(&mut errors, inventory_domain::SYSTEMS, systems_result);
-    let chassis_result = collect_chassis(root, &mut errors).await;
+    let chassis_result = collect_chassis(root, bmc, &mut errors).await;
     let chassis = collect_domain(&mut errors, inventory_domain::CHASSIS, chassis_result);
     let firmware = collect_domain(
         &mut errors,
@@ -167,6 +168,8 @@ async fn collect_systems<B: Bmc>(
             memory_summary: raw.memory_summary.as_ref().map(memory_summary_data),
             secure_boot_enabled: collect_secure_boot_enabled(&system, &system_id, errors).await,
             processors: collect_processors(&system, &system_id, errors).await,
+            memory: collect_memory(&system, &system_id, errors).await,
+            storage: collect_storage(&system, &system_id, errors).await,
             links: system_links(raw.links.as_ref()),
         });
     }
@@ -175,6 +178,7 @@ async fn collect_systems<B: Bmc>(
 
 async fn collect_chassis<B: Bmc>(
     root: &ServiceRoot<B>,
+    bmc: &B,
     errors: &mut Vec<DomainError>,
 ) -> Result<Vec<ChassisInventory>, String> {
     let Some(collection) = root
@@ -209,6 +213,7 @@ async fn collect_chassis<B: Bmc>(
             status: status_data(raw.status.as_ref()),
             location: location_data(raw.location.as_ref()),
             pcie_devices: collect_pcie_devices(&chassis, &chassis_id, errors).await,
+            power_supplies: collect_power_supplies(&chassis, bmc, &chassis_id, errors).await,
             links: chassis_links(raw.links.as_ref()),
         });
     }
@@ -592,6 +597,192 @@ fn push_inventory_error(
     });
 }
 
+async fn collect_memory<B: Bmc>(
+    system: &nv_redfish::computer_system::ComputerSystem<B>,
+    system_id: &str,
+    errors: &mut Vec<DomainError>,
+) -> Vec<MemoryInventory> {
+    let modules = match system.memory_modules().await {
+        Ok(modules) => modules.unwrap_or_default(),
+        Err(err) => {
+            push_inventory_error(
+                errors,
+                inventory_domain::SYSTEMS_MEMORY,
+                Some(system_id.to_string()),
+                err,
+            );
+            return Vec::new();
+        }
+    };
+    modules
+        .into_iter()
+        .map(|module| {
+            let raw = module.raw();
+            MemoryInventory {
+                id: raw.id.to_string(),
+                system_id: system_id.to_string(),
+                odata_id: Some(raw.odata_id.to_string().into()),
+                memory_device_type: raw
+                    .memory_device_type
+                    .flatten()
+                    .and_then(redfish_enum_string),
+                capacity_mib: raw.capacity_mi_b.flatten(),
+                serial_number: raw.serial_number.clone().flatten(),
+                part_number: raw.part_number.clone().flatten(),
+                manufacturer: raw.manufacturer.clone().flatten(),
+                device_locator: raw.device_locator.clone().flatten(),
+                location: location_data(raw.location.as_ref()),
+                status: status_data(raw.status.as_ref()),
+            }
+        })
+        .collect()
+}
+
+async fn collect_storage<B: Bmc>(
+    system: &nv_redfish::computer_system::ComputerSystem<B>,
+    system_id: &str,
+    errors: &mut Vec<DomainError>,
+) -> Vec<StorageInventory> {
+    let controllers = match system.storage_controllers().await {
+        Ok(controllers) => controllers.unwrap_or_default(),
+        Err(err) => {
+            push_inventory_error(
+                errors,
+                inventory_domain::SYSTEMS_STORAGE,
+                Some(system_id.to_string()),
+                err,
+            );
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::with_capacity(controllers.len());
+    for controller in controllers {
+        let raw = controller.raw();
+        let storage_id = raw.id.to_string();
+        let drives = match controller.drives().await {
+            Ok(drives) => drives.unwrap_or_default(),
+            Err(err) => {
+                // Preserve the stored system's entire storage section if any drive
+                // list is incomplete; other systems and inventory domains still update.
+                push_inventory_error(
+                    errors,
+                    inventory_domain::SYSTEMS_STORAGE,
+                    Some(system_id.to_string()),
+                    err,
+                );
+                Vec::new()
+            }
+        };
+        let drives = drives
+            .into_iter()
+            .map(|drive| {
+                let raw = drive.raw();
+                DriveInventory {
+                    id: raw.id.to_string(),
+                    system_id: system_id.to_string(),
+                    storage_id: storage_id.clone(),
+                    odata_id: Some(raw.odata_id.to_string().into()),
+                    model: raw.model.clone().flatten(),
+                    serial_number: raw.serial_number.clone().flatten(),
+                    capacity_bytes: raw.capacity_bytes.flatten(),
+                    protocol: raw.protocol.flatten().and_then(redfish_enum_string),
+                    media_type: raw.media_type.flatten().and_then(redfish_enum_string),
+                    revision: raw.revision.clone().flatten(),
+                    status: status_data(raw.status.as_ref()),
+                }
+            })
+            .collect();
+        out.push(StorageInventory {
+            id: storage_id,
+            system_id: system_id.to_string(),
+            odata_id: Some(raw.odata_id.to_string().into()),
+            drives,
+        });
+    }
+    out
+}
+
+async fn collect_power_supplies<B: Bmc>(
+    chassis: &nv_redfish::chassis::Chassis<B>,
+    bmc: &B,
+    chassis_id: &str,
+    errors: &mut Vec<DomainError>,
+) -> Vec<PowerSupplyInventory> {
+    let supplies = match chassis.power_supplies().await {
+        Ok(supplies) => supplies,
+        Err(err) => {
+            push_inventory_error(
+                errors,
+                inventory_domain::CHASSIS_POWER_SUPPLIES,
+                Some(chassis_id.to_string()),
+                err,
+            );
+            return Vec::new();
+        }
+    };
+    if supplies.is_empty() && chassis.raw().power_subsystem.is_none() {
+        let power = match chassis.power().await {
+            Ok(Some(power)) => power,
+            Ok(None) => return Vec::new(),
+            Err(err) => {
+                push_inventory_error(
+                    errors,
+                    inventory_domain::CHASSIS_POWER_SUPPLIES,
+                    Some(chassis_id.to_string()),
+                    err,
+                );
+                return Vec::new();
+            }
+        };
+        let raw_power = power.raw();
+        let mut out = Vec::new();
+        for link in raw_power.power_supplies.as_deref().unwrap_or_default() {
+            let raw = match link.get(bmc).await {
+                Ok(raw) => raw,
+                Err(err) => {
+                    push_inventory_error(
+                        errors,
+                        inventory_domain::CHASSIS_POWER_SUPPLIES,
+                        Some(chassis_id.to_string()),
+                        err,
+                    );
+                    continue;
+                }
+            };
+            out.push(PowerSupplyInventory {
+                id: raw.member_id.to_string(),
+                chassis_id: chassis_id.to_string(),
+                odata_id: Some(raw.odata_id.to_string().into()),
+                model: raw.model.clone().flatten(),
+                serial_number: raw.serial_number.clone().flatten(),
+                part_number: raw.part_number.clone().flatten(),
+                firmware_version: raw.firmware_version.clone().flatten(),
+                power_capacity_watts: raw.power_capacity_watts.flatten(),
+                status: status_data(raw.status.as_ref()),
+            });
+        }
+        return out;
+    }
+
+    supplies
+        .into_iter()
+        .map(|supply| {
+            let raw = supply.raw();
+            PowerSupplyInventory {
+                id: raw.id.to_string(),
+                chassis_id: chassis_id.to_string(),
+                odata_id: Some(raw.odata_id.to_string().into()),
+                model: raw.model.clone().flatten(),
+                serial_number: raw.serial_number.clone().flatten(),
+                part_number: raw.part_number.clone().flatten(),
+                firmware_version: raw.firmware_version.clone().flatten(),
+                power_capacity_watts: raw.power_capacity_watts.flatten(),
+                status: status_data(raw.status.as_ref()),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -673,8 +864,12 @@ mod tests {
             fixture.firmware,
         ));
 
-        let root = ServiceRoot::new(bmc).await.expect("service root wrapper");
-        collect_report_from_root(&root).await.expect("report")
+        let root = ServiceRoot::new(bmc.clone())
+            .await
+            .expect("service root wrapper");
+        collect_report_from_root(&root, bmc.as_ref())
+            .await
+            .expect("report")
     }
 
     #[test]
@@ -1189,7 +1384,9 @@ mod tests {
         for (uri, body) in responses {
             bmc.expect(Expect::get(uri, body));
         }
-        let root = ServiceRoot::new(bmc).await.expect("service root wrapper");
+        let root = ServiceRoot::new(bmc.clone())
+            .await
+            .expect("service root wrapper");
         let mut errors = Vec::new();
         let result = collect_fabrics(&root, &mut errors).await;
         let fabrics = collect_domain(&mut errors, inventory_domain::FABRICS, result);
