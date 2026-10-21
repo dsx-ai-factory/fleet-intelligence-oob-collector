@@ -73,7 +73,8 @@ units without creating accounts or starting collection. Install the package:
 ```bash
 sudo apt install ./dist/packages/fleetint-oob_*.deb
 # RPM systems: sudo dnf install ./dist/packages/fleetint-oob-*.rpm
-sudo install -m 0600 -o root -g root /secure/path/to/credentials.json \
+sudo install -m 0600 -o root -g root \
+  /usr/share/doc/fleetint-oob/credentials.example.json \
   /etc/fleetint-oob/credentials/credentials.json
 ```
 
@@ -88,9 +89,13 @@ systemd `EnvironmentFile`; no shell wrappers are used.
 
 Set each target's `credentials_profile` to a profile in the shared JSON file,
 or provide a per-MAC override. A placeholder example is installed at
-`/usr/share/doc/fleetint-oob/credentials.example.json`; replace its values before use.
-NICo's `ExecStartPre` uses `bmc-collector render-nico-config` to reference that
-same file. Credential values are not copied into generated TOML. Upgrades
+`/usr/share/doc/fleetint-oob/credentials.example.json`. Copy it to
+`/etc/fleetint-oob/credentials/credentials.json` using the command above, then
+replace placeholder values only in that copy. Keep the credentials file owned
+by root with mode `0600`; the installed documentation example must contain
+placeholders only.
+NICo's `ExecStartPre` uses `bmc-collector render-nico-config` to reference
+`/etc/fleetint-oob/credentials/credentials.json`. Credential values are not copied into generated TOML. Upgrades
 preserve operator files: migrate old username/password file references to
 `[credentials].file` and `credentials_profile` before restarting services.
 
