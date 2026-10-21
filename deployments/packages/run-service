@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+# Preserve existing EnvironmentFile tokens while supporting a protected file.
+if [ -n "${FLEETINT_AGENT_TOKEN_FILE:-}" ]; then
+    FLEETINT_AGENT_TOKEN=$(cat -- "$FLEETINT_AGENT_TOKEN_FILE")
+    export FLEETINT_AGENT_TOKEN
+fi
+: "${FLEETINT_AGENT_TOKEN:?Configure FLEETINT_AGENT_TOKEN_FILE or FLEETINT_AGENT_TOKEN}"
+case "${1:-}" in
+    collector)
+        exec /usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml \
+            --interval-seconds "${FLEETINT_INTERVAL_SECONDS:-86400}"
+        ;;
+    gateway)
+        exec /usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
+        ;;
+    *) echo 'Unknown host service' >&2; exit 2 ;;
+esac

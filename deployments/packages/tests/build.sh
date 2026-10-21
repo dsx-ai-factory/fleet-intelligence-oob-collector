@@ -26,6 +26,11 @@ grep -q 'No DEB packages' "$test_root/failure.log"
 expect_failure make --no-print-directory packages-check-rpm OUTPUTDIR="$test_root/empty"
 grep -q 'No RPM packages' "$test_root/failure.log"
 
+expect_failure make --no-print-directory package-native-check NICO_REF=
+grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
+expect_failure make --no-print-directory package-native-check AGENT_REF=
+grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
+
 # Real local Git repositories, with mocked compilers: no network or actual builds.
 printf '[workspace]\n' > "$test_root/nico/Cargo.toml"
 printf 'dist: {}\n' > "$test_root/agent/otelcol/otelcol-builder.yaml"
@@ -51,6 +56,10 @@ export GIT_CONFIG_VALUE_1=https://github.com/dsx-ai-factory/fleet-intelligence-a
 cat > "$test_root/bin/cargo" <<'EOF'
 #!/bin/sh
 set -eu
+if [ "$1" = tree ]; then
+    echo 'fixture v0.1.0: Apache-2.0'
+    exit 0
+fi
 while [ "$1" != --target ]; do shift; done
 target=$2
 mkdir -p "$CARGO_TARGET_DIR/$target/release"
@@ -67,6 +76,7 @@ git rev-parse HEAD > "$output/fleetint-otelcol"
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$test_root/bin/rustup"
 cp "$test_root/bin/rustup" "$test_root/bin/protoc"
+cp "$test_root/bin/rustup" "$test_root/bin/strip"
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 

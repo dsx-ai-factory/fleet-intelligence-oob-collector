@@ -67,26 +67,31 @@ from glibc, so validate name resolution in the target environment.
 
 ## Configure a test VM
 
-Requires systemd. All services run as root. Installation reloads
+Requires systemd. All services run as the dedicated `fleetint-oob` system account with an empty
+capability set, a read-only system filesystem, and private temporary directories. Installation reloads
 units without creating accounts or starting collection. Install the package:
 
 ```bash
 sudo apt install ./dist/packages/fleetint-oob_*.deb
 # RPM systems: sudo dnf install ./dist/packages/fleetint-oob-*.rpm
-sudo install -m 0600 -o root -g root /secure/path/to/bmc-username \
+sudo install -m 0640 -o root -g fleetint-oob /secure/path/to/bmc-username \
   /etc/fleetint-oob/credentials/username
-sudo install -m 0600 -o root -g root /secure/path/to/bmc-password \
+sudo install -m 0640 -o root -g fleetint-oob /secure/path/to/bmc-password \
   /etc/fleetint-oob/credentials/password
 ```
 
 The package installs `/etc/fleetint-oob/config.toml` with a commented example
-target and mode `0600`, preserving edits on upgrade. Uncomment the example and
+target and mode `0640`, preserving edits on upgrade. Uncomment the example and
 set a real BMC address and MAC before starting services. An empty target list
 is rejected by the collector. See
 [configuration](../../docs/configuration.md). Set backend/proxy settings in
-`/etc/fleetint-oob/service.conf`, including `FLEETINT_AGENT_TOKEN`. This file is
-installed root-owned with mode `0600`. Both services read it directly through
-systemd `EnvironmentFile`; no shell wrappers are used.
+`/etc/fleetint-oob/service.conf`. Prefer `FLEETINT_AGENT_TOKEN_FILE` pointing to
+a root-owned, group-readable `0640` token file such as
+`/etc/fleetint-oob/agent-token`. Existing `FLEETINT_AGENT_TOKEN` settings continue
+to work; an explicitly configured token file takes precedence and read failures
+stop startup visibly. This file is
+installed root-owned with mode `0600`. Systemd reads this file, and small shell entry points load the token before
+executing the collector or gateway. Tokens never appear in process arguments.
 
 Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the
 backend. Environment files do not expand references to other variables.
@@ -100,20 +105,28 @@ systemctl status fleetint-oob-collector.service fleetint-nico-health.service \
 
 The target groups services; inspect each service to verify health. NICo renders
 its private configuration under `/run` before starting. Telemetry listeners
-bind to loopback. The collector and gateway use the same
-`FLEETINT_AGENT_TOKEN` environment variable from `service.conf`.
+bind to loopback. The collector and gateway use the same token source.
+[Sysusers](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysusers.html)
+creates the service account.
+[Tmpfiles](https://www.freedesktop.org/software/systemd/man/latest/tmpfiles.d.html)
+grants that account read access
+to the existing standard configuration and credential files during upgrades,
+while retaining root ownership. Symlinked credentials are not followed for
+permission changes. Credentials at custom paths must already be readable by
+`fleetint-oob`. Configuration changes remain operator-owned.
 
 ## Upgrade and remove
 
-Packages preserve configuration and do not automatically restart services on
-upgrade. Restart the target after upgrading or changing targets, tokens,
-or shared settings. The collector handles SIGINT and SIGTERM during active
+Packages preserve configuration. An upgrade restarts only services that were
+already active; stopped services remain stopped. The collector drains inventory
+uploads before exiting. Restart the target after changing targets, tokens, or
+shared settings. The collector handles SIGINT and SIGTERM during active
 collection: it cancels collection, drains completed inventory awaiting upload,
 and finishes an in-flight upload before stopping. Its systemd stop timeout is
 300 seconds to accommodate the bounded inventory queue and HTTP retries.
 
 Keep `FLEETINT_INTERVAL_SECONDS` set in `service.conf` (default: `86400`).
-Missing or invalid command-line settings are not retried. Other startup failures,
+Command-line parse errors and a missing token are not retried. Other startup failures,
 including enrollment failures, restart after 10 seconds using the host's default
 systemd start-limit policy. The package does not set a stricter start limit.
 
@@ -135,8 +148,10 @@ Debian hooks use `deb-systemd-invoke` for stopping services and
 up on purge, following the [debhelper convention](https://manpages.debian.org/bookworm/debhelper/dh_installsystemd.1.en.html).
 RPM hooks use explicit systemd commands in nFPM scriptlets, following the
 [systemd packaging lifecycle](https://www.freedesktop.org/software/systemd/man/latest/daemon.html).
-The prototype does not automatically enable/start services or restart them on
-upgrade. Service-management failures do not fail package transactions.
+Fresh installations do not enable or start collection. Upgrades restart only
+active services after installing their new binaries. Service-management failures
+emit warnings while allowing package transactions to complete. Account creation
+and credential-permission failures stop installation.
 
 Run `make packages-test-hooks packages-test-build` for isolated lifecycle and
 build regression tests. They use mocked service/compiler commands and local
@@ -147,3 +162,21 @@ using the distribution's inspection tools. They never install packages.
 Real service startup, upgrade/rollback, and shutdown during collection still
 need validation in a disposable VM before production use. Signing and release
 publishing are outside this prototype.
+
+## Docker validation
+
+`make debian-test` builds the same pinned native sources and nFPM manifest in
+Docker, installs the actual package in Debian 12, starts all three daemons under
+the service account, verifies enrollment and authenticated gateway export against
+a loopback fixture, and checks configuration preservation, upgrades, removal,
+and purge. The shell tests also cover legacy/file token selection, active-only
+restarts, visible failure reporting, and permission migration without following
+credential symlinks. No customer backend or BMC is contacted.
+
+`make package-snapshot` writes an unsigned snapshot to `dist/snapshot/`.
+`make debian-package PACKAGE_VERSION=1.2.3-rc.1` overrides the release version.
+The package metadata uses Debian's `~` prerelease ordering; exported filenames
+retain the requested version. Docker builds and tests do not boot systemd as
+PID 1. Validate service sandboxing and musl DNS on disposable target VMs before
+production rollout. RPM lifecycle hooks retain isolated shell coverage; a real
+RPM install and upgrade still require validation on a target distribution.

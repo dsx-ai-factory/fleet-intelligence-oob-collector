@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+.codex
+.agents
+.aws
+.DS_Store
+target
+dist
+redfish-raw*
+*.log
+*.tmp
+.config
+.env
+charts
+dev

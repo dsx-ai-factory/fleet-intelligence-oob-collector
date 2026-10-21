@@ -27,3 +27,7 @@ tests/
 `shutdown.rs` runs collector child processes against localhost fixtures to
 verify SIGINT/SIGTERM handling during enrollment, Redfish collection, and an
 in-flight backend upload. It never contacts real BMCs or customer backends.
+
+Run `make debian-test` for a real three-component Debian package installation,
+non-root daemon startup, authenticated telemetry export to loopback fixtures,
+and upgrade/removal coverage. These checks use shell scripts in Docker.

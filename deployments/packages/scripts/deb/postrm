@@ -6,14 +6,14 @@ set -eu
 if command -v deb-systemd-helper >/dev/null 2>&1; then
     case "${1:-}" in
         remove)
-            deb-systemd-helper mask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            deb-systemd-helper mask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || echo "[WARNING] Service management failed during deb/postrm; inspect systemd state" >&2
             ;;
         purge)
-            deb-systemd-helper purge fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
-            deb-systemd-helper unmask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            deb-systemd-helper purge fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || echo "[WARNING] Service management failed during deb/postrm; inspect systemd state" >&2
+            deb-systemd-helper unmask fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || echo "[WARNING] Service management failed during deb/postrm; inspect systemd state" >&2
             ;;
     esac
 fi
 if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-    systemctl --system daemon-reload >/dev/null || true
+    systemctl --system daemon-reload >/dev/null || echo "[WARNING] Service management failed during deb/postrm; inspect systemd state" >&2
 fi

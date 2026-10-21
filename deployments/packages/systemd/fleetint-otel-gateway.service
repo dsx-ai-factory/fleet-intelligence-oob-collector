@@ -7,10 +7,27 @@ After=network-online.target
 PartOf=fleetint-oob.target
 
 [Service]
+User=fleetint-oob
+Group=fleetint-oob
 EnvironmentFile=/etc/fleetint-oob/service.conf
-ExecStart=/usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
+ExecStart=/usr/lib/fleetint-oob/run-service gateway
 Restart=on-failure
 RestartSec=10s
+
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
+
 
 [Install]
 WantedBy=multi-user.target

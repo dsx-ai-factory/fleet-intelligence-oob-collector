@@ -25,6 +25,27 @@ chmod +x "$test_root/bin/systemctl"
 cp "$test_root/bin/systemctl" "$test_root/bin/deb-systemd-invoke"
 cp "$test_root/bin/systemctl" "$test_root/bin/deb-systemd-helper"
 
+cat > "$test_root/bin/systemd-sysusers" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$test_root/bin/systemd-tmpfiles" <<'EOF'
+#!/bin/sh
+# The real permission and symlink behavior is checked in the install container.
+exit 0
+EOF
+cat > "$test_root/bin/id" <<'EOF'
+#!/bin/sh
+case "$1" in -u|-g) echo "${HOOK_TEST_BAD_ACCOUNT:-999}" ;; -gn) echo fleetint-oob ;; *) exit 1 ;; esac
+EOF
+cat > "$test_root/bin/chroot" <<'EOF'
+#!/bin/sh
+shift 2
+exec id "$@"
+EOF
+chmod +x "$test_root/bin/chroot"
+chmod +x "$test_root/bin/systemd-sysusers" "$test_root/bin/systemd-tmpfiles" "$test_root/bin/id"
+
 run_hook() {
     : > "$HOOK_TEST_LOG"
     # Redirect only filesystem paths; execute the actual maintainer hook body.
@@ -37,7 +58,6 @@ run_hook() {
 units='fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service'
 
 run_hook deb/postinst configure
-test "$(stat -c %a "$test_root/etc/fleetint-oob/service.conf")" = 600
 if grep -Eq ' enable | start |restart' "$HOOK_TEST_LOG"; then
     echo 'Fresh installation enabled or started a service' >&2; exit 1
 fi
@@ -66,6 +86,10 @@ grep -Fx "deb-systemd-helper purge $units" "$HOOK_TEST_LOG"
 grep -Fx "deb-systemd-helper unmask $units" "$HOOK_TEST_LOG"
 
 export DPKG_ROOT=/unused-test-root
+run_hook deb/postinst configure
+if grep -q '^systemctl' "$HOOK_TEST_LOG"; then
+    echo 'Alternate-root installation contacted host systemd' >&2; exit 1
+fi
 run_hook deb/prerm remove
 test ! -s "$HOOK_TEST_LOG"
 run_hook deb/postrm remove
@@ -111,3 +135,16 @@ run_hook deb/postinst configure
 run_hook rpm/postinstall 2
 test ! -e "$test_root/etc/fleetint-oob/service.conf"
 echo 'Package lifecycle hook checks passed.'
+
+export HOOK_TEST_BAD_ACCOUNT=0
+if run_hook deb/postinst configure; then
+    echo 'Accepted a root service account' >&2; exit 1
+fi
+if run_hook rpm/postinstall 1; then
+    echo 'Accepted a root service account in an RPM install' >&2; exit 1
+fi
+export DPKG_ROOT=/unused-test-root
+if run_hook deb/postinst configure; then
+    echo 'Accepted a root service account in an alternate root' >&2; exit 1
+fi
+unset HOOK_TEST_BAD_ACCOUNT DPKG_ROOT
