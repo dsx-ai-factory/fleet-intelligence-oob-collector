@@ -122,9 +122,7 @@ spec:
                 path: config.toml
                 mode: 0440
         - name: nico-hardware-health-config
-          emptyDir:
-            medium: Memory
-            sizeLimit: 1Mi
+          emptyDir: {}
         - name: tmp
           emptyDir: {}
         - name: bmc-credentials

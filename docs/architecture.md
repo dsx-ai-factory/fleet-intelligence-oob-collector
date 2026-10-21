@@ -104,7 +104,7 @@ configuration and projected credential files, avoiding duplicated credentials.
 Helm generates only the collector TOML from `inventory` values. ConfigMap
 checksum annotations roll both deployments when that inventory changes, and
 NICo's init container regenerates its TOML with `render-nico-config`.
-Generated NICo configuration is held in a memory-backed pod volume. The
+Generated NICo configuration is held in a pod-local `emptyDir` volume. The
 collector and NICo use `Recreate` deployments to avoid duplicate collection;
 the independently scalable gateway uses `RollingUpdate`.
 

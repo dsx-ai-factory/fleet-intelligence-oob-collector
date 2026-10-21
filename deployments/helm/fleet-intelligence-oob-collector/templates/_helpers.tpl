@@ -108,6 +108,5 @@ affinity:
 {{- $mac := upper (replace "-" "" (replace ":" "" .mac)) -}}
 {{- if hasKey $seen $mac -}}{{- fail "inventory.targets contains a duplicate BMC MAC" -}}{{- end -}}
 {{- $_ := set $seen $mac true -}}
-{{- $_ := include "fleet-intelligence-oob-collector.targetLabels" (dict "root" $ "target" .) -}}
 {{- end -}}
 {{- end }}

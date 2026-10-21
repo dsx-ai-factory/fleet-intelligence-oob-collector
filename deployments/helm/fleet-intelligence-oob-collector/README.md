@@ -31,8 +31,8 @@ Targets require a unique MAC and an IP address. Kinds are `compute`, `nvswitch`,
 inventory. The NICo init container runs `bmc-collector render-nico-config` against
 that file; all target kinds become generic static Redfish endpoints. The
 collector, init container, and NICo mount the same JSON credentials file at
-`/run/secrets/bmc/credentials.json`. NICo TOML stays in a memory-backed pod volume
-and is not part of the ConfigMap.
+`/run/secrets/bmc/credentials.json`. NICo TOML stays in a pod-local `emptyDir`
+volume.
 
 Each workload supports `enabled`, `image`, `resources`, `nodeSelector`,
 `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo
@@ -48,4 +48,7 @@ collector cycle.
 
 See [values.yaml](values.yaml) for defaults and the
 [configuration reference](../../../docs/configuration.md#helm-values) for tuning,
-CPER export, and TLS behavior. Invalid fields and combinations fail rendering.
+CPER export, and TLS behavior. Helm validates value types, label-key syntax,
+and workload combinations. The collector validates reserved label names,
+counts, and value lengths when loading configuration, including in the NICo
+init container.

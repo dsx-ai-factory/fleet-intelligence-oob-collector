@@ -41,7 +41,7 @@ repository and replace its placeholder values. The chart mounts this same file
 into the collector, NICo init container, and NICo runtime at
 `/run/secrets/bmc/credentials.json`; credential values never enter Helm release state.
 The init container uses `bmc-collector render-nico-config` to generate NICo TOML
-from the chart's collector TOML in a memory-backed pod volume.
+from the chart's collector TOML in a pod-local `emptyDir` volume.
 
 Save `/path/to/collector-values.yaml` with target metadata and Secret references:
 

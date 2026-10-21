@@ -34,16 +34,16 @@
                 "type": "string",
                 "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$|^([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}$|^[0-9A-Fa-f]{12}$"
               },
-              "name": {"type": "string", "pattern": ".*\\S.*", "maxLength": 1024},
+              "name": {"type": "string", "pattern": ".*\\S.*"},
               "credentialsProfile": {"type": "string", "pattern": ".*\\S.*"},
-              "computeZone": {"type": "string", "pattern": ".*\\S.*", "maxLength": 1024},
-              "nodeGroup": {"type": "string", "pattern": ".*\\S.*", "maxLength": 1024},
+              "computeZone": {"type": "string", "pattern": ".*\\S.*"},
+              "nodeGroup": {"type": "string", "pattern": ".*\\S.*"},
               "labels": {"$ref": "#/definitions/labels"}
             }
           }
         },
-        "computeZone": {"type": "string", "pattern": "^$|.*\\S.*", "maxLength": 1024},
-        "nodeGroup": {"type": "string", "pattern": "^$|.*\\S.*", "maxLength": 1024},
+        "computeZone": {"type": "string", "pattern": "^$|.*\\S.*"},
+        "nodeGroup": {"type": "string", "pattern": "^$|.*\\S.*"},
         "labels": {"$ref": "#/definitions/labels"}
       }
     },
@@ -201,48 +201,8 @@
     },
     "labels": {
       "type": "object",
-      "propertyNames": {
-        "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
-        "not": {
-          "enum": [
-            "bmc_endpoint",
-            "bmc_ip",
-            "collector_type",
-            "component_type",
-            "driver_version",
-            "endpoint_ip",
-            "endpoint_key",
-            "endpoint_mac",
-            "gpu_chassis_serial",
-            "gpu_model",
-            "gpu_serial",
-            "gpu_uuid",
-            "machine_id",
-            "machine_serial",
-            "machine_slot_number",
-            "machine_tray_index",
-            "machine_name",
-            "compute_zone",
-            "node_group",
-            "nvlink_domain_uuid",
-            "oob",
-            "power_shelf_id",
-            "power_shelf_serial_number",
-            "rack_id",
-            "serial_number",
-            "switch_endpoint",
-            "switch_endpoint_role",
-            "switch_id",
-            "switch_ip",
-            "switch_is_primary",
-            "switch_serial_number",
-            "switch_slot_number",
-            "switch_tray_index",
-            "system_uuid"
-          ]
-        }
-      },
-      "additionalProperties": {"type": "string", "maxLength": 1024}
+      "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"},
+      "additionalProperties": {"type": "string"}
     },
     "image": {
       "type": "object",
