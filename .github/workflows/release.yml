@@ -20,7 +20,7 @@ env:
   NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   # Shared JSON credential support from dsx-ai-factory/infra-controller#7730.
-  NICO_SOURCE_REF: 7f55623984648e0d713bfb5c19086f349b32e669
+  NICO_SOURCE_REF: 70914e1cb8afcb82c9a0a30f67f2eb653352748e
   CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
