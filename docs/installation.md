@@ -20,7 +20,10 @@ For the experimental bare-metal/VM DEB/RPM installer, see the
 ## Configure targets and Secrets
 
 Helm creates the password-free ConfigMap from target values. Store the shared
-JSON BMC credential file and the agent token in separate existing Secrets:
+JSON BMC credential file and the agent token in separate existing Secrets.
+
+Create them directly below, or synchronize them from Vault/OpenBao using the
+[credentials guide](credentials.md):
 
 ```bash
 kubectl create namespace fleet-intelligence \

@@ -169,6 +169,10 @@ for an example.
 NICo uses the renderer defaults for sensor collection, SSE logs, GPU identity,
 CPER diagnostics, and alert details.
 
+Provision the shared JSON Secret and `backend.agentToken` directly or through
+an external secrets operator. See [Credentials](credentials.md) for Vault and
+OpenBao setup and credential reload behavior.
+
 ## Proxy and TLS
 
 Enable `proxy` with a cluster-reachable URL without credentials.
