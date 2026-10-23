@@ -26,7 +26,7 @@ Both services use the same inventory and
 [JSON credential file](../../../credentials.example.json). Credential fields
 resolve from the MAC override, then the selected profile.
 Provision these Secrets directly or synchronize them from Vault/OpenBao using
-the separately applied [examples](examples/). Follow the
+the separately applied [examples](../examples/). Follow the
 [credentials guide](../../../docs/credentials.md) for setup.
 
 Targets require a unique MAC and an IP address. Kinds are `compute`, `nvswitch`,
