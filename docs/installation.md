@@ -23,7 +23,26 @@ Helm creates the password-free ConfigMap from target values. Store the shared
 JSON BMC credential file and the agent token in separate existing Secrets.
 
 Create them directly below, or synchronize them from Vault/OpenBao using the
-[credentials guide](credentials.md):
+[credentials guide](credentials.md).
+
+Copy [credentials.example.json](../credentials.example.json) to
+`/secure/path/to/credentials.json` in an existing private directory, set its mode
+to `0600`, and replace its placeholder values. Obtain
+the bootstrap token from your Fleet Intelligence administrator, authorized for
+both collector and gateway enrollment. Save only its value in
+`/secure/path/to/agent-token`, with no surrounding whitespace or trailing newline.
+For example, in Bash, read it without echoing it or putting it in shell history:
+
+```bash
+umask 077
+read -r -s -p 'Fleet Intelligence bootstrap token: ' FLEETINT_BOOTSTRAP_TOKEN
+printf '\n'
+: "${FLEETINT_BOOTSTRAP_TOKEN:?Token must not be empty}"
+printf '%s' "$FLEETINT_BOOTSTRAP_TOKEN" > /secure/path/to/agent-token
+unset FLEETINT_BOOTSTRAP_TOKEN
+```
+
+Create the Secrets from those files:
 
 ```bash
 kubectl create namespace fleet-intelligence \
@@ -38,9 +57,7 @@ kubectl create secret generic fleet-intelligence-bmc-credentials \
   --from-file=credentials.json=/secure/path/to/credentials.json
 ```
 
-The JSON file uses named `profiles` and per-MAC `overrides`, as in
-[credentials.example.json](../credentials.example.json). Copy it outside the
-repository and replace its placeholder values. The chart mounts this same file
+The JSON file uses named `profiles` and per-MAC `overrides`. The chart mounts this file
 into the collector, NICo init container, and NICo runtime at
 `/run/secrets/bmc/credentials.json`; credential values never enter Helm release state.
 The init container uses `bmc-collector render-nico-config` to generate NICo TOML
@@ -61,6 +78,10 @@ inventory:
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
+backend:
+  agentToken:
+    existingSecret: fleet-intelligence-oob-collector-agent-token
+    secretKey: agent-token
 ```
 
 If the images are private, create an image pull Secret using a token with
@@ -128,7 +149,22 @@ kubectl get pods \
 kubectl logs \
   --namespace fleet-intelligence \
   deployment/fleet-intelligence-oob-collector
+
+kubectl logs --namespace fleet-intelligence \
+  deployment/nico-hardware-health --container generate-nico-config
+
+kubectl logs --namespace fleet-intelligence \
+  deployment/fleet-intelligence-oob-collector-otel-gateway
 ```
+
+Use your release's Deployment names and omit disabled components. The NICo init
+container must complete successfully. Check collector logs for successful
+inventory uploads and the gateway logs for enrollment or export errors; running
+pods alone do not confirm access. For BMC authentication failures, check the
+target's `credentialsProfile`, matching MAC overrides, and actual BMC account.
+For Fleet Intelligence enrollment failures, check the bootstrap token's validity,
+authorization for both flows, backend URL, and trusted edge customer identity.
+For gateway export failures, also check backend reachability and TLS trust.
 
 The collector reloads its mounted TOML and JSON credentials each collection
 cycle. NICo reloads the JSON file without restarting. Run `helm upgrade` after
