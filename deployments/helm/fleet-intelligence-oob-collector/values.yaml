@@ -10,14 +10,11 @@ config:
   configMapName: fleet-intelligence-config
   configKey: config.toml
 
-# Existing Kubernetes Secrets containing BMC credential files. Secret values
-# are mounted directly and are never rendered into Helm release state.
+# Shared BMC JSON file mounted into the collector, NICo init, and NICo runtime.
+# Values stay in the existing Secret, outside Helm release state.
 credentials:
-  secrets: []
-  # - name: default-bmc-credentials
-  #   target: default
-  # - name: exceptional-node-bmc-credentials
-  #   target: node-02
+  existingSecret: fleet-intelligence-bmc-credentials
+  secretKey: credentials.json
 
 # Fleet Intelligence BMC inventory and attestation collector.
 bmcCollector:
@@ -54,7 +51,7 @@ bmcCollector:
   latencyProbe: true
 
 # Optional NICo Redfish hardware-health service. Its generated TOML
-# configuration may contain BMC credentials and is kept in a memory-backed
+# configuration references the shared JSON credentials and is kept in a memory-backed
 # pod-local volume.
 nicoHardwareHealth:
   enabled: true

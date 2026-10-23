@@ -17,11 +17,8 @@ bmcCollector:
 config:
   configMapName: fleet-intelligence-config-test
 credentials:
-  secrets:
-    - name: default-bmc-credentials-test
-      target: default
-    - name: node-02-bmc-credentials-test
-      target: node-02
+  existingSecret: shared-bmc-credentials-test
+  secretKey: shared.json
 imagePullSecrets:
   - name: ghcr-pull-secret-test
 nicoHardwareHealth:

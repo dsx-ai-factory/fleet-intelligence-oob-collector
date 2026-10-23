@@ -17,6 +17,7 @@ static NEXT_CONFIG: AtomicU64 = AtomicU64::new(0);
 struct Runtime {
     child: Child,
     config: PathBuf,
+    credentials: PathBuf,
 }
 
 impl Runtime {
@@ -26,10 +27,17 @@ impl Runtime {
             std::process::id(),
             NEXT_CONFIG.fetch_add(1, Ordering::Relaxed)
         ));
+        let credentials = config.with_extension("json");
+        std::fs::write(
+            &credentials,
+            r#"{"profiles":{"bmc":{"username":"example-user","password":"example-password"}}}"#,
+        )
+        .expect("write test credentials");
         std::fs::write(
             &config,
             format!(
-                "[[targets]]\nip = \"127.0.0.1\"\nport = {bmc_port}\nmac = \"02:00:00:00:00:01\"\nusername = \"example-user\"\npassword = \"example-password\"\n"
+                "[credentials]\nfile = {:?}\n[[targets]]\nip = \"127.0.0.1\"\nport = {bmc_port}\nmac = \"02:00:00:00:00:01\"\ncredentials_profile = \"bmc\"\n",
+                credentials.to_str().expect("UTF-8 credential path")
             ),
         )
         .expect("write test configuration");
@@ -54,7 +62,11 @@ impl Runtime {
             .kill_on_drop(true)
             .spawn()
             .expect("start collector");
-        Self { child, config }
+        Self {
+            child,
+            config,
+            credentials,
+        }
     }
 
     async fn signal(&self, signal: &str) {
@@ -84,6 +96,7 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.config);
+        let _ = std::fs::remove_file(&self.credentials);
     }
 }
 

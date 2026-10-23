@@ -73,7 +73,7 @@ package-collector: package-native-check
 
 $(NICO_SOURCE)/Cargo.toml:
 	mkdir -p "$(dir $(NICO_SOURCE))"
-	test -d "$(NICO_SOURCE)/.git" || git clone --no-checkout --depth 1 https://github.com/NVIDIA/infra-controller.git "$(NICO_SOURCE)"
+	test -d "$(NICO_SOURCE)/.git" || git clone --no-checkout --depth 1 https://github.com/dsx-ai-factory/infra-controller.git "$(NICO_SOURCE)"
 	git -C "$(NICO_SOURCE)" fetch --depth 1 origin "$(NICO_REF)"
 	git -C "$(NICO_SOURCE)" checkout --detach FETCH_HEAD
 

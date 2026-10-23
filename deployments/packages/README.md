@@ -73,10 +73,9 @@ units without creating accounts or starting collection. Install the package:
 ```bash
 sudo apt install ./dist/packages/fleetint-oob_*.deb
 # RPM systems: sudo dnf install ./dist/packages/fleetint-oob-*.rpm
-sudo install -m 0600 -o root -g root /secure/path/to/bmc-username \
-  /etc/fleetint-oob/credentials/username
-sudo install -m 0600 -o root -g root /secure/path/to/bmc-password \
-  /etc/fleetint-oob/credentials/password
+sudo install -m 0600 -o root -g root \
+  /usr/share/doc/fleetint-oob/credentials.example.json \
+  /etc/fleetint-oob/credentials/credentials.json
 ```
 
 The package installs `/etc/fleetint-oob/config.toml` with a commented example
@@ -87,6 +86,18 @@ is rejected by the collector. See
 `/etc/fleetint-oob/service.conf`, including `FLEETINT_AGENT_TOKEN`. This file is
 installed root-owned with mode `0600`. Both services read it directly through
 systemd `EnvironmentFile`; no shell wrappers are used.
+
+Set each target's `credentials_profile` to a profile in the shared JSON file,
+or provide a per-MAC override. A placeholder example is installed at
+`/usr/share/doc/fleetint-oob/credentials.example.json`. Copy it to
+`/etc/fleetint-oob/credentials/credentials.json` using the command above, then
+replace placeholder values only in that copy. Keep the credentials file owned
+by root with mode `0600`; the installed documentation example must contain
+placeholders only.
+NICo's `ExecStartPre` uses `bmc-collector render-nico-config` to reference
+`/etc/fleetint-oob/credentials/credentials.json`. Generated NICo TOML contains
+the shared file path and each target's selected profile; credential values stay
+in the JSON file.
 
 Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the
 backend. Environment files do not expand references to other variables.
