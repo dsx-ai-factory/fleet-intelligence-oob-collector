@@ -12,15 +12,15 @@ For the experimental bare-metal/VM DEB/RPM installer, see the
 - Kubernetes cluster access through `kubectl`
 - Helm 3 with OCI registry support
 - Network access from the cluster to the BMCs and Fleet Intelligence backend
-- A [collector configuration](configuration.md)
+- Shared target Helm values (see [Configuration](configuration.md#helm-values))
 - A Fleet Intelligence bootstrap agent token
 - A trusted edge that injects customer identity before requests reach the Fleet
   Intelligence agent API
 
-## Create ConfigMap and Secrets
+## Configure targets and Secrets
 
-Store the password-free BMC configuration in a ConfigMap. Store BMC credentials
-and the agent token in separate Secrets:
+Helm creates the password-free ConfigMap from target values. Store the shared
+JSON BMC credential file and the agent token in separate existing Secrets:
 
 ```bash
 kubectl create namespace fleet-intelligence \
@@ -30,32 +30,35 @@ kubectl create secret generic fleet-intelligence-oob-collector-agent-token \
   --namespace fleet-intelligence \
   --from-file=agent-token=/secure/path/to/agent-token
 
-kubectl create configmap fleet-intelligence-config \
-  --namespace fleet-intelligence \
-  --from-file=config.toml=/path/to/config.toml \
-  --dry-run=client -o yaml | kubectl apply -f -
-
 kubectl create secret generic fleet-intelligence-bmc-credentials \
   --namespace fleet-intelligence \
   --from-file=credentials.json=/secure/path/to/credentials.json
 ```
 
-The chart references existing Secrets so credential values do not enter Helm
-release state. Save the mount mapping as `/path/to/credentials-values.yaml`; it
-contains only the Secret name and key:
+The JSON file uses named `profiles` and per-MAC `overrides`, as in
+[credentials.example.json](../credentials.example.json). Copy it outside the
+repository and replace its placeholder values. The chart mounts this same file
+into the collector, NICo init container, and NICo runtime at
+`/run/secrets/bmc/credentials.json`; credential values never enter Helm release state.
+The init container uses `bmc-collector render-nico-config` to generate NICo TOML
+from the chart's collector TOML in a pod-local `emptyDir` volume.
+
+Save `/path/to/collector-values.yaml` with target metadata and Secret references:
 
 ```yaml
+inventory:
+  computeZone: us-west-dc1
+  nodeGroup: gb200-training
+  targets:
+    - kind: compute
+      name: node-01
+      address: 192.0.2.10
+      mac: "00:11:22:33:44:55"
+      credentialsProfile: bmc
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 ```
-
-The JSON file defines named profiles and per-MAC overrides; see
-[configuration](configuration.md). The collector, NICo init container, and NICo
-runtime mount the same file at `/run/secrets/bmc/credentials.json`.
-The collector and NICo init container read target TOML from the ConfigMap.
-The init container runs `bmc-collector render-nico-config` to write NICo TOML
-into a memory-backed pod volume, referencing the shared JSON file and profiles.
 
 If the images are private, create an image pull Secret using a token with
 `read:packages` access:
@@ -93,7 +96,7 @@ export OOB_CHART_VERSION=0.1.0
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
   --version "$OOB_CHART_VERSION" \
-  --values /path/to/credentials-values.yaml \
+  --values /path/to/collector-values.yaml \
   --namespace fleet-intelligence \
   --create-namespace \
   --wait \
@@ -124,17 +127,10 @@ kubectl logs \
   deployment/fleet-intelligence-oob-collector
 ```
 
-The collector reloads the mounted TOML and JSON credentials at the start of
-each collection cycle. NICo reloads the JSON credentials without restarting.
-When `nicoHardwareHealth.enabled=true`, restart the NICo Deployment after
-updating the ConfigMap so its init container regenerates NICo's configuration.
-Skip this command when NICo is disabled:
-
-```bash
-kubectl rollout restart \
-  --namespace fleet-intelligence \
-  deployment/nico-hardware-health
-```
+The collector reloads its mounted TOML and JSON credentials each collection
+cycle. NICo reloads the JSON file without restarting. Run `helm upgrade` after
+changing targets or non-secret configuration; checksum annotations roll both
+deployments automatically.
 
 ## Disconnect an individual machine
 
@@ -146,44 +142,26 @@ Use your deployment's resource names if they differ from the examples below.
 Update any configuration management source too, so it does not restore the
 machine.
 
-1. Find the machine by its BMC `mac` in `config.toml` and remove its entire
-   `[[targets]]` entry. Keep the other targets and shared settings. For the last
-   target, [uninstall the collector](#uninstall-the-oob-collector); an empty
-   target list is invalid.
-2. Apply the updated password-free configuration:
+1. Find the machine by its BMC `mac` in `inventory.targets` in your values file
+   and remove that entry. For the last target,
+   [uninstall the collector](#uninstall-the-oob-collector); an empty list is invalid.
+2. Run the same `helm upgrade --install` command with the updated values file.
+   Helm updates the collector ConfigMap and rolls the collector and NICo
+   deployments. NICo's init container regenerates its configuration.
+3. Wait for both enabled deployments to complete their rollouts:
 
    ```bash
-   kubectl create configmap fleet-intelligence-config \
-     --namespace fleet-intelligence \
-     --from-file=config.toml=/path/to/config.toml \
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
-
-3. Restart the collector to apply the change immediately, then wait for its
-   rollout:
-
-   ```bash
-   kubectl rollout restart deployment/fleet-intelligence-oob-collector \
-     --namespace fleet-intelligence
    kubectl rollout status deployment/fleet-intelligence-oob-collector \
      --namespace fleet-intelligence --timeout=10m
-   ```
-
-4. If NICo hardware health is enabled, restart it to regenerate its target
-   configuration, then wait for its rollout:
-
-   ```bash
-   kubectl rollout restart deployment/nico-hardware-health \
-     --namespace fleet-intelligence
    kubectl rollout status deployment/nico-hardware-health \
      --namespace fleet-intelligence --timeout=10m
    ```
 
-Confirm the ConfigMap no longer contains the machine's BMC MAC and check the
-[collector logs](#verify) for failures affecting remaining targets. Data already
-in transit can still arrive after the restart. Keep shared credential Secrets;
-remove obsolete per-MAC overrides after updating the target configuration.
-Delete the shared Secret only after confirming no workloads use it.
+Skip the NICo command when it is disabled. Confirm the release ConfigMap no
+longer contains the machine's BMC MAC and check the [collector logs](#verify)
+for failures affecting remaining targets. Data already in transit can still
+arrive after the rollout. Keep the shared credential Secret; remove an unused
+per-MAC override from its JSON file only when no other workload needs it.
 
 ## Uninstall the OOB Collector
 
@@ -206,12 +184,9 @@ if they differ, and disable any automation that would reinstall the release.
      -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
-3. Delete the separately created ConfigMap and Secrets only if no other
-   workloads use them:
+3. Delete credential Secrets that are no longer used:
 
    ```bash
-   kubectl delete configmap fleet-intelligence-config \
-     --namespace fleet-intelligence
    kubectl delete secret fleet-intelligence-oob-collector-agent-token \
      fleet-intelligence-bmc-credentials --namespace fleet-intelligence
    ```

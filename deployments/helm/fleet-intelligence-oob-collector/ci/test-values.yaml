@@ -1,33 +1,114 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-bmcCollector:
-  backendUrl: https://data.fleet-intelligence.nvidia.com
-  agentTokenSecretName: fleet-intelligence-oob-collector-agent-token-test
-  targetConcurrency: 7
-  bmcMaxInFlight: 2
-  bmcRequestsPerSecond: 3
-  bmcBurst: 4
-  timeoutSeconds: 45
-  proxy:
-    httpProxy: http://proxy.test.example:3128
-    httpsProxy: http://proxy.test.example:3128
-    allProxy: ""
-    noProxy: localhost,127.0.0.1,.svc,.cluster.local
-config:
-  configMapName: fleet-intelligence-config-test
+inventory:
+  computeZone: test-zone
+  nodeGroup: test-group
+  labels:
+    site: test
+  targets:
+  - kind: compute
+    name: node-01
+    mac: 00:11:22:33:44:55
+    credentialsProfile: " bmc " # Snapshot verifies surrounding whitespace is trimmed.
+    address: 192.0.2.10
+  - kind: nvswitch
+    name: switch-01
+    mac: 00:11:22:33:44:56
+    credentialsProfile: switch
+    address: 192.0.2.11
+  - kind: power_shelf
+    name: shelf-01
+    mac: 00:11:22:33:44:57
+    address: 192.0.2.12
 credentials:
-  existingSecret: shared-bmc-credentials-test
+  existingSecret: bmc-credentials-test
   secretKey: shared.json
+backend:
+  url: https://fleet.test.example
+  agentToken:
+    existingSecret: fleet-intelligence-oob-collector-agent-token-test
+    secretKey: bootstrap-token
 imagePullSecrets:
-  - name: ghcr-pull-secret-test
+- name: ghcr-pull-secret-test
+proxy:
+  enabled: true
+  httpProxy: http://proxy.test.example:3128
+  httpsProxy: http://proxy.test.example:3128
+  allProxy: ''
+  noProxy: localhost,127.0.0.1,.svc,.cluster.local
+bmcCollector:
+  targetConcurrency: 7
+  redfish:
+    maxInFlight: 2
+    requestsPerSecond: 3
+    timeoutSeconds: 45
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+  - key: monitoring
+    operator: Exists
+    effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: monitoring
+            operator: In
+            values:
+            - enabled
+  podAnnotations:
+    example.com/workload: bmcCollector
 nicoHardwareHealth:
   enabled: true
-  tlsSecretName: nico-hardware-health-tls-test
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+  - key: monitoring
+    operator: Exists
+    effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: monitoring
+            operator: In
+            values:
+            - enabled
+  podAnnotations:
+    example.com/workload: nicoHardwareHealth
 otelGateway:
-  enroll:
-    endpoint: https://telemetry.test.example/api/v1/health/enroll
-    existingSecret: fleet-intelligence-otel-gateway-token-test
-  backendEndpoint: https://telemetry.test.example/api/v1/health
-  podDisruptionBudget:
-    enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  nodeSelector:
+    kubernetes.io/os: linux
+  tolerations:
+  - key: monitoring
+    operator: Exists
+    effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: monitoring
+            operator: In
+            values:
+            - enabled
+  podAnnotations:
+    example.com/workload: otelGateway
