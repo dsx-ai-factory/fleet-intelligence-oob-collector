@@ -90,7 +90,57 @@ impl RuntimeOptions {
             insecure_tls: self.inventory.insecure_tls,
             latency_probe: self.inventory.latency_probe,
             log_level: self.log_level.clone(),
+            proxy_enabled: None,
         }
+    }
+
+    /// Build a report from explicitly named deployment metadata, never arbitrary environment data.
+    fn collector_config_from_env(
+        &self,
+        get: impl Fn(&str) -> Result<String, std::env::VarError>,
+    ) -> Result<CollectorConfig, Box<dyn Error>> {
+        let mut runtime = self.runtime_config();
+        runtime.proxy_enabled =
+            parse_optional_bool("FLEETINT_PROXY_ENABLED", get("FLEETINT_PROXY_ENABLED"))?;
+        let nico_enabled =
+            parse_optional_bool("FLEETINT_NICO_ENABLED", get("FLEETINT_NICO_ENABLED"))?;
+        let nico_log = parse_optional_setting(
+            "FLEETINT_NICO_LOG_LEVEL",
+            get("FLEETINT_NICO_LOG_LEVEL"),
+            &["trace", "debug", "info", "warn", "error", "off"],
+        )?;
+        let destination = parse_optional_setting(
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            get("FLEETINT_NICO_TELEMETRY_DESTINATION"),
+            &["disabled", "bundledGateway", "external"],
+        )?;
+        let gateway_enabled = parse_optional_bool(
+            "FLEETINT_OTEL_GATEWAY_ENABLED",
+            get("FLEETINT_OTEL_GATEWAY_ENABLED"),
+        )?;
+        let gateway_log = parse_optional_setting(
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+            get("FLEETINT_OTEL_GATEWAY_LOG_LEVEL"),
+            &["debug", "info", "warn", "error"],
+        )?;
+        if nico_enabled.is_none() && (nico_log.is_some() || destination.is_some()) {
+            return Err("NICo reporting settings require FLEETINT_NICO_ENABLED".into());
+        }
+        if gateway_enabled.is_none() && gateway_log.is_some() {
+            return Err("gateway reporting settings require FLEETINT_OTEL_GATEWAY_ENABLED".into());
+        }
+        Ok(CollectorConfig {
+            runtime,
+            nico_health: nico_enabled.map(|enabled| NicoHealthConfig {
+                enabled,
+                log_level: nico_log,
+                telemetry_destination: destination,
+            }),
+            otel_gateway: gateway_enabled.map(|enabled| OtelGatewayConfig {
+                enabled,
+                log_level: gateway_log,
+            }),
+        })
     }
 }
 
@@ -103,6 +153,19 @@ fn parse_optional_bool(
         Ok(value) if value == "true" => Ok(Some(true)),
         Ok(value) if value == "false" => Ok(Some(false)),
         _ => Err(format!("{name} must be true or false").into()),
+    }
+}
+
+/// Validate reporting values without including their contents in startup errors.
+fn parse_optional_setting(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+    allowed: &[&str],
+) -> Result<Option<String>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if allowed.contains(&value.as_str()) => Ok(Some(value)),
+        _ => Err(format!("{name} has an unsupported value").into()),
     }
 }
 
@@ -153,19 +216,7 @@ async fn run_runtime_until_shutdown(
     options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let collector_config = CollectorConfig {
-        runtime: options.runtime_config(),
-        nico_health: parse_optional_bool(
-            "FLEETINT_NICO_ENABLED",
-            std::env::var("FLEETINT_NICO_ENABLED"),
-        )?
-        .map(|enabled| NicoHealthConfig { enabled }),
-        otel_gateway: parse_optional_bool(
-            "FLEETINT_OTEL_GATEWAY_ENABLED",
-            std::env::var("FLEETINT_OTEL_GATEWAY_ENABLED"),
-        )?
-        .map(|enabled| OtelGatewayConfig { enabled }),
-    };
+    let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -1084,9 +1135,8 @@ mod tests {
         assert!(build_attestation_targets(&options, &[]).is_err());
     }
 
-    #[test]
-    fn runtime_config_uses_effective_options() {
-        let runtime = RuntimeOptions {
+    fn reporting_options() -> RuntimeOptions {
+        RuntimeOptions {
             inventory: InventoryOptions {
                 config: "unused-targets.toml".to_string(),
                 insecure_tls: false,
@@ -1103,13 +1153,94 @@ mod tests {
             agent_token: Some("must-not-be-reported".to_string()),
             interval_seconds: 0,
             log_level: "info".to_string(),
-        };
+        }
+    }
+
+    #[test]
+    fn runtime_config_uses_effective_options() {
+        let runtime = reporting_options();
         let config = runtime.runtime_config();
         assert_eq!(config.inventory_interval_seconds, 1);
         assert_eq!(config.target_concurrency, 1);
         assert_eq!(config.bmc_max_in_flight, 1);
         assert!(!config.latency_probe);
         assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn behavior_reporting_preserves_unknown_and_explicit_values() {
+        let options = reporting_options();
+        let absent = options
+            .collector_config_from_env(|_| Err(std::env::VarError::NotPresent))
+            .unwrap();
+        assert!(absent.runtime.proxy_enabled.is_none());
+        assert!(absent.nico_health.is_none());
+        assert!(absent.otel_gateway.is_none());
+        for (enabled, destination) in [
+            ("true", "bundledGateway"),
+            ("true", "external"),
+            ("false", "disabled"),
+        ] {
+            let report = options
+                .collector_config_from_env(|name| {
+                    Ok(match name {
+                        "FLEETINT_PROXY_ENABLED" => "false",
+                        "FLEETINT_NICO_ENABLED" => enabled,
+                        "FLEETINT_NICO_LOG_LEVEL" => "debug",
+                        "FLEETINT_NICO_TELEMETRY_DESTINATION" => destination,
+                        "FLEETINT_OTEL_GATEWAY_ENABLED" => "false",
+                        "FLEETINT_OTEL_GATEWAY_LOG_LEVEL" => "error",
+                        _ => panic!("unexpected environment access: {name}"),
+                    }
+                    .to_string())
+                })
+                .unwrap();
+            assert_eq!(report.runtime.proxy_enabled, Some(false));
+            let nico = report.nico_health.unwrap();
+            assert_eq!(nico.enabled, enabled == "true");
+            assert_eq!(nico.log_level.as_deref(), Some("debug"));
+            assert_eq!(nico.telemetry_destination.as_deref(), Some(destination));
+            let gateway = report.otel_gateway.unwrap();
+            assert!(!gateway.enabled);
+            assert_eq!(gateway.log_level.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn behavior_reporting_rejects_invalid_or_orphan_settings_without_echoing_values() {
+        let options = reporting_options();
+        for name in [
+            "FLEETINT_PROXY_ENABLED",
+            "FLEETINT_NICO_LOG_LEVEL",
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+        ] {
+            let error = options
+                .collector_config_from_env(|key| {
+                    if key == name {
+                        Ok("must-not-be-reported".into())
+                    } else {
+                        Err(std::env::VarError::NotPresent)
+                    }
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(name));
+            assert!(!error.contains("must-not-be-reported"));
+        }
+        for name in ["FLEETINT_NICO_LOG_LEVEL", "FLEETINT_OTEL_GATEWAY_LOG_LEVEL"] {
+            assert!(
+                options
+                    .collector_config_from_env(|key| {
+                        if key == name {
+                            Ok("info".into())
+                        } else {
+                            Err(std::env::VarError::NotPresent)
+                        }
+                    })
+                    .is_err()
+            );
+        }
     }
 
     #[test]

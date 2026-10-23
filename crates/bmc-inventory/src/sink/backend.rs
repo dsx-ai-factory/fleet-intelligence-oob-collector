@@ -38,14 +38,24 @@ pub struct CollectorConfig {
     pub otel_gateway: Option<OtelGatewayConfig>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+/// Configured NICo behavior; absent fields are unknown outside Helm.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NicoHealthConfig {
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telemetry_destination: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+/// Configured gateway behavior, independent of readiness.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OtelGatewayConfig {
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
 }
 
 /// Non-sensitive runtime settings shared by every node in an inventory batch.
@@ -61,6 +71,8 @@ pub struct RuntimeConfig {
     pub insecure_tls: bool,
     pub latency_probe: bool,
     pub log_level: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_enabled: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -596,8 +608,14 @@ mod tests {
             (Some(false), None),
         ] {
             let config = CollectorConfig {
-                nico_health: nico.map(|enabled| NicoHealthConfig { enabled }),
-                otel_gateway: gateway.map(|enabled| OtelGatewayConfig { enabled }),
+                nico_health: nico.map(|enabled| NicoHealthConfig {
+                    enabled,
+                    ..Default::default()
+                }),
+                otel_gateway: gateway.map(|enabled| OtelGatewayConfig {
+                    enabled,
+                    ..Default::default()
+                }),
                 ..config.clone()
             };
             let value =
@@ -614,6 +632,37 @@ mod tests {
                     .as_ref()
             );
         }
+    }
+
+    #[test]
+    fn batch_reports_behavior_settings_without_exporting_deployment_details() {
+        let mut config = collector_config();
+        config.runtime.proxy_enabled = Some(false);
+        config.nico_health = Some(NicoHealthConfig {
+            enabled: true,
+            log_level: Some("debug".into()),
+            telemetry_destination: Some("external".into()),
+        });
+        config.otel_gateway = Some(OtelGatewayConfig {
+            enabled: false,
+            log_level: Some("warn".into()),
+        });
+        let inventories = [inventory("10.0.0.1")];
+        let value =
+            serde_json::to_value(build_batch_upsert_request(&inventories, &config)).unwrap();
+        let reported = &value["collector"]["config"];
+        assert_eq!(reported["runtime"]["proxyEnabled"], false);
+        assert_eq!(
+            reported["nicoHealth"],
+            serde_json::json!({
+                "enabled": true, "logLevel": "debug", "telemetryDestination": "external"
+            })
+        );
+        assert_eq!(
+            reported["otelGateway"],
+            serde_json::json!({"enabled": false, "logLevel": "warn"})
+        );
+        assert_eq!(reported.as_object().unwrap().len(), 3);
     }
 
     #[test]
@@ -813,6 +862,7 @@ mod tests {
                 insecure_tls: false,
                 latency_probe: false,
                 log_level: "info".to_string(),
+                proxy_enabled: None,
             },
             nico_health: None,
             otel_gateway: None,

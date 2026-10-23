@@ -71,6 +71,14 @@ spec:
             - --disable-latency-probe
             {{- end }}
           env:
+            - name: FLEETINT_PROXY_ENABLED
+              value: {{ .Values.proxy.enabled | quote }}
+            - name: FLEETINT_NICO_LOG_LEVEL
+              value: {{ .Values.nicoHardwareHealth.logLevel | quote }}
+            - name: FLEETINT_OTEL_GATEWAY_LOG_LEVEL
+              value: {{ .Values.otelGateway.logLevel | quote }}
+            - name: FLEETINT_NICO_TELEMETRY_DESTINATION
+              value: {{ if not .Values.nicoHardwareHealth.enabled }}"disabled"{{ else if .Values.otelGateway.enabled }}"bundledGateway"{{ else }}"external"{{ end }}
             - name: FLEETINT_NICO_ENABLED
               value: {{ .Values.nicoHardwareHealth.enabled | quote }}
             - name: FLEETINT_OTEL_GATEWAY_ENABLED

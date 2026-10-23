@@ -173,6 +173,47 @@ Provision the shared JSON Secret and `backend.agentToken` directly or through
 an external secrets operator. See [Credentials](credentials.md) for Vault and
 OpenBao setup and credential reload behavior.
 
+## Reported collector behavior
+
+Every backend inventory batch includes `collector.version` and a typed
+`collector.config` shared by its observations. `runtime` reports the effective
+collection interval, concurrency, per-BMC limits, timeout, TLS and latency-probe
+settings, and logging filter (including the `info` fallback).
+
+Helm also passes the following reporting metadata to the collector:
+
+| Helm value | Reported field | Environment variable |
+| --- | --- | --- |
+| `proxy.enabled` | `runtime.proxyEnabled` | `FLEETINT_PROXY_ENABLED` |
+| `nicoHardwareHealth.enabled` | `nicoHealth.enabled` | `FLEETINT_NICO_ENABLED` |
+| `nicoHardwareHealth.logLevel` | `nicoHealth.logLevel` | `FLEETINT_NICO_LOG_LEVEL` |
+| NICo/gateway enablement | `nicoHealth.telemetryDestination` | `FLEETINT_NICO_TELEMETRY_DESTINATION` |
+| `otelGateway.enabled` | `otelGateway.enabled` | `FLEETINT_OTEL_GATEWAY_ENABLED` |
+| `otelGateway.logLevel` | `otelGateway.logLevel` | `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` |
+
+The telemetry destination is `disabled` when NICo is disabled, `bundledGateway`
+when both services are enabled, and `external` when NICo uses `telemetry.endpoint`.
+These values describe configured behavior, not service health. Gateway disablement
+does not mean telemetry export is disabled. Proxy reporting describes Helm's
+proxy setting; it does not inspect inherited proxy environment variables.
+
+For non-Helm installations, unset reporting variables omit their corresponding
+fields; an unset service enablement flag omits that service object. Explicit
+`false` remains false. Boolean variables accept only lowercase `true` and `false`.
+NICo log levels accept `trace`, `debug`, `info`, `warn`, `error`, and `off`;
+gateway log levels accept `debug`, `info`, `warn`, and `error`. Reporting a
+service's log level or telemetry destination requires its enablement flag.
+Invalid or incomplete metadata stops `run` before enrollment without echoing
+invalid values. These variables report settings; they do not configure the
+separate NICo or gateway process. Restart the collector to refresh metadata.
+
+The report excludes credentials, secret references, backend/proxy/telemetry
+URLs, hardware target lists (already represented by inventory observations),
+and deployment settings such as images, resources, replicas, scheduling, and
+annotations. The backend stores the behavior configuration with each OOB
+observation, including observations with collection errors. Deploy the matching
+backend support before rolling out collectors that use the `collector` envelope.
+
 ## Proxy and TLS
 
 Enable `proxy` with a cluster-reachable URL without credentials.
