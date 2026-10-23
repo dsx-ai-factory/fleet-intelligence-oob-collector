@@ -170,7 +170,12 @@
       ],
       "properties": {
         "enabled": {"type": "boolean"},
-        "image": {"$ref": "#/definitions/image"},
+        "image": {
+          "allOf": [
+            {"$ref": "#/definitions/image"},
+            {"properties": {"tag": {"minLength": 1, "pattern": "^\\S+$"}}}
+          ]
+        },
         "resources": {"$ref": "#/definitions/resources"},
         "nodeSelector": {"$ref": "#/definitions/nodeSelector"},
         "tolerations": {"$ref": "#/definitions/tolerations"},

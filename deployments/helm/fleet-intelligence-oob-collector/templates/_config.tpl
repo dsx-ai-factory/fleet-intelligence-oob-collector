@@ -27,7 +27,7 @@ mac = {{ .mac | toJson }}
 {{ end }}{{ with .name }}name = {{ trim . | toJson }}
 {{ end }}{{ with .computeZone }}compute_zone = {{ trim . | toJson }}
 {{ end }}{{ with .nodeGroup }}node_group = {{ trim . | toJson }}
-{{ end }}{{ with .credentialsProfile }}credentials_profile = {{ . | toJson }}
+{{ end }}{{ with .credentialsProfile }}credentials_profile = {{ trim . | toJson }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" (default dict .labels) }}
 {{ end }}
 {{- end -}}

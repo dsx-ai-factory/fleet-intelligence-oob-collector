@@ -84,7 +84,7 @@ otelGateway:
   enabled: true
   image:
     repository: ghcr.io/nvidia/fleetint-otelcol
-    tag: 1.4.0
+    tag: 1.4.0 # Required; independent of the chart version.
     pullPolicy: IfNotPresent
   resources:
     limits:

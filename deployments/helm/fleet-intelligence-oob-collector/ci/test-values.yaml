@@ -10,7 +10,7 @@ inventory:
   - kind: compute
     name: node-01
     mac: 00:11:22:33:44:55
-    credentialsProfile: bmc
+    credentialsProfile: " bmc " # Snapshot verifies surrounding whitespace is trimmed.
     address: 192.0.2.10
   - kind: nvswitch
     name: switch-01
