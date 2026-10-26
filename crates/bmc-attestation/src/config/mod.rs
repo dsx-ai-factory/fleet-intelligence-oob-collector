@@ -36,7 +36,7 @@ pub struct AttestationConfig {
 #[derive(Clone, Debug)]
 pub struct Target {
     pub name: String,
-    pub node_uuid: String,
+    pub bmc_mac: String,
     pub address: String,
     pub username: String,
     pub password: String,

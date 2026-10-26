@@ -33,7 +33,7 @@ impl AttestationMapper for RedfishMapper {
             Ok(report) => {
                 let success = !report.evidences.is_empty();
                 NodeAttestation {
-                    node_uuid: target.node_uuid,
+                    bmc_mac: target.bmc_mac,
                     target_name: target.name,
                     bmc_address: target.address,
                     success,
@@ -52,7 +52,7 @@ impl AttestationMapper for RedfishMapper {
             }
             Err(error) => {
                 let mut node =
-                    NodeAttestation::failed(target.node_uuid, target.name, target.address, error);
+                    NodeAttestation::failed(target.bmc_mac, target.name, target.address, error);
                 node.nonce_refresh_timestamp = record.nonce_refresh_timestamp;
                 node
             }
@@ -106,7 +106,7 @@ mod tests {
         });
 
         assert!(node.success);
-        assert_eq!(node.node_uuid, "node-1");
+        assert_eq!(node.bmc_mac, "00:11:22:33:44:55");
         assert_eq!(node.evidences.len(), 1);
         assert_eq!(node.evidences[0].arch.as_deref(), Some("BLACKWELL"));
     }
@@ -157,7 +157,7 @@ mod tests {
     fn target() -> Target {
         Target {
             name: "node-a".to_string(),
-            node_uuid: "node-1".to_string(),
+            bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             username: "root".to_string(),
             password: "secret".to_string(),

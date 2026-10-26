@@ -20,7 +20,7 @@ use super::AttestationConfig;
 
 pub const DEFAULT_CONFIG_PATH: &str = ".config";
 pub const DEFAULT_BACKEND_ATTESTATION_PATH: &str = "/v1/agent/oob_nodes/attestation";
-pub const DEFAULT_BACKEND_NONCE_PATH: &str = "/v1/agent/oob_nodes/{node_uuid}/nonce";
+pub const DEFAULT_BACKEND_NONCE_PATH: &str = "/v1/agent/oob_nodes/{bmc_mac}/nonce";
 
 pub const DEFAULT_PORT: u16 = 443;
 pub const DEFAULT_INSECURE_TLS: bool = false;

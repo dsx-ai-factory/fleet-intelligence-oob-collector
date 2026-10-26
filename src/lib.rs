@@ -274,15 +274,15 @@ async fn run_runtime_until_shutdown(
                         "inventory backend sync completed"
                     );
                 }
-                // Phase 2: Attest only nodes whose inventory export succeeded and
-                // produced a UUID known to the backend.
-                match build_attestation_targets(&options.inventory, &outcome.nodes) {
+                // Phase 2: Attest configured BMCs by MAC. Inventory node identity
+                // resolution is independent from the attestation API.
+                match build_attestation_targets(&options.inventory) {
                     Err(err) => tracing::error!(
                         error = %err,
                         "failed to load targets for attestation; skipping attestation"
                     ),
                     Ok(attestation_targets) if attestation_targets.is_empty() => {
-                        tracing::warn!("no nodes with resolved UUID; skipping attestation");
+                        tracing::warn!("no configured BMCs; skipping attestation");
                     }
                     Ok(attestation_targets) => {
                         match collect_and_upload_attestation(
@@ -330,22 +330,17 @@ async fn run_runtime_until_shutdown(
 
 fn build_attestation_targets(
     options: &InventoryOptions,
-    nodes: &[ResolvedNode],
 ) -> Result<Vec<attestation_config::Target>, Box<dyn Error>> {
     let targets = config::load_targets(&options.config)?;
 
     Ok(targets
         .into_iter()
-        .filter_map(|target| {
-            let mac = target.mac.to_string();
-            let uuid = nodes.iter().find(|node| node.mac == mac)?.node_uuid.clone();
-            Some(attestation_config::Target {
-                name: mac,
-                node_uuid: uuid,
-                address: target.address,
-                username: target.username,
-                password: target.password,
-            })
+        .map(|target| attestation_config::Target {
+            name: target.mac.to_string(),
+            bmc_mac: target.mac.to_string(),
+            address: target.address,
+            username: target.username,
+            password: target.password,
         })
         .collect())
 }
@@ -432,7 +427,7 @@ async fn upload_attestation_batches(
         if shutdown.is_requested() {
             break;
         }
-        let node_count = batch.results_by_node_uuid.len();
+        let node_count = batch.results_by_bmc_mac.len();
         let mut result = upload_attestation(endpoints, session.jwt(), &batch, timeout).await;
         if let Err(err) = &result
             && is_auth_failure(err.as_ref())
@@ -482,7 +477,7 @@ async fn upload_attestation_batches(
 fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {
     let batch_size = batch_size.max(1);
     let results = batch
-        .results_by_node_uuid
+        .results_by_bmc_mac
         .values()
         .cloned()
         .collect::<Vec<_>>();
@@ -739,21 +734,21 @@ struct AttestationCollectionSummary {
 
 fn summarize_attestation_collection(batch: &BatchAttestation) -> AttestationCollectionSummary {
     let successful = batch
-        .results_by_node_uuid
+        .results_by_bmc_mac
         .values()
         .filter(|attestation| attestation.success)
         .count();
     AttestationCollectionSummary {
-        total: batch.results_by_node_uuid.len(),
+        total: batch.results_by_bmc_mac.len(),
         successful,
-        failed: batch.results_by_node_uuid.len().saturating_sub(successful),
+        failed: batch.results_by_bmc_mac.len().saturating_sub(successful),
         evidences: batch
-            .results_by_node_uuid
+            .results_by_bmc_mac
             .values()
             .map(|attestation| attestation.evidences.len())
             .sum(),
         component_errors: batch
-            .results_by_node_uuid
+            .results_by_bmc_mac
             .values()
             .map(|attestation| attestation.component_errors.len())
             .sum(),
@@ -1046,7 +1041,7 @@ mod tests {
     #[test]
     fn attestation_summary_counts_results_evidence_and_component_errors() {
         let successful = NodeAttestation {
-            node_uuid: "node-1".to_string(),
+            bmc_mac: "00:11:22:33:44:55".to_string(),
             target_name: "target-1".to_string(),
             bmc_address: "10.0.0.1".to_string(),
             success: true,
@@ -1064,7 +1059,7 @@ mod tests {
             component_errors: vec![],
         };
         let mut failed = NodeAttestation::failed(
-            "node-2".to_string(),
+            "00:11:22:33:44:66".to_string(),
             "target-2".to_string(),
             "10.0.0.2".to_string(),
             "unsupported",
@@ -1093,7 +1088,7 @@ mod tests {
         let results = (0..5)
             .map(|index| {
                 NodeAttestation::failed(
-                    format!("node-{index}"),
+                    format!("00:11:22:33:44:{index:02x}"),
                     format!("target-{index}"),
                     format!("10.0.0.{index}"),
                     "unsupported",
@@ -1107,7 +1102,7 @@ mod tests {
         assert_eq!(
             batches
                 .iter()
-                .map(|batch| batch.results_by_node_uuid.len())
+                .map(|batch| batch.results_by_bmc_mac.len())
                 .collect::<Vec<_>>(),
             [2, 2, 1]
         );
@@ -1132,7 +1127,61 @@ mod tests {
             latency_probe: false,
         };
 
-        assert!(build_attestation_targets(&options, &[]).is_err());
+        assert!(build_attestation_targets(&options).is_err());
+    }
+
+    #[test]
+    fn build_attestation_targets_uses_configured_bmc_mac() {
+        let mut config_path = std::env::temp_dir();
+        config_path.push(format!(
+            "fleet-intelligence-oob-attestation-targets-{}.toml",
+            std::process::id()
+        ));
+        let mut credentials_path = std::env::temp_dir();
+        credentials_path.push(format!(
+            "fleet-intelligence-oob-attestation-credentials-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &credentials_path,
+            r#"{"profiles":{"bmc":{"username":"admin","password":"secret"}}}"#,
+        )
+        .expect("write credentials");
+        std::fs::write(
+            &config_path,
+            format!(
+                r#"
+                [credentials]
+                file = {credentials_path:?}
+
+                [[targets]]
+                ip = "10.0.0.1"
+                mac = "00-11-22-33-44-55"
+                credentials_profile = "bmc"
+            "#
+            ),
+        )
+        .expect("write config");
+        let options = InventoryOptions {
+            config: config_path.to_string_lossy().into_owned(),
+            insecure_tls: false,
+            detail: false,
+            format: InventoryFormat::Json,
+            target_concurrency: 1,
+            bmc_max_in_flight: 1,
+            bmc_requests_per_second: 1,
+            bmc_burst: 1,
+            timeout_seconds: 1,
+            latency_probe: false,
+        };
+
+        let targets = build_attestation_targets(&options).expect("attestation targets");
+        std::fs::remove_file(config_path).expect("remove config");
+        std::fs::remove_file(credentials_path).expect("remove credentials");
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "00:11:22:33:44:55");
+        assert_eq!(targets[0].bmc_mac, "00:11:22:33:44:55");
     }
 
     fn reporting_options() -> RuntimeOptions {
