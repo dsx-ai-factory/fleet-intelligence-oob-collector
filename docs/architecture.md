@@ -44,14 +44,15 @@ node's inventory; see the
 [inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
 
 The required configured BMC MAC identifies observations and correlates targets
-across workflows. The backend resolves canonical
-node identity and returns the node UUID used for attestation. Completed
+across workflows. Inventory node identity resolution is independent from
+attestation. Attestation uses the normalized BMC MAC to request a nonce and key
+uploaded evidence. Completed
 inventories flow through a bounded channel to a backend worker, which flushes small batches by size, time, or the
 end of the collection cycle. The current worker flushes when the batch reaches
 the configured target concurrency or after 30 seconds, and the channel holds
 at most twice that concurrency. Backend item results are matched to submitted
 observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
-runs only for successfully exported records with a resolved node UUID. After
+runs for configured BMC targets after inventory synchronization. After
 concurrent nonce and evidence collection completes, attestation results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
@@ -63,7 +64,7 @@ At startup, the collector exchanges its bootstrap token for a runtime JWT. It
 then runs one collection cycle immediately and repeats every 24 hours by
 default. Each cycle collects inventory concurrently while a bounded backend
 worker uploads completed nodes in mini-batches. It then collects attestation for
-successfully exported nodes with resolved identities, uploads bounded
+configured BMCs by MAC, uploads bounded
 attestation mini-batches, and waits for the configured interval. A backend `401 Unauthorized`
 during an inventory upload, attestation nonce request, or attestation upload
 causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by

@@ -50,7 +50,7 @@ pub struct NonceResponse {
 pub trait BackendClient {
     fn jwt(&self) -> &str;
     fn set_jwt(&mut self, jwt: String);
-    async fn get_nonce(&mut self, node_uuid: &str) -> Result<NonceResponse, Box<dyn Error>>;
+    async fn get_nonce(&mut self, bmc_mac: &str) -> Result<NonceResponse, Box<dyn Error>>;
     async fn submit_batch(&self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>>;
 }
 
@@ -102,6 +102,13 @@ impl HttpBackendClient {
         if timeout.is_zero() {
             return Err("backend timeout must be greater than zero".into());
         }
+        let nonce_path = nonce_path.into();
+        if nonce_path.contains("{node_uuid}") {
+            return Err(
+                "legacy nonce path template `{node_uuid}` is no longer supported; replace it with `{bmc_mac}`"
+                    .into(),
+            );
+        }
         let base_url = base_url.as_ref().parse::<Url>()?;
         let client = reqwest::Client::builder()
             .timeout(timeout)
@@ -110,7 +117,7 @@ impl HttpBackendClient {
             .build()?;
         Ok(Self {
             base_url,
-            nonce_path: nonce_path.into(),
+            nonce_path,
             attestation_path: attestation_path.into(),
             jwt: jwt.into(),
             client,
@@ -132,6 +139,13 @@ impl HttpBackendClient {
         Ok(url)
     }
 
+    fn nonce_endpoint(&self, bmc_mac: &str) -> Result<Url, Box<dyn Error>> {
+        if bmc_mac.is_empty() {
+            return Err("bmc_mac cannot be empty".into());
+        }
+        self.endpoint(&self.nonce_path.replace("{bmc_mac}", bmc_mac))
+    }
+
     fn request(&self, method: reqwest::Method, endpoint: Url) -> reqwest::RequestBuilder {
         self.client
             .request(method, endpoint)
@@ -149,16 +163,12 @@ impl BackendClient for HttpBackendClient {
         self.jwt = jwt;
     }
 
-    async fn get_nonce(&mut self, node_uuid: &str) -> Result<NonceResponse, Box<dyn Error>> {
-        if node_uuid.is_empty() {
-            return Err("node_uuid cannot be empty".into());
-        }
+    async fn get_nonce(&mut self, bmc_mac: &str) -> Result<NonceResponse, Box<dyn Error>> {
         if self.jwt.is_empty() {
             return Err("backend jwt cannot be empty".into());
         }
-        let path = self.nonce_path.replace("{node_uuid}", node_uuid);
-        let endpoint = self.endpoint(&path)?;
-        tracing::debug!(%endpoint, node_uuid, method = "POST", "requesting attestation nonce");
+        let endpoint = self.nonce_endpoint(bmc_mac)?;
+        tracing::debug!(%endpoint, bmc_mac, method = "POST", "requesting attestation nonce");
         let response = self
             .request(reqwest::Method::POST, endpoint)
             .bearer_auth(&self.jwt)
@@ -320,7 +330,7 @@ mod tests {
     fn backend_http_client_sets_user_agent() {
         let client = HttpBackendClient::new(
             "https://backend.example.com",
-            "/v1/oob/nodes/{node_uuid}/nonce",
+            "/v1/oob/nodes/{bmc_mac}/nonce",
             "/v1/oob/attestations",
             "jwt",
             Duration::from_secs(1),
@@ -346,7 +356,7 @@ mod tests {
     fn builds_backend_endpoint() {
         let client = HttpBackendClient::new(
             "https://backend.example.com/base",
-            "/v1/oob/nodes/{node_uuid}/nonce",
+            "/v1/oob/nodes/{bmc_mac}/nonce",
             "/v1/oob/attestations",
             "jwt",
             Duration::from_secs(1),
@@ -355,10 +365,48 @@ mod tests {
 
         assert_eq!(
             client
-                .endpoint(&client.nonce_path.replace("{node_uuid}", "node-1"))
+                .nonce_endpoint("00:11:22:33:44:55")
                 .expect("url")
                 .as_str(),
-            "https://backend.example.com/v1/oob/nodes/node-1/nonce"
+            "https://backend.example.com/v1/oob/nodes/00:11:22:33:44:55/nonce"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_bmc_mac_for_nonce_endpoint() {
+        let client = HttpBackendClient::new(
+            "https://backend.example.com",
+            "/v1/oob/nodes/{bmc_mac}/nonce",
+            "/v1/oob/attestations",
+            "jwt",
+            Duration::from_secs(1),
+        )
+        .expect("client");
+
+        assert_eq!(
+            client
+                .nonce_endpoint("")
+                .expect_err("empty BMC MAC should fail")
+                .to_string(),
+            "bmc_mac cannot be empty"
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_node_uuid_nonce_path_template() {
+        let error = HttpBackendClient::new(
+            "https://backend.example.com",
+            "/v1/oob/nodes/{node_uuid}/nonce",
+            "/v1/oob/attestations",
+            "jwt",
+            Duration::from_secs(1),
+        )
+        .err()
+        .expect("legacy node UUID template should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "legacy nonce path template `{node_uuid}` is no longer supported; replace it with `{bmc_mac}`"
         );
     }
 

@@ -64,8 +64,8 @@ release permissions and publication behavior.
 - Preserve successfully collected inventory when one Redfish domain fails.
   `domainErrors[].domain` is a backend control-flow key, and consumers must not
   parse its human-readable `message`.
-- Identify inventory observations by the required configured BMC MAC; use
-  backend-resolved node UUIDs for attestation.
+- Identify inventory observations by the required configured BMC MAC; use the
+  configured BMC MAC for attestation nonce requests and uploaded records.
 - Use `SanitizedErrorMessage` and `SanitizedUriReference` for externally visible
   Redfish-derived errors and references.
 - Keep dependency versions in the workspace tables in `Cargo.toml`; update

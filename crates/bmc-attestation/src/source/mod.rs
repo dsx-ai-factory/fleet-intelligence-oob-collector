@@ -697,7 +697,7 @@ mod tests {
         .expect("source");
         let target = crate::config::Target {
             name: "bmc-1".to_string(),
-            node_uuid: "node-1".to_string(),
+            bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
             username: "user".to_string(),
             password: "secret".to_string(),

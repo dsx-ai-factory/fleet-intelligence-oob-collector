@@ -26,13 +26,13 @@ pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
 pub struct BatchAttestation {
     pub schema_version: String,
     pub collected_at: String,
-    pub results_by_node_uuid: BTreeMap<String, NodeAttestation>,
+    pub results_by_bmc_mac: BTreeMap<String, NodeAttestation>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeAttestation {
-    pub node_uuid: String,
+    pub bmc_mac: String,
     pub target_name: String,
     pub bmc_address: String,
     pub success: bool,
@@ -93,14 +93,14 @@ pub struct BackendEvidenceItem {
 
 impl BatchAttestation {
     pub fn new(collected_at: String, results: Vec<NodeAttestation>) -> Self {
-        let results_by_node_uuid = results
+        let results_by_bmc_mac = results
             .into_iter()
-            .map(|result| (result.node_uuid.clone(), result))
+            .map(|result| (result.bmc_mac.clone(), result))
             .collect();
         Self {
             schema_version: ATTESTATION_SCHEMA_VERSION.to_string(),
             collected_at,
-            results_by_node_uuid,
+            results_by_bmc_mac,
         }
     }
 
@@ -109,9 +109,9 @@ impl BatchAttestation {
             schema_version: self.schema_version.clone(),
             collected_at: self.collected_at.clone(),
             attestations: self
-                .results_by_node_uuid
+                .results_by_bmc_mac
                 .iter()
-                .map(|(node_uuid, result)| (node_uuid.clone(), result.backend_payload()))
+                .map(|(bmc_mac, result)| (bmc_mac.clone(), result.backend_payload()))
                 .collect(),
         }
     }
@@ -119,14 +119,14 @@ impl BatchAttestation {
 
 impl NodeAttestation {
     pub fn failed(
-        node_uuid: String,
+        bmc_mac: String,
         target_name: String,
         bmc_address: String,
         message: impl Into<String>,
     ) -> Self {
         let message = message.into();
         Self {
-            node_uuid,
+            bmc_mac,
             target_name,
             bmc_address,
             success: false,
@@ -166,11 +166,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serializes_batch_keyed_by_node_uuid() {
+    fn serializes_batch_keyed_by_bmc_mac() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation {
-                node_uuid: "node-1".to_string(),
+                bmc_mac: "00:11:22:33:44:55".to_string(),
                 target_name: "node-a".to_string(),
                 bmc_address: "10.0.0.1".to_string(),
                 success: true,
@@ -193,17 +193,17 @@ mod tests {
 
         assert_eq!(value["schemaVersion"], "attestation.v1alpha1");
         assert_eq!(
-            value["resultsByNodeUuid"]["node-1"]["evidences"][0]["arch"],
+            value["resultsByBmcMac"]["00:11:22:33:44:55"]["evidences"][0]["arch"],
             "BLACKWELL"
         );
     }
 
     #[test]
-    fn backend_payload_uses_node_uuid_keys() {
+    fn backend_payload_uses_bmc_mac_keys() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation::failed(
-                "node-1".to_string(),
+                "00:11:22:33:44:55".to_string(),
                 "node-a".to_string(),
                 "10.0.0.1".to_string(),
                 "timeout",
@@ -218,7 +218,7 @@ mod tests {
                 "schemaVersion": "attestation.v1alpha1",
                 "collectedAt": "2026-01-01T00:00:00Z",
                 "attestations": {
-                    "node-1": {
+                    "00:11:22:33:44:55": {
                         "nonceRefreshTimestamp": null,
                         "success": false,
                         "errorMessage": "timeout",
@@ -234,7 +234,7 @@ mod tests {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation::failed(
-                "node-1".to_string(),
+                "00:11:22:33:44:55".to_string(),
                 "node-a".to_string(),
                 "10.91.54.137".to_string(),
                 "HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
@@ -243,11 +243,11 @@ mod tests {
 
         let value = serde_json::to_value(batch.backend_request()).expect("json");
         assert_eq!(
-            value["attestations"]["node-1"]["errorMessage"],
+            value["attestations"]["00:11:22:33:44:55"]["errorMessage"],
             "HTTP status client error (404 Not Found) for url ([URL_REDACTED])"
         );
         assert_eq!(
-            batch.results_by_node_uuid["node-1"]
+            batch.results_by_bmc_mac["00:11:22:33:44:55"]
                 .error_message
                 .as_deref(),
             Some("HTTP status client error (404 Not Found) for url ([URL_REDACTED])")
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn failed_attestation_sanitizes_scheme_relative_url_for_all_outputs() {
         let record = NodeAttestation::failed(
-            "node-1".into(),
+            "00:11:22:33:44:55".into(),
             "node-a".into(),
             "10.0.0.1".into(),
             "failed //user:secret@host/redfish/v1/ComponentIntegrity?token=x#item",
