@@ -31,8 +31,8 @@ use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
 use bmc_inventory::models::{InventoryUuid, NodeInventory};
 use bmc_inventory::sink::{
-    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
-    JsonSink, TableSink,
+    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
+    InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
@@ -75,6 +75,98 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
+    pub log_level: String,
+}
+
+impl RuntimeOptions {
+    fn runtime_config(&self) -> RuntimeConfig {
+        RuntimeConfig {
+            inventory_interval_seconds: self.interval_seconds.max(1),
+            target_concurrency: self.inventory.target_concurrency.max(1),
+            bmc_max_in_flight: self.inventory.bmc_max_in_flight,
+            bmc_requests_per_second: self.inventory.bmc_requests_per_second,
+            bmc_burst: self.inventory.bmc_burst,
+            timeout_seconds: self.inventory.timeout_seconds,
+            insecure_tls: self.inventory.insecure_tls,
+            latency_probe: self.inventory.latency_probe,
+            log_level: self.log_level.clone(),
+            proxy_enabled: None,
+        }
+    }
+
+    /// Build a report from explicitly named deployment metadata, never arbitrary environment data.
+    fn collector_config_from_env(
+        &self,
+        get: impl Fn(&str) -> Result<String, std::env::VarError>,
+    ) -> Result<CollectorConfig, Box<dyn Error>> {
+        let mut runtime = self.runtime_config();
+        runtime.proxy_enabled =
+            parse_optional_bool("FLEETINT_PROXY_ENABLED", get("FLEETINT_PROXY_ENABLED"))?;
+        let nico_enabled =
+            parse_optional_bool("FLEETINT_NICO_ENABLED", get("FLEETINT_NICO_ENABLED"))?;
+        let nico_log = parse_optional_setting(
+            "FLEETINT_NICO_LOG_LEVEL",
+            get("FLEETINT_NICO_LOG_LEVEL"),
+            &["trace", "debug", "info", "warn", "error", "off"],
+        )?;
+        let destination = parse_optional_setting(
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            get("FLEETINT_NICO_TELEMETRY_DESTINATION"),
+            &["disabled", "bundledGateway", "external"],
+        )?;
+        let gateway_enabled = parse_optional_bool(
+            "FLEETINT_OTEL_GATEWAY_ENABLED",
+            get("FLEETINT_OTEL_GATEWAY_ENABLED"),
+        )?;
+        let gateway_log = parse_optional_setting(
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+            get("FLEETINT_OTEL_GATEWAY_LOG_LEVEL"),
+            &["debug", "info", "warn", "error"],
+        )?;
+        if nico_enabled.is_none() && (nico_log.is_some() || destination.is_some()) {
+            return Err("NICo reporting settings require FLEETINT_NICO_ENABLED".into());
+        }
+        if gateway_enabled.is_none() && gateway_log.is_some() {
+            return Err("gateway reporting settings require FLEETINT_OTEL_GATEWAY_ENABLED".into());
+        }
+        Ok(CollectorConfig {
+            runtime,
+            nico_health: nico_enabled.map(|enabled| NicoHealthConfig {
+                enabled,
+                log_level: nico_log,
+                telemetry_destination: destination,
+            }),
+            otel_gateway: gateway_enabled.map(|enabled| OtelGatewayConfig {
+                enabled,
+                log_level: gateway_log,
+            }),
+        })
+    }
+}
+
+fn parse_optional_bool(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<Option<bool>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value == "true" => Ok(Some(true)),
+        Ok(value) if value == "false" => Ok(Some(false)),
+        _ => Err(format!("{name} must be true or false").into()),
+    }
+}
+
+/// Validate reporting values without including their contents in startup errors.
+fn parse_optional_setting(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+    allowed: &[&str],
+) -> Result<Option<String>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if allowed.contains(&value.as_str()) => Ok(Some(value)),
+        _ => Err(format!("{name} has an unsupported value").into()),
+    }
 }
 
 #[derive(Clone)]
@@ -124,6 +216,7 @@ async fn run_runtime_until_shutdown(
     options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
+    let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -155,6 +248,7 @@ async fn run_runtime_until_shutdown(
         // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
+            collector_config.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
             Arc::clone(&dispatcher),
@@ -443,19 +537,20 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
+    collector_config: CollectorConfig,
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
-    let collector_config = config::load_config(&options.config)?;
+    let target_config = config::load_config(&options.config)?;
     dispatcher.sync_endpoints(
-        collector_config
+        target_config
             .targets
             .iter()
             .map(|target| target.mac.to_string()),
     )?;
-    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
+    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
@@ -468,7 +563,7 @@ async fn collect_and_upload_inventory(
     producer.spawn(async move {
         let collections = inventory_collections(
             &source,
-            collector_config.targets,
+            target_config.targets,
             target_concurrency,
             CollectionOrder::Completion,
         );
@@ -1087,6 +1182,140 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "00:11:22:33:44:55");
         assert_eq!(targets[0].bmc_mac, "00:11:22:33:44:55");
+    }
+
+    fn reporting_options() -> RuntimeOptions {
+        RuntimeOptions {
+            inventory: InventoryOptions {
+                config: "unused-targets.toml".to_string(),
+                insecure_tls: false,
+                detail: false,
+                format: InventoryFormat::Json,
+                target_concurrency: 0,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 1,
+                bmc_burst: 1,
+                timeout_seconds: 1,
+                latency_probe: false,
+            },
+            backend_url: Some("https://private.example.com".to_string()),
+            agent_token: Some("must-not-be-reported".to_string()),
+            interval_seconds: 0,
+            log_level: "info".to_string(),
+        }
+    }
+
+    #[test]
+    fn runtime_config_uses_effective_options() {
+        let runtime = reporting_options();
+        let config = runtime.runtime_config();
+        assert_eq!(config.inventory_interval_seconds, 1);
+        assert_eq!(config.target_concurrency, 1);
+        assert_eq!(config.bmc_max_in_flight, 1);
+        assert!(!config.latency_probe);
+        assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn behavior_reporting_preserves_unknown_and_explicit_values() {
+        let options = reporting_options();
+        let absent = options
+            .collector_config_from_env(|_| Err(std::env::VarError::NotPresent))
+            .unwrap();
+        assert!(absent.runtime.proxy_enabled.is_none());
+        assert!(absent.nico_health.is_none());
+        assert!(absent.otel_gateway.is_none());
+        for (enabled, destination) in [
+            ("true", "bundledGateway"),
+            ("true", "external"),
+            ("false", "disabled"),
+        ] {
+            let report = options
+                .collector_config_from_env(|name| {
+                    Ok(match name {
+                        "FLEETINT_PROXY_ENABLED" => "false",
+                        "FLEETINT_NICO_ENABLED" => enabled,
+                        "FLEETINT_NICO_LOG_LEVEL" => "debug",
+                        "FLEETINT_NICO_TELEMETRY_DESTINATION" => destination,
+                        "FLEETINT_OTEL_GATEWAY_ENABLED" => "false",
+                        "FLEETINT_OTEL_GATEWAY_LOG_LEVEL" => "error",
+                        _ => panic!("unexpected environment access: {name}"),
+                    }
+                    .to_string())
+                })
+                .unwrap();
+            assert_eq!(report.runtime.proxy_enabled, Some(false));
+            let nico = report.nico_health.unwrap();
+            assert_eq!(nico.enabled, enabled == "true");
+            assert_eq!(nico.log_level.as_deref(), Some("debug"));
+            assert_eq!(nico.telemetry_destination.as_deref(), Some(destination));
+            let gateway = report.otel_gateway.unwrap();
+            assert!(!gateway.enabled);
+            assert_eq!(gateway.log_level.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn behavior_reporting_rejects_invalid_or_orphan_settings_without_echoing_values() {
+        let options = reporting_options();
+        for name in [
+            "FLEETINT_PROXY_ENABLED",
+            "FLEETINT_NICO_LOG_LEVEL",
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+        ] {
+            let error = options
+                .collector_config_from_env(|key| {
+                    if key == name {
+                        Ok("must-not-be-reported".into())
+                    } else {
+                        Err(std::env::VarError::NotPresent)
+                    }
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(name));
+            assert!(!error.contains("must-not-be-reported"));
+        }
+        for name in ["FLEETINT_NICO_LOG_LEVEL", "FLEETINT_OTEL_GATEWAY_LOG_LEVEL"] {
+            assert!(
+                options
+                    .collector_config_from_env(|key| {
+                        if key == name {
+                            Ok("info".into())
+                        } else {
+                            Err(std::env::VarError::NotPresent)
+                        }
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn optional_enablement_distinguishes_unknown_false_and_invalid_values() {
+        for name in ["FLEETINT_NICO_ENABLED", "FLEETINT_OTEL_GATEWAY_ENABLED"] {
+            assert_eq!(
+                parse_optional_bool(name, Err(std::env::VarError::NotPresent)).unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("true".into())).unwrap(),
+                Some(true)
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("false".into())).unwrap(),
+                Some(false)
+            );
+            for value in ["", "1", "TRUE", "invalid"] {
+                assert_eq!(
+                    parse_optional_bool(name, Ok(value.into()))
+                        .unwrap_err()
+                        .to_string(),
+                    format!("{name} must be true or false")
+                );
+            }
+        }
     }
 
     #[tokio::test]
