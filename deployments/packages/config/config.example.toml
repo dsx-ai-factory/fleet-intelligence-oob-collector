@@ -1,0 +1,13 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[credentials]
+file = "/etc/fleetint-oob/credentials/credentials.json"
+
+# Uncomment and replace this example before starting the services.
+# At least one real target and the shared JSON credentials file are required.
+# [[targets]]
+# kind = "compute"
+# credentials_profile = "bmc"
+# name = "node-01"
+# ip = "192.0.2.10"
+# mac = "02:00:00:00:00:01"

@@ -77,6 +77,7 @@ deployment.
 
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
+- [Credentials](docs/credentials.md)
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)

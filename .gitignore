@@ -2,6 +2,7 @@
 /dist/
 /.config
 /config.toml
+/credentials.json
 /.env
 /.env.*
 !/.env.example

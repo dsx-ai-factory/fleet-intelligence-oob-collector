@@ -1,0 +1,111 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: fleetint-oob
+arch: ${OOB_PACKAGE_ARCH}
+platform: linux
+version: ${OOB_PACKAGE_VERSION}
+version_schema: none
+release: 1
+maintainer: NVIDIA Fleet Intelligence Team
+description: Fleet Intelligence OOB collector, NICo health, and telemetry gateway
+vendor: NVIDIA Corporation
+homepage: https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector
+license: Apache-2.0
+section: utils
+priority: optional
+contents:
+- dst: /etc/fleetint-oob/credentials
+  type: dir
+  file_info:
+    mode: 0700
+- src: deployments/packages/systemd/fleetint-oob-collector.service
+  dst: /usr/lib/systemd/system/fleetint-oob-collector.service
+  file_info:
+    mode: 0644
+- src: ${OOB_PACKAGE_INPUT}/bmc-collector
+  dst: /usr/bin/bmc-collector
+  expand: true
+  file_info:
+    mode: 0755
+- src: deployments/packages/config/service.conf
+  dst: /etc/fleetint-oob/service.conf
+  type: config|noreplace
+  file_info:
+    mode: 0600
+- src: deployments/packages/config/config.example.toml
+  dst: /etc/fleetint-oob/config.toml
+  type: config|noreplace
+  file_info:
+    mode: 0600
+- src: LICENSE
+  dst: /usr/share/doc/fleetint-oob/copyright
+  file_info:
+    mode: 0644
+- src: NOTICE
+  dst: /usr/share/doc/fleetint-oob/NOTICE
+  file_info:
+    mode: 0644
+- src: deployments/packages/README.md
+  dst: /usr/share/doc/fleetint-oob/README.md
+  file_info:
+    mode: 0644
+- src: credentials.example.json
+  dst: /usr/share/doc/fleetint-oob/credentials.example.json
+  file_info:
+    mode: 0644
+- src: deployments/packages/systemd/fleetint-nico-health.service
+  dst: /usr/lib/systemd/system/fleetint-nico-health.service
+  file_info:
+    mode: 0644
+- src: ${OOB_PACKAGE_INPUT}/nico-hardware-health
+  dst: /usr/lib/fleetint-oob/nico-hardware-health
+  expand: true
+  file_info:
+    mode: 0755
+- src: ${OOB_PACKAGE_INPUT}/nico-NOTICES
+  dst: /usr/share/doc/fleetint-oob/nico-NOTICES
+  expand: true
+  file_info:
+    mode: 0644
+- src: deployments/packages/systemd/fleetint-otel-gateway.service
+  dst: /usr/lib/systemd/system/fleetint-otel-gateway.service
+  file_info:
+    mode: 0644
+- src: ${OOB_PACKAGE_INPUT}/otel-gateway
+  dst: /usr/lib/fleetint-oob/otel-gateway
+  expand: true
+  file_info:
+    mode: 0755
+- src: deployments/packages/config/gateway.yaml
+  dst: /etc/fleetint-oob/gateway.yaml
+  type: config|noreplace
+  file_info:
+    mode: 0644
+- src: ${OOB_PACKAGE_INPUT}/gateway-NOTICES
+  dst: /usr/share/doc/fleetint-oob/gateway-NOTICES
+  expand: true
+  file_info:
+    mode: 0644
+- src: deployments/packages/systemd/fleetint-oob.target
+  dst: /usr/lib/systemd/system/fleetint-oob.target
+  file_info:
+    mode: 0644
+overrides:
+  deb:
+    depends:
+    - systemd
+    - init-system-helpers
+    - ca-certificates
+    scripts:
+      postinstall: deployments/packages/scripts/deb/postinst
+      preremove: deployments/packages/scripts/deb/prerm
+      postremove: deployments/packages/scripts/deb/postrm
+  rpm:
+    depends:
+    - systemd
+    - ca-certificates
+    scripts:
+      postinstall: deployments/packages/scripts/rpm/postinstall
+      preremove: deployments/packages/scripts/rpm/preremove
+      postremove: deployments/packages/scripts/rpm/postremove

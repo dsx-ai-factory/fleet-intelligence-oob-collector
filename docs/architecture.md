@@ -71,8 +71,14 @@ missing customer context; a trusted edge must inject that context before
 requests reach the agent API.
 
 The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
-set at the start of each cycle. This allows target changes from a projected
-Kubernetes Secret to take effect without restarting the collector.
+set at the start of each cycle. Mounted target configuration and JSON
+credential updates are read on the next cycle.
+
+The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
+and sleep. Shutdown cancels Redfish collection and closes the inventory
+producer, drains its bounded queue of completed observations, and finishes
+in-flight uploads. Attestation collection can be cancelled; shutdown does not
+start another attestation upload batch.
 
 Inventory preserves partial results. Recoverable domain failures are returned
 in `domainErrors`; failures that prevent meaningful target collection are
@@ -95,7 +101,10 @@ endpoint or workflow from monopolizing collection.
 
 The collector and NICo config renderer share the password-free target
 configuration and projected credential files, avoiding duplicated credentials.
-Generated NICo configuration is held in a memory-backed pod volume. The
+Helm generates only the collector TOML from `inventory` values. ConfigMap
+checksum annotations roll both deployments when that inventory changes, and
+NICo's init container regenerates its TOML with `render-nico-config`.
+Generated NICo configuration is held in a pod-local `emptyDir` volume. The
 collector and NICo use `Recreate` deployments to avoid duplicate collection;
 the independently scalable gateway uses `RollingUpdate`.
 
@@ -103,6 +112,16 @@ Workloads run as non-root, without service account tokens or Linux
 capabilities, and with read-only root filesystems. The default NetworkPolicy
 restricts gateway ingress to pods in the same Helm release when enforced by the
 cluster CNI.
+
+The experimental `fleetint-oob` host package runs the same three components as
+`fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd
+services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's
+`ExecStartPre` renders NICo's private configuration under `/run` before the
+service starts. These prototype services run as root; the gateway
+listens only on loopback. Rust binaries are built statically with musl and the
+gateway with Go's CGO disabled; package builds verify no ELF interpreter or
+shared-library requirements remain. See the [host package prototype](../deployments/packages/README.md)
+for installation, credentials, and validation limits.
 
 ### Redfish URI sanitization
 

@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-{{- if and .Values.nicoHardwareHealth.enabled .Values.nicoHardwareHealth.service.enabled }}
+{{- if .Values.nicoHardwareHealth.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,7 +15,7 @@ spec:
     app.kubernetes.io/component: nico-hardware-health
   ports:
     - name: metrics
-      port: {{ .Values.nicoHardwareHealth.service.port }}
+      port: 9009
       targetPort: metrics
       protocol: TCP
 {{- end }}
