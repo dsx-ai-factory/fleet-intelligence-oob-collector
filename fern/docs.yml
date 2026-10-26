@@ -25,6 +25,9 @@ navigation:
   - page: Configuration
     path: ../docs/configuration.md
     slug: configuration
+  - page: Credentials
+    path: ../docs/credentials.md
+    slug: credentials
   - page: Architecture
     path: ../docs/architecture.md
     slug: architecture

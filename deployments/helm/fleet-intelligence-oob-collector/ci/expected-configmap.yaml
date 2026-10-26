@@ -1,0 +1,47 @@
+---
+# Source: fleet-intelligence-oob-collector/templates/configmap.yaml
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-fleet-intelligence-oob-collector-config
+  labels:
+    helm.sh/chart: "fleet-intelligence-oob-collector-0.1.0"
+    app.kubernetes.io/name: fleet-intelligence-oob-collector
+    app.kubernetes.io/instance: test
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  collector.toml: |
+    compute_zone = "test-zone"
+    node_group = "test-group"
+    labels = { "site" = "test" }
+
+    [credentials]
+    file = "/run/secrets/bmc/credentials.json"
+
+    [[targets]]
+    kind = "compute"
+    ip = "192.0.2.10"
+    mac = "00:11:22:33:44:55"
+    name = "node-01"
+    credentials_profile = "bmc"
+    labels = {  }
+
+    [[targets]]
+    kind = "nvswitch"
+    ip = "192.0.2.11"
+    mac = "00:11:22:33:44:56"
+    name = "switch-01"
+    credentials_profile = "switch"
+    labels = {  }
+
+    [[targets]]
+    kind = "power_shelf"
+    ip = "192.0.2.12"
+    mac = "00:11:22:33:44:57"
+    name = "shelf-01"
+    labels = {  }
+
+

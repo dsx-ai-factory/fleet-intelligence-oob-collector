@@ -22,15 +22,15 @@ data:
       otlp:
         protocols:
           grpc:
-            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.grpcPort }}
+            endpoint: 0.0.0.0:4317
           http:
-            endpoint: 0.0.0.0:{{ .Values.otelGateway.service.httpPort }}
+            endpoint: 0.0.0.0:4318
 
     processors:
       memory_limiter:
         check_interval: 5s
-        limit_percentage: {{ .Values.otelGateway.memoryLimiter.limitPercentage }}
-        spike_limit_percentage: {{ .Values.otelGateway.memoryLimiter.spikeLimitPercentage }}
+        limit_percentage: 80
+        spike_limit_percentage: 20
       batch:
         timeout: 10s
         send_batch_size: 1000
@@ -65,5 +65,5 @@ data:
           exporters: [otlp_http/backend]
       telemetry:
         logs:
-          level: warn
+          level: {{ .Values.otelGateway.logLevel }}
 {{- end }}

@@ -1,0 +1,18 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Fleet Intelligence NICo hardware health
+Wants=network-online.target fleetint-otel-gateway.service
+After=network-online.target fleetint-otel-gateway.service
+PartOf=fleetint-oob.target
+
+[Service]
+RuntimeDirectory=fleetint-nico-health
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/bmc-collector render-nico-config --config /etc/fleetint-oob/config.toml --output /run/fleetint-nico-health/config.toml --otlp-endpoint http://127.0.0.1:4317 --metrics-endpoint 127.0.0.1:9009
+ExecStart=/usr/lib/fleetint-oob/nico-hardware-health /run/fleetint-nico-health/config.toml
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Fleet Intelligence OOB inventory and attestation
+Wants=network-online.target
+After=network-online.target
+PartOf=fleetint-oob.target
+
+[Service]
+EnvironmentFile=/etc/fleetint-oob/service.conf
+ExecStart=/usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml --interval-seconds ${FLEETINT_INTERVAL_SECONDS}
+RestartPreventExitStatus=2
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=300s
+
+[Install]
+WantedBy=multi-user.target

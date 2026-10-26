@@ -23,3 +23,7 @@ tests/
   inventory_cli.rs
   redfish_source.rs
 ```
+
+`shutdown.rs` runs collector child processes against localhost fixtures to
+verify SIGINT/SIGTERM handling during enrollment, Redfish collection, and an
+in-flight backend upload. It never contacts real BMCs or customer backends.

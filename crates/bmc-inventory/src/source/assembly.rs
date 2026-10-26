@@ -90,6 +90,7 @@ mod tests {
             port: None,
             mac: "00:11:22:33:44:55".parse().unwrap(),
             address: "192.0.2.10".into(),
+            credentials_profile: None,
             username: "user".into(),
             password: "password".into(),
             labels: BTreeMap::new(),

@@ -16,11 +16,11 @@ spec:
     app.kubernetes.io/component: otel-gateway
   ports:
     - name: otlp-grpc
-      port: {{ .Values.otelGateway.service.grpcPort }}
+      port: 4317
       targetPort: otlp-grpc
       protocol: TCP
     - name: otlp-http
-      port: {{ .Values.otelGateway.service.httpPort }}
+      port: 4318
       targetPort: otlp-http
       protocol: TCP
 {{- end }}
