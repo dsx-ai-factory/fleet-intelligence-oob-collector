@@ -19,6 +19,9 @@ metadata:
 # it is entirely CI-managed. Update this navigation: block when pages are added
 # or removed from docs/.
 navigation:
+  - page: Overview
+    path: ../README.md
+    slug: overview
   - page: Installation
     path: ../docs/installation.md
     slug: installation
@@ -31,6 +34,9 @@ navigation:
   - page: Architecture
     path: ../docs/architecture.md
     slug: architecture
+  - page: Contributing
+    path: ../CONTRIBUTING.md
+    slug: contributing
 
 redirects:
   - source: "/fleet-intel/oob-collector/index.html"
