@@ -62,16 +62,28 @@ VERSIONS_DIR = FERN_DIR / "versions"
 # Human-readable page titles. Files not listed here fall back to title-casing
 # the filename stem (e.g. "troubleshooting.md" → "Troubleshooting").
 TITLE_MAP: dict[str, str] = {
+    "overview.md": "Overview",
     "installation.md": "Installation",
     "configuration.md": "Configuration",
     "architecture.md": "Architecture",
+    "contributing.md": "Contributing",
 }
 
 # Preferred page order. Files absent from this list are appended alphabetically.
 PAGE_ORDER = [
+    "overview.md",
     "installation.md",
     "configuration.md",
     "architecture.md",
+    "contributing.md",
+]
+
+# Root-level files mirrored into fern/docs.yml's HEAD navigation as pages
+# (Overview <- README.md, Contributing <- CONTRIBUTING.md). Mapped to the
+# staged filename so slugs match the HEAD nav (slug = filename stem).
+ROOT_PAGES: list[tuple[str, str]] = [
+    ("README.md", "overview.md"),
+    ("CONTRIBUTING.md", "contributing.md"),
 ]
 
 
@@ -87,7 +99,10 @@ def sort_files(files: list[str]) -> list[str]:
     return ordered + remaining
 
 
-def fix_mdx(content: str) -> str:
+REPO_URL = "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector"
+
+
+def fix_mdx(content: str, tag: str) -> str:
     """Apply MDX safety fixes to markdown content, skipping fenced code blocks."""
     lines = content.split("\n")
     in_code_block = False
@@ -107,10 +122,27 @@ def fix_mdx(content: str) -> str:
             # Cross-directory CONTRIBUTING link
             line = line.replace(
                 "../CONTRIBUTING.md",
-                "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md",
+                f"{REPO_URL}/blob/main/CONTRIBUTING.md",
             )
+            # Pin repo-relative GitHub links to the tag being staged, so a
+            # versioned page's links resolve to that release instead of
+            # drifting to whatever is on main today.
+            line = line.replace(f"{REPO_URL}/blob/main/", f"{REPO_URL}/blob/{tag}/")
         result.append(line)
     return "\n".join(result)
+
+
+def get_git_file(tag: str, path: str) -> str | None:
+    """Return the content of `path` at `tag`, or None if it doesn't exist there."""
+    result = subprocess.run(
+        ["git", "show", f"{tag}:{path}"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def discover_versions(keep: int, include_rc: bool = False) -> list[tuple[str, str, bool]]:
@@ -205,9 +237,15 @@ def fetch_version(version_label: str, tag: str) -> list[str]:
             rel = src.relative_to(docs_subdir)
             dest = content_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(fix_mdx(src.read_text(encoding="utf-8")), encoding="utf-8")
+            dest.write_text(fix_mdx(src.read_text(encoding="utf-8"), tag), encoding="utf-8")
             md_files.append(rel.as_posix())
         shutil.rmtree(docs_subdir)
+
+    for src_name, dest_name in ROOT_PAGES:
+        content = get_git_file(tag, src_name)
+        if content is not None:
+            (content_dir / dest_name).write_text(fix_mdx(content, tag), encoding="utf-8")
+            md_files.append(dest_name)
 
     return sort_files(md_files)
 

@@ -75,23 +75,22 @@ deployment.
 
 ## Documentation
 
-- [Installation](docs/installation.md)
-- [Configuration](docs/configuration.md)
-- [Credentials](docs/credentials.md)
-- [Architecture](docs/architecture.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
+Full documentation is available at **[docs.nvidia.com/fleet-intel/oob-collector](https://docs.nvidia.com/fleet-intel/oob-collector)**, including installation guides, configuration reference, and architecture overview.
+
+For the broader Fleet Intelligence platform documentation, see [docs.nvidia.com/fleet-intel](https://docs.nvidia.com/fleet-intel).
 
 Component-specific details are available in the
-[inventory collection notes](crates/bmc-inventory/README.md),
-[Helm chart reference](deployments/helm/fleet-intelligence-oob-collector/README.md),
-and [local observability guide](dev/local-observability/README.md).
+[inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md),
+and [Helm chart reference](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
+
+## Contributing
+
+See [CONTRIBUTING.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md) for development setup and guidelines.
 
 ## Security
 
-Do not report vulnerabilities in public issues. Follow
-[SECURITY.md](SECURITY.md) for private reporting instructions.
+Do not report vulnerabilities in public issues. Follow the
+[security policy](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private reporting instructions.
 
 ## License
 
