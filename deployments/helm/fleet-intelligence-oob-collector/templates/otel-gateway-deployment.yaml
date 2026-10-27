@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 {{- if .Values.otelGateway.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -7,7 +10,7 @@ metadata:
     {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
     app.kubernetes.io/component: otel-gateway
 spec:
-  replicas: {{ .Values.otelGateway.replicas }}
+  replicas: {{ .Values.otelGateway.replicas | int }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -24,13 +27,17 @@ spec:
         app.kubernetes.io/component: otel-gateway
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/otel-gateway-configmap.yaml") . | sha256sum }}
+        {{- with .Values.otelGateway.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
+      {{- include "fleet-intelligence-oob-collector.scheduling" .Values.otelGateway | nindent 6 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: {{ .Values.otelGateway.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -66,22 +73,15 @@ spec:
             - name: SAK_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollSecretName" . | quote }}
-                  key: {{ .Values.otelGateway.enroll.secretKey | quote }}
-            - name: HTTP_PROXY
-              value: {{ .Values.bmcCollector.proxy.httpProxy | quote }}
-            - name: HTTPS_PROXY
-              value: {{ .Values.bmcCollector.proxy.httpsProxy | quote }}
-            - name: ALL_PROXY
-              value: {{ .Values.bmcCollector.proxy.allProxy | quote }}
-            - name: NO_PROXY
-              value: {{ .Values.bmcCollector.proxy.noProxy | quote }}
+                  name: {{ .Values.backend.agentToken.existingSecret | quote }}
+                  key: {{ .Values.backend.agentToken.secretKey | quote }}
+            {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           ports:
             - name: otlp-grpc
-              containerPort: {{ .Values.otelGateway.service.grpcPort }}
+              containerPort: 4317
               protocol: TCP
             - name: otlp-http
-              containerPort: {{ .Values.otelGateway.service.httpPort }}
+              containerPort: 4318
               protocol: TCP
             - name: health
               containerPort: 13133

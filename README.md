@@ -8,7 +8,7 @@ information must be collected independently of the host operating system.
 ## What it provides
 
 - Inventory collection for systems, managers, chassis, processors, PCIe
-  devices, firmware, and secure boot state.
+  devices, memory modules, storage/drives, power supplies, firmware, and secure boot state.
 - GPU attestation using backend-issued nonces and Redfish evidence collection.
 - Per-BMC concurrency and rate limiting shared by inventory and attestation.
 - [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health)
@@ -39,6 +39,40 @@ NICo uses the same BMC configuration to emit hardware metrics and logs through
 the gateway. Partial inventory failures are preserved in the output so
 unavailable Redfish domains do not erase otherwise valid data.
 
+## Getting started
+
+### Prerequisites
+
+- Git
+- [Rustup](https://rustup.rs/), which installs the toolchain pinned in
+  `rust-toolchain.toml`
+
+Clone the repository, build the collector, and inspect its commands:
+
+```bash
+git clone https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector.git
+cd fleet-intelligence-oob-collector
+cargo run --locked -- --help
+```
+
+The final command prints the available `inventory`, `run`, and
+`render-nico-config` commands without requiring access to a BMC or Fleet
+Intelligence backend.
+
+Collecting inventory requires a reachable Redfish BMC and its credentials.
+Copy the example configuration, replace the example target and credential
+paths, and run a local collection:
+
+```bash
+cp config.example.toml .config
+chmod 600 .config
+cargo run --locked -- inventory --config .config
+```
+
+See [Configuration](docs/configuration.md) for the complete configuration
+contract and [Installation](docs/installation.md) for the supported Helm
+deployment.
+
 ## Documentation
 
 Full documentation is available at **[docs.nvidia.com/fleet-intel/oob-collector](https://docs.nvidia.com/fleet-intel/oob-collector)**, including installation guides, configuration reference, and architecture overview.
@@ -61,4 +95,5 @@ Do not report vulnerabilities in public issues. Follow the
 
 ## License
 
-This project is licensed under Apache-2.0. See [LICENSE](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE).
+This project is licensed under the Apache License 2.0. See the
+[LICENSE](LICENSE) file for details.

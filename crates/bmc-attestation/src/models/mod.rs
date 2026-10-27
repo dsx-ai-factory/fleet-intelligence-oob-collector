@@ -1,6 +1,22 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 
-use bmc_error::sanitize_backend_error_message;
+use bmc_error::SanitizedErrorMessage;
 use serde::Serialize;
 
 pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
@@ -10,17 +26,17 @@ pub const ATTESTATION_SCHEMA_VERSION: &str = "attestation.v1alpha1";
 pub struct BatchAttestation {
     pub schema_version: String,
     pub collected_at: String,
-    pub results_by_node_uuid: BTreeMap<String, NodeAttestation>,
+    pub results_by_bmc_mac: BTreeMap<String, NodeAttestation>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeAttestation {
-    pub node_uuid: String,
+    pub bmc_mac: String,
     pub target_name: String,
     pub bmc_address: String,
     pub success: bool,
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub nonce_refresh_timestamp: Option<String>,
     pub evidences: Vec<AttestationEvidence>,
     pub component_errors: Vec<ComponentError>,
@@ -42,7 +58,7 @@ pub struct AttestationEvidence {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentError {
     pub component_id: Option<String>,
-    pub message: String,
+    pub message: SanitizedErrorMessage,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,7 +75,7 @@ pub struct BackendNodeAttestation {
     pub nonce_refresh_timestamp: Option<String>,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub error_message: Option<SanitizedErrorMessage>,
     pub evidences: Vec<BackendEvidenceItem>,
 }
 
@@ -77,14 +93,14 @@ pub struct BackendEvidenceItem {
 
 impl BatchAttestation {
     pub fn new(collected_at: String, results: Vec<NodeAttestation>) -> Self {
-        let results_by_node_uuid = results
+        let results_by_bmc_mac = results
             .into_iter()
-            .map(|result| (result.node_uuid.clone(), result))
+            .map(|result| (result.bmc_mac.clone(), result))
             .collect();
         Self {
             schema_version: ATTESTATION_SCHEMA_VERSION.to_string(),
             collected_at,
-            results_by_node_uuid,
+            results_by_bmc_mac,
         }
     }
 
@@ -93,9 +109,9 @@ impl BatchAttestation {
             schema_version: self.schema_version.clone(),
             collected_at: self.collected_at.clone(),
             attestations: self
-                .results_by_node_uuid
+                .results_by_bmc_mac
                 .iter()
-                .map(|(node_uuid, result)| (node_uuid.clone(), result.backend_payload()))
+                .map(|(bmc_mac, result)| (bmc_mac.clone(), result.backend_payload()))
                 .collect(),
         }
     }
@@ -103,17 +119,18 @@ impl BatchAttestation {
 
 impl NodeAttestation {
     pub fn failed(
-        node_uuid: String,
+        bmc_mac: String,
         target_name: String,
         bmc_address: String,
         message: impl Into<String>,
     ) -> Self {
+        let message = message.into();
         Self {
-            node_uuid,
+            bmc_mac,
             target_name,
             bmc_address,
             success: false,
-            error_message: Some(message.into()),
+            error_message: Some(SanitizedErrorMessage::new(message)),
             nonce_refresh_timestamp: None,
             evidences: Vec::new(),
             component_errors: Vec::new(),
@@ -124,11 +141,7 @@ impl NodeAttestation {
         BackendNodeAttestation {
             nonce_refresh_timestamp: self.nonce_refresh_timestamp.clone(),
             success: self.success,
-            // Redact absolute URLs before upload to avoid request body filters.
-            error_message: self
-                .error_message
-                .as_deref()
-                .map(sanitize_backend_error_message),
+            error_message: self.error_message.clone(),
             evidences: self
                 .evidences
                 .iter()
@@ -153,11 +166,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serializes_batch_keyed_by_node_uuid() {
+    fn serializes_batch_keyed_by_bmc_mac() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation {
-                node_uuid: "node-1".to_string(),
+                bmc_mac: "00:11:22:33:44:55".to_string(),
                 target_name: "node-a".to_string(),
                 bmc_address: "10.0.0.1".to_string(),
                 success: true,
@@ -180,17 +193,17 @@ mod tests {
 
         assert_eq!(value["schemaVersion"], "attestation.v1alpha1");
         assert_eq!(
-            value["resultsByNodeUuid"]["node-1"]["evidences"][0]["arch"],
+            value["resultsByBmcMac"]["00:11:22:33:44:55"]["evidences"][0]["arch"],
             "BLACKWELL"
         );
     }
 
     #[test]
-    fn backend_payload_uses_node_uuid_keys() {
+    fn backend_payload_uses_bmc_mac_keys() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation::failed(
-                "node-1".to_string(),
+                "00:11:22:33:44:55".to_string(),
                 "node-a".to_string(),
                 "10.0.0.1".to_string(),
                 "timeout",
@@ -205,7 +218,7 @@ mod tests {
                 "schemaVersion": "attestation.v1alpha1",
                 "collectedAt": "2026-01-01T00:00:00Z",
                 "attestations": {
-                    "node-1": {
+                    "00:11:22:33:44:55": {
                         "nonceRefreshTimestamp": null,
                         "success": false,
                         "errorMessage": "timeout",
@@ -217,11 +230,11 @@ mod tests {
     }
 
     #[test]
-    fn backend_payload_strips_reqwest_url_from_error_message() {
+    fn failed_attestation_sanitizes_reqwest_url_for_all_outputs() {
         let batch = BatchAttestation::new(
             "2026-01-01T00:00:00Z".to_string(),
             vec![NodeAttestation::failed(
-                "node-1".to_string(),
+                "00:11:22:33:44:55".to_string(),
                 "node-a".to_string(),
                 "10.91.54.137".to_string(),
                 "HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
@@ -230,42 +243,30 @@ mod tests {
 
         let value = serde_json::to_value(batch.backend_request()).expect("json");
         assert_eq!(
-            value["attestations"]["node-1"]["errorMessage"],
-            "HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
+            value["attestations"]["00:11:22:33:44:55"]["errorMessage"],
+            "HTTP status client error (404 Not Found) for url ([URL_REDACTED])"
         );
-        // Local record keeps the full message for debugging.
-        assert!(
-            batch.results_by_node_uuid["node-1"]
+        assert_eq!(
+            batch.results_by_bmc_mac["00:11:22:33:44:55"]
                 .error_message
-                .as_deref()
-                .unwrap()
-                .contains("https://10.91.54.137/")
+                .as_deref(),
+            Some("HTTP status client error (404 Not Found) for url ([URL_REDACTED])")
         );
     }
 
     #[test]
-    fn sanitize_backend_error_message_preserves_embedded_url_paths() {
+    fn failed_attestation_sanitizes_scheme_relative_url_for_all_outputs() {
+        let record = NodeAttestation::failed(
+            "00:11:22:33:44:55".into(),
+            "node-a".into(),
+            "10.0.0.1".into(),
+            "failed //user:secret@host/redfish/v1/ComponentIntegrity?token=x#item",
+        );
+        let value = serde_json::to_value(record.backend_payload()).expect("serialize");
+        assert_eq!(value["errorMessage"], "failed [URL_REDACTED]");
         assert_eq!(
-            sanitize_backend_error_message(
-                "fetch failed contacting https://10.0.0.1/redfish/v1/ComponentIntegrity"
-            ),
-            "fetch failed contacting /redfish/v1/ComponentIntegrity"
+            record.error_message.as_deref(),
+            Some("failed [URL_REDACTED]")
         );
-        assert_eq!(
-            sanitize_backend_error_message("no GPU IRoT ComponentIntegrity resources found"),
-            "no GPU IRoT ComponentIntegrity resources found"
-        );
-    }
-
-    #[test]
-    fn sanitize_backend_error_message_preserves_paths_for_multiple_urls() {
-        let sanitized = sanitize_backend_error_message(
-            "proxy https://10.0.0.1/redfish/v1 failed: HTTP status client error (404 Not Found) for url (https://10.91.54.137/redfish/v1/ComponentIntegrity)",
-        );
-        assert_eq!(
-            sanitized,
-            "proxy /redfish/v1 failed: HTTP status client error (404 Not Found) for url (/redfish/v1/ComponentIntegrity)"
-        );
-        assert!(!sanitized.contains("http://") && !sanitized.contains("https://"));
     }
 }

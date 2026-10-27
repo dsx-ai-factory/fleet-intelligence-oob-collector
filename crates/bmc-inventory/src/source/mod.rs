@@ -1,168 +1,76 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+mod assembly;
 mod redfish;
+mod tcp_probe;
 
 use async_trait::async_trait;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::config::Target;
+use crate::models::{
+    ChassisInventory, DomainError, FabricInventory, FirmwareInventory, ManagerInventory,
+    NodeInventory, SystemInventory,
+};
 
 pub use redfish::RedfishSource;
+pub use tcp_probe::{LatencyProbe, TcpProbeConfig};
 
 pub mod inventory_domain {
     pub const MANAGERS: &str = "managers";
     pub const SYSTEMS: &str = "systems";
+    pub const SYSTEMS_MEMORY: &str = "systems.memory";
+    pub const SYSTEMS_STORAGE: &str = "systems.storage";
+    pub const CHASSIS_POWER_SUPPLIES: &str = "chassis.powerSupplies";
     pub const SYSTEMS_PROCESSORS: &str = "systems.processors";
     pub const SYSTEMS_SECURE_BOOT: &str = "systems.secureBoot";
     pub const CHASSIS: &str = "chassis";
     pub const CHASSIS_PCIE_DEVICES: &str = "chassis.pcieDevices";
     pub const FIRMWARE: &str = "firmware";
-}
-
-pub struct SourceRecord {
-    pub target: Target,
-    pub collected_at: String,
-    pub result: Result<RedfishReport, String>,
+    pub const FABRICS: &str = "fabrics";
+    pub const FABRICS_SWITCHES: &str = "fabrics.switches";
 }
 
 #[async_trait]
 pub trait InventorySource {
-    async fn collect(&self, target: Target) -> SourceRecord;
+    async fn collect(&self, target: Target) -> NodeInventory;
 }
 
-#[derive(Clone, Debug)]
-pub struct RedfishReport {
-    pub service_root: ServiceRootData,
-    pub managers: Vec<ManagerData>,
-    pub systems: Vec<SystemData>,
-    pub chassis: Vec<ChassisData>,
-    pub firmware: Vec<FirmwareData>,
-    pub errors: Vec<InventoryErrorData>,
+/// Groups collected resources with service metadata and recoverable failures.
+struct RedfishReport {
+    service_root: ServiceRootData,
+    managers: Vec<ManagerInventory>,
+    systems: Vec<SystemInventory>,
+    chassis: Vec<ChassisInventory>,
+    firmware: Vec<FirmwareInventory>,
+    fabrics: Vec<FabricInventory>,
+    errors: Vec<DomainError>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ServiceRootData {
-    pub redfish_version: Option<String>,
-    pub uuid: Option<String>,
-    pub vendor: Option<String>,
-    pub product: Option<String>,
+struct ServiceRootData {
+    redfish_version: Option<String>,
+    uuid: Option<String>,
+    vendor: Option<String>,
+    product: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ManagerData {
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub uuid: Option<String>,
-    pub manager_type: Option<String>,
-    pub model: Option<String>,
-    pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SystemData {
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub uuid: Option<String>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub sku: Option<String>,
-    pub serial_number: Option<String>,
-    pub bios_version: Option<String>,
-    pub host_name: Option<String>,
-    pub asset_tag: Option<String>,
-    pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-    pub cpu_count: Option<i64>,
-    pub cpu_core_count: Option<i64>,
-    pub cpu_model: Option<String>,
-    pub memory_gib: Option<f64>,
-    pub secure_boot_enabled: Option<bool>,
-    pub processors: Vec<ProcessorData>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ProcessorData {
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub uuid: Option<String>,
-    pub socket: Option<String>,
-    pub processor_type: Option<String>,
-    pub processor_architecture: Option<String>,
-    pub instruction_set: Option<String>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub serial_number: Option<String>,
-    pub max_speed_mhz: Option<i64>,
-    pub total_cores: Option<i64>,
-    pub total_threads: Option<i64>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ChassisData {
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub chassis_type: Option<String>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub sku: Option<String>,
-    pub serial_number: Option<String>,
-    pub part_number: Option<String>,
-    pub asset_tag: Option<String>,
-    pub power_state: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-    pub location: Option<ChassisLocationData>,
-    pub pcie_devices: Vec<PcieDeviceData>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ChassisLocationData {
-    pub service_label: Option<String>,
-    pub rack: Option<String>,
-    pub row: Option<String>,
-    pub room: Option<String>,
-    pub rack_offset: Option<i64>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PcieDeviceData {
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub uuid: Option<String>,
-    pub device_type: Option<String>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub sku: Option<String>,
-    pub serial_number: Option<String>,
-    pub part_number: Option<String>,
-    pub firmware_version: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct FirmwareData {
-    pub service_id: String,
-    pub id: String,
-    pub odata_id: Option<String>,
-    pub name: String,
-    pub version: Option<String>,
-    pub release_date: Option<String>,
-    pub status_state: Option<String>,
-    pub health: Option<String>,
-    pub health_rollup: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct InventoryErrorData {
-    pub domain: String,
-    pub resource: Option<String>,
-    pub message: String,
+fn now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }

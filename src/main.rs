@@ -1,3 +1,19 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -14,7 +30,7 @@ use fleet_intelligence_oob::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "fleet-intelligence-oob")]
+#[command(name = "fleet-intelligence-oob", version = bmc_inventory::COLLECTOR_VERSION)]
 #[command(about = "Fleet Intelligence out-of-band collector")]
 struct Cli {
     #[command(subcommand)]
@@ -65,6 +81,10 @@ struct CollectorArgs {
 
     #[arg(long, default_value_t = DEFAULT_REDFISH_TIMEOUT_SECONDS)]
     timeout_seconds: u64,
+
+    /// Skip the per-BMC TCP connect latency probe.
+    #[arg(long, env = "FLEETINT_DISABLE_LATENCY_PROBE")]
+    disable_latency_probe: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -127,6 +147,7 @@ impl CollectorArgs {
             bmc_requests_per_second: self.bmc_requests_per_second,
             bmc_burst: self.bmc_burst,
             timeout_seconds: self.timeout_seconds,
+            latency_probe: !self.disable_latency_probe,
         }
     }
 }
@@ -145,11 +166,11 @@ fn write_private_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let log_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let log_level = log_filter.to_string();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        .with_env_filter(log_filter)
         .with_writer(std::io::stderr)
         .with_target(true)
         .compact()
@@ -168,6 +189,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,
+                log_level,
             })
             .await?
         }

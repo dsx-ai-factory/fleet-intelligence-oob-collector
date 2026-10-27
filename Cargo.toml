@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [workspace]
 members = [
     ".",
@@ -22,11 +25,26 @@ bmc-dispatch = { path = "crates/bmc-dispatch" }
 bmc-error = { path = "crates/bmc-error" }
 bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
-hickory-resolver = "0.26"
 http = "1"
-nv-redfish = { version = "0.15.1", features = ["bmc-http", "std-redfish"] }
-nv-redfish-bmc-mock = "0.15.1"
-nv-redfish-dispatcher = "0.15.1"
+mac_address = "1.2.1"
+nv-redfish = { version = "0.18.1", features = [
+    "bmc-http",
+    "oem-nvidia",
+    "chassis",
+    "computer-systems",
+    "fabrics",
+    "managers",
+    "processors",
+    "memory",
+    "storages",
+    "power-supplies",
+    "power",
+    "secure-boot",
+    "pcie-devices",
+    "update-service",
+] }
+nv-redfish-bmc-mock = "0.18.1"
+nv-redfish-dispatcher = "0.18.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "socks", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

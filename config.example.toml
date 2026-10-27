@@ -1,31 +1,36 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Fleet Intelligence placement; inherited by targets and mirrored to telemetry.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
 
-# Credentials are read from the mounted Kubernetes Secret.
+# Same JSON credentials file as NICo health (profiles and per-MAC overrides).
 [credentials]
-username_file = "/run/secrets/bmc/default/username"
-password_file = "/run/secrets/bmc/default/password"
+file = "/run/secrets/bmc/credentials.json"
 
 [[targets]]
 kind = "compute"
+credentials_profile = "bmc"
 # Optional: inventory `name` and telemetry `machine_name`.
 name = "node-01"
 ip = "10.0.0.10"
-# Optional but recommended stable BMC identity.
+# Required stable BMC identity; use the actual BMC MAC address.
 mac = "aa:bb:cc:dd:ee:ff"
 labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "nvswitch"
+credentials_profile = "switch"
 name = "switch-tray-01"
 ip = "10.0.0.11"
-username_file = "/run/secrets/bmc/switch-tray-01/username"
-password_file = "/run/secrets/bmc/switch-tray-01/password"
+mac = "02:00:0a:00:00:0b"
 labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "power_shelf"
+credentials_profile = "bmc"
 name = "power-shelf-01"
 ip = "10.0.0.12"
+mac = "02:00:0a:00:00:0c"
 labels = { rack = "rack-12" }

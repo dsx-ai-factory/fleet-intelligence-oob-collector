@@ -1,3 +1,19 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::error::Error;
 
 use crate::models::NodeInventory;
@@ -42,23 +58,22 @@ mod tests {
             name: None,
             compute_zone: None,
             node_group: None,
-            uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: "10.0.0.1".to_string(),
-                host_name: None,
                 redfish_version: None,
                 service_uuid: None,
                 vendor: None,
             },
-            primary_system_id: None,
             managers: Vec::new(),
             systems: Vec::new(),
             chassis: Vec::new(),
             firmware: Vec::new(),
+            fabrics: Vec::new(),
             domain_errors: Vec::new(),
             target_error: None,
+            latency: Vec::new(),
         }
     }
 }

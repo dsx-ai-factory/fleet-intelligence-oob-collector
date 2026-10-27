@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [package]
 name = "bmc-inventory"
 version.workspace = true
@@ -8,7 +11,7 @@ license.workspace = true
 async-trait.workspace = true
 bmc-dispatch.workspace = true
 bmc-error.workspace = true
-hickory-resolver.workspace = true
+mac_address.workspace = true
 nv-redfish.workspace = true
 reqwest.workspace = true
 serde.workspace = true

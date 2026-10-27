@@ -1,3 +1,19 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Collector-owned admission control for BMC HTTP requests.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -15,7 +31,8 @@ use nv_redfish::bmc_http::{
     RequestError,
 };
 use nv_redfish::core::{
-    BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse, UploadReader,
+    BmcError, BmcErrorClass, BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse,
+    UploadReader,
 };
 use nv_redfish_dispatcher::{
     BoundedConcurrency, ClockConfig, Completion, CostUnits, FixedCost, FutureWork, Readiness,
@@ -400,6 +417,18 @@ impl<E: StdError + 'static> StdError for DispatchError<E> {
     }
 }
 
+impl<E: BmcError + 'static> BmcError for DispatchError<E> {
+    fn error_class(&self) -> BmcErrorClass {
+        match self {
+            Self::Transport(error) => error.error_class(),
+            // A rejected admission failed before any response was received.
+            // `Other` would let callers treat it as skippable resource data.
+            Self::QueueFull | Self::Unavailable => BmcErrorClass::Transport,
+            Self::Unsupported => BmcErrorClass::Other,
+        }
+    }
+}
+
 impl<E: CacheableError> CacheableError for DispatchError<E> {
     fn is_cached(&self) -> bool {
         matches!(self, Self::Transport(error) if error.is_cached())
@@ -453,6 +482,20 @@ where
     {
         self.gate
             .execute(self.inner.get(url, credentials, etag, custom_headers))
+            .await
+    }
+
+    async fn poll<T>(
+        &self,
+        url: Url,
+        credentials: &BmcCredentials,
+        custom_headers: &HeaderMap,
+    ) -> Result<ModificationResponse<T>, Self::Error>
+    where
+        T: DeserializeOwned + Send + Sync,
+    {
+        self.gate
+            .execute(self.inner.poll(url, credentials, custom_headers))
             .await
     }
 
@@ -587,7 +630,39 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use nv_redfish::core::{BmcError, BmcErrorClass};
+
     use super::{DispatchError, Dispatcher, DispatcherConfig};
+
+    #[derive(Debug)]
+    struct UnavailableResponse;
+
+    impl std::fmt::Display for UnavailableResponse {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("503 Service Unavailable")
+        }
+    }
+
+    impl std::error::Error for UnavailableResponse {}
+
+    impl BmcError for UnavailableResponse {
+        fn error_class(&self) -> BmcErrorClass {
+            BmcErrorClass::HttpResponse { status: 503 }
+        }
+    }
+
+    #[test]
+    fn admission_failures_classify_as_transport() {
+        type Error = DispatchError<UnavailableResponse>;
+
+        assert_eq!(
+            Error::Transport(UnavailableResponse).error_class(),
+            BmcErrorClass::HttpResponse { status: 503 }
+        );
+        assert_eq!(Error::QueueFull.error_class(), BmcErrorClass::Transport);
+        assert_eq!(Error::Unavailable.error_class(), BmcErrorClass::Transport);
+        assert_eq!(Error::Unsupported.error_class(), BmcErrorClass::Other);
+    }
 
     fn config() -> DispatcherConfig {
         DispatcherConfig {

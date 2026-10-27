@@ -1,13 +1,32 @@
-mod inventory;
-mod node;
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
-pub use inventory::{
-    ChassisInventory, ChassisLocation, FirmwareInventory, InventorySourceInfo, ManagerInventory,
-    PcieDeviceInventory, ProcessorInventory, SystemInventory,
-};
+mod latency;
+mod node;
+mod resources;
+
+pub use latency::{LatencyMeasurement, LatencyMethod, LatencyStatus};
 pub use node::{DomainError, InventoryUuid, NodeInventory, TargetKind};
+pub use resources::{
+    ChassisInventory, DriveInventory, FabricInventory, FirmwareInventory, InventoryCondition,
+    InventoryLink, InventoryLinkReference, InventoryLocation, InventoryReference,
+    InventorySourceInfo, InventoryStatus, ManagerInventory, MemoryInventory, MemorySummary,
+    NvidiaGpuInventory, NvidiaSwitchInventory, NvlinkTopologyInventory, PartLocation,
+    PcieDeviceInventory, Placement, PowerSupplyInventory, ProcessorInventory, ProcessorSummary,
+    StorageInventory, SwitchInventory, SystemInventory,
+};
 
 pub const INVENTORY_SCHEMA_VERSION: &str = "inventory.v1alpha1";
-
-#[cfg(test)]
-mod tests;

@@ -1,7 +1,23 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Attestation collection pipeline.
 //!
 //! Ties the `source -> mapper` shape together with the backend nonce exchange:
-//! for each target it fetches a per-node nonce, collects signed measurements over
+//! for each target it fetches a per-BMC nonce, collects signed measurements over
 //! Redfish, and maps the result into a `NodeAttestation`. Backend session and
 //! upload concerns are left to the caller.
 
@@ -78,13 +94,13 @@ pub async fn collect(
             let attestation_path = attestation_path.to_string();
             let jwt = base_jwt.clone();
             let target = target.clone();
-            let node_uuid = target.node_uuid.clone();
+            let bmc_mac = target.bmc_mac.clone();
             let gate = dispatcher.attestation_gate(&target.name);
             async move {
                 let Some(gate) = gate else {
                     return Ok((
                         NodeAttestation::failed(
-                            node_uuid,
+                            bmc_mac,
                             target.name,
                             target.address,
                             "no dispatcher endpoint configured for attestation",
@@ -103,7 +119,7 @@ pub async fn collect(
                     Err(err) => {
                         return Ok((
                             NodeAttestation::failed(
-                                node_uuid,
+                                bmc_mac,
                                 target.name,
                                 target.address,
                                 format!("backend client: {err}"),
@@ -112,7 +128,7 @@ pub async fn collect(
                         ));
                     }
                 };
-                let nonce = match client.get_nonce(&node_uuid).await {
+                let nonce = match client.get_nonce(&bmc_mac).await {
                     Ok(response) => response,
                     // A rejected JWT cannot be recovered per target: abort the batch so
                     // the caller can re-enroll and retry with a fresh token.
@@ -120,7 +136,7 @@ pub async fn collect(
                     Err(err) => {
                         return Ok((
                             NodeAttestation::failed(
-                                node_uuid,
+                                bmc_mac,
                                 target.name,
                                 target.address,
                                 format!("nonce request: {err}"),
@@ -207,7 +223,7 @@ mod tests {
         .expect("dispatcher");
         let target = Target {
             name: "bmc-1".to_string(),
-            node_uuid: "node-1".to_string(),
+            bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
             username: "user".to_string(),
             password: "secret".to_string(),
@@ -217,7 +233,7 @@ mod tests {
             &[target],
             &AttestationConfig::default(),
             "https://backend.invalid",
-            "/nonce/{node_uuid}",
+            "/nonce/{bmc_mac}",
             "/attestation",
             "token",
             &dispatcher,
@@ -226,8 +242,8 @@ mod tests {
         .expect("missing gate becomes a target failure");
         let record = outcome
             .batch
-            .results_by_node_uuid
-            .get("node-1")
+            .results_by_bmc_mac
+            .get("00:11:22:33:44:55")
             .expect("target result");
 
         assert!(!record.success);

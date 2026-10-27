@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 {{- if .Values.otelGateway.enabled }}
 apiVersion: v1
 kind: Service
@@ -13,11 +16,11 @@ spec:
     app.kubernetes.io/component: otel-gateway
   ports:
     - name: otlp-grpc
-      port: {{ .Values.otelGateway.service.grpcPort }}
+      port: 4317
       targetPort: otlp-grpc
       protocol: TCP
     - name: otlp-http
-      port: {{ .Values.otelGateway.service.httpPort }}
+      port: 4318
       targetPort: otlp-http
       protocol: TCP
 {{- end }}

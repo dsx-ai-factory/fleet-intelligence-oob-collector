@@ -1,7 +1,25 @@
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 mod backend;
 
 use std::error::Error;
 use std::fmt;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,14 +29,14 @@ use bmc_attestation::models::BatchAttestation;
 use bmc_attestation::sink::BackendSink as AttestationBackendSink;
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
-use bmc_inventory::mapper::{InventoryMapper, RedfishMapper};
-use bmc_inventory::models::NodeInventory;
+use bmc_inventory::models::{InventoryUuid, NodeInventory};
 use bmc_inventory::sink::{
-    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, InventorySink,
-    JsonSink, TableSink,
+    BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
+    InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
 };
-use bmc_inventory::source::{InventorySource, RedfishSource};
-use futures::stream::{self, StreamExt};
+use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
+use futures::stream::{self, Stream, StreamExt};
+use tokio::sync::watch;
 
 use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
 
@@ -48,6 +66,7 @@ pub struct InventoryOptions {
     pub bmc_requests_per_second: u64,
     pub bmc_burst: u64,
     pub timeout_seconds: u64,
+    pub latency_probe: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -56,9 +75,148 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
+    pub log_level: String,
+}
+
+impl RuntimeOptions {
+    fn runtime_config(&self) -> RuntimeConfig {
+        RuntimeConfig {
+            inventory_interval_seconds: self.interval_seconds.max(1),
+            target_concurrency: self.inventory.target_concurrency.max(1),
+            bmc_max_in_flight: self.inventory.bmc_max_in_flight,
+            bmc_requests_per_second: self.inventory.bmc_requests_per_second,
+            bmc_burst: self.inventory.bmc_burst,
+            timeout_seconds: self.inventory.timeout_seconds,
+            insecure_tls: self.inventory.insecure_tls,
+            latency_probe: self.inventory.latency_probe,
+            log_level: self.log_level.clone(),
+            proxy_enabled: None,
+        }
+    }
+
+    /// Build a report from explicitly named deployment metadata, never arbitrary environment data.
+    fn collector_config_from_env(
+        &self,
+        get: impl Fn(&str) -> Result<String, std::env::VarError>,
+    ) -> Result<CollectorConfig, Box<dyn Error>> {
+        let mut runtime = self.runtime_config();
+        runtime.proxy_enabled =
+            parse_optional_bool("FLEETINT_PROXY_ENABLED", get("FLEETINT_PROXY_ENABLED"))?;
+        let nico_enabled =
+            parse_optional_bool("FLEETINT_NICO_ENABLED", get("FLEETINT_NICO_ENABLED"))?;
+        let nico_log = parse_optional_setting(
+            "FLEETINT_NICO_LOG_LEVEL",
+            get("FLEETINT_NICO_LOG_LEVEL"),
+            &["trace", "debug", "info", "warn", "error", "off"],
+        )?;
+        let destination = parse_optional_setting(
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            get("FLEETINT_NICO_TELEMETRY_DESTINATION"),
+            &["disabled", "bundledGateway", "external"],
+        )?;
+        let gateway_enabled = parse_optional_bool(
+            "FLEETINT_OTEL_GATEWAY_ENABLED",
+            get("FLEETINT_OTEL_GATEWAY_ENABLED"),
+        )?;
+        let gateway_log = parse_optional_setting(
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+            get("FLEETINT_OTEL_GATEWAY_LOG_LEVEL"),
+            &["debug", "info", "warn", "error"],
+        )?;
+        if nico_enabled.is_none() && (nico_log.is_some() || destination.is_some()) {
+            return Err("NICo reporting settings require FLEETINT_NICO_ENABLED".into());
+        }
+        if gateway_enabled.is_none() && gateway_log.is_some() {
+            return Err("gateway reporting settings require FLEETINT_OTEL_GATEWAY_ENABLED".into());
+        }
+        Ok(CollectorConfig {
+            runtime,
+            nico_health: nico_enabled.map(|enabled| NicoHealthConfig {
+                enabled,
+                log_level: nico_log,
+                telemetry_destination: destination,
+            }),
+            otel_gateway: gateway_enabled.map(|enabled| OtelGatewayConfig {
+                enabled,
+                log_level: gateway_log,
+            }),
+        })
+    }
+}
+
+fn parse_optional_bool(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<Option<bool>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value == "true" => Ok(Some(true)),
+        Ok(value) if value == "false" => Ok(Some(false)),
+        _ => Err(format!("{name} must be true or false").into()),
+    }
+}
+
+/// Validate reporting values without including their contents in startup errors.
+fn parse_optional_setting(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+    allowed: &[&str],
+) -> Result<Option<String>, Box<dyn Error>> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if allowed.contains(&value.as_str()) => Ok(Some(value)),
+        _ => Err(format!("{name} has an unsupported value").into()),
+    }
+}
+
+#[derive(Clone)]
+struct Shutdown(watch::Receiver<bool>);
+
+impl Shutdown {
+    fn is_requested(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    async fn wait(&mut self) {
+        let _ = self.0.wait_for(|requested| *requested).await;
+    }
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await
 }
 
 pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> {
+    let (sender, receiver) = watch::channel(false);
+    let runtime = run_runtime_until_shutdown(options, Shutdown(receiver));
+    tokio::pin!(runtime);
+    tokio::select! {
+        biased;
+        signal = shutdown_signal() => {
+            signal?;
+            tracing::info!("shutdown requested; stopping collection and draining inventory uploads");
+            sender.send_replace(true);
+            runtime.await
+        }
+        result = &mut runtime => result,
+    }
+}
+
+async fn run_runtime_until_shutdown(
+    options: RuntimeOptions,
+    mut shutdown: Shutdown,
+) -> Result<(), Box<dyn Error>> {
+    let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let configured_targets = config::load_targets(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
     let backend_url = required_backend_option(options.backend_url, "backend URL")?;
@@ -66,8 +224,11 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     let agent_token = required_backend_option(options.agent_token, "agent token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
-    let mut session =
-        BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token).await?;
+    let mut session = tokio::select! {
+        biased;
+        () = shutdown.wait() => return Ok(()),
+        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token) => session?,
+    };
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
     let attestation_settings = {
@@ -79,49 +240,49 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     };
 
     loop {
+        if shutdown.is_requested() {
+            return Ok(());
+        }
         let started_at = std::time::Instant::now();
 
         // Phase 1: Collect and upload inventory
         match collect_and_upload_inventory(
             options.inventory.clone(),
+            collector_config.clone(),
             endpoints.oob_nodes_endpoint.clone(),
             &mut session,
             Arc::clone(&dispatcher),
+            shutdown.clone(),
         )
         .await
         {
             Ok(outcome) => {
+                if shutdown.is_requested() {
+                    return Ok(());
+                }
                 if outcome.failed_uploads > 0 {
                     tracing::warn!(
                         elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                        exported_count = outcome.inventories.len(),
+                        resolved_node_count = outcome.nodes.len(),
                         failed_upload_count = outcome.failed_uploads,
                         "inventory backend sync completed with failed node exports"
                     );
                 } else {
                     tracing::info!(
                         elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                        exported_count = outcome.inventories.len(),
+                        resolved_node_count = outcome.nodes.len(),
                         "inventory backend sync completed"
                     );
                 }
-                if outcome.unexportable > 0 {
-                    tracing::warn!(
-                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                        unexportable_count = outcome.unexportable,
-                        "inventory records without UUIDs were not exported"
-                    );
-                }
-
-                // Phase 2: Attest only nodes whose inventory export succeeded and
-                // produced a UUID known to the backend.
-                match build_attestation_targets(&options.inventory, &outcome.inventories) {
+                // Phase 2: Attest configured BMCs by MAC. Inventory node identity
+                // resolution is independent from the attestation API.
+                match build_attestation_targets(&options.inventory) {
                     Err(err) => tracing::error!(
                         error = %err,
                         "failed to load targets for attestation; skipping attestation"
                     ),
                     Ok(attestation_targets) if attestation_targets.is_empty() => {
-                        tracing::warn!("no nodes with discovered UUID; skipping attestation");
+                        tracing::warn!("no configured BMCs; skipping attestation");
                     }
                     Ok(attestation_targets) => {
                         match collect_and_upload_attestation(
@@ -130,6 +291,7 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
                             &endpoints,
                             &mut session,
                             dispatcher.as_ref(),
+                            shutdown.clone(),
                         )
                         .await
                         {
@@ -161,40 +323,24 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
         );
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}
-            signal = tokio::signal::ctrl_c() => {
-                if let Err(err) = signal {
-                    return Err(format!("failed to listen for shutdown signal: {err}").into());
-                }
-                tracing::info!("shutdown signal received; stopping OOB runtime");
-                return Ok(());
-            }
+            () = shutdown.wait() => return Ok(()),
         }
     }
 }
 
 fn build_attestation_targets(
     options: &InventoryOptions,
-    inventories: &[NodeInventory],
 ) -> Result<Vec<attestation_config::Target>, Box<dyn Error>> {
     let targets = config::load_targets(&options.config)?;
 
     Ok(targets
         .into_iter()
-        .filter_map(|target| {
-            let uuid = inventories.iter().find_map(|inv| {
-                if inv.source.mac == target.mac {
-                    inv.uuid.as_ref().map(|u| u.to_string())
-                } else {
-                    None
-                }
-            })?;
-            Some(attestation_config::Target {
-                name: target.mac,
-                node_uuid: uuid,
-                address: target.address,
-                username: target.username,
-                password: target.password,
-            })
+        .map(|target| attestation_config::Target {
+            name: target.mac.to_string(),
+            bmc_mac: target.mac.to_string(),
+            address: target.address,
+            username: target.username,
+            password: target.password,
         })
         .collect())
 }
@@ -205,33 +351,26 @@ async fn collect_and_upload_attestation(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
+    mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let outcome = match collect_attestation(
-        targets,
-        attestation_settings,
-        endpoints,
-        session.jwt(),
-        dispatcher,
-    )
-    .await
-    {
+    let collect = |jwt: String| async move {
+        collect_attestation(targets, attestation_settings, endpoints, &jwt, dispatcher).await
+    };
+    let result = tokio::select! {
+        biased;
+        () = shutdown.wait() => return Ok(()),
+        result = collect(session.jwt().to_string()) => result,
+    };
+    let outcome = match result {
         Ok(outcome) => outcome,
-        // A rejected JWT during nonce collection cannot be retried per target; re-enroll
-        // and re-run the whole batch with a fresh token before giving up.
         Err(err) if is_auth_failure(err.as_ref()) => {
-            tracing::warn!(
-                error = %err,
-                "backend JWT rejected during nonce collection; enrolling again before retry"
-            );
+            tracing::warn!(error = %err, "backend JWT rejected during nonce collection; enrolling again before retry");
             session.reenroll().await?;
-            collect_attestation(
-                targets,
-                attestation_settings,
-                endpoints,
-                session.jwt(),
-                dispatcher,
-            )
-            .await?
+            tokio::select! {
+                biased;
+                () = shutdown.wait() => return Ok(()),
+                result = collect(session.jwt().to_string()) => result?,
+            }
         }
         Err(err) => return Err(err),
     };
@@ -267,6 +406,7 @@ async fn collect_and_upload_attestation(
         &outcome.batch,
         attestation_settings.redfish_timeout,
         attestation_settings.concurrency,
+        &shutdown,
     )
     .await
 }
@@ -277,13 +417,17 @@ async fn upload_attestation_batches(
     batch: &BatchAttestation,
     timeout: Duration,
     batch_size: usize,
+    shutdown: &Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let batches = split_attestation_batch(batch, batch_size);
     let batch_count = batches.len();
     let mut failures = Vec::new();
 
     for (index, batch) in batches.into_iter().enumerate() {
-        let node_count = batch.results_by_node_uuid.len();
+        if shutdown.is_requested() {
+            break;
+        }
+        let node_count = batch.results_by_bmc_mac.len();
         let mut result = upload_attestation(endpoints, session.jwt(), &batch, timeout).await;
         if let Err(err) = &result
             && is_auth_failure(err.as_ref())
@@ -333,7 +477,7 @@ async fn upload_attestation_batches(
 fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {
     let batch_size = batch_size.max(1);
     let results = batch
-        .results_by_node_uuid
+        .results_by_bmc_mac
         .values()
         .cloned()
         .collect::<Vec<_>>();
@@ -393,43 +537,42 @@ pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Erro
 
 async fn collect_and_upload_inventory(
     options: InventoryOptions,
+    collector_config: CollectorConfig,
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
+    shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
-    let collector_config = config::load_config(&options.config)?;
+    let target_config = config::load_config(&options.config)?;
     dispatcher.sync_endpoints(
-        collector_config
+        target_config
             .targets
             .iter()
-            .map(|target| target.mac.clone()),
+            .map(|target| target.mac.to_string()),
     )?;
-    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt())?;
+    let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
-    let mapper = RedfishMapper::new();
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
-    let producer = tokio::spawn(async move {
-        let mut collections = stream::iter(collector_config.targets)
-            .map(|target| async {
-                let record = source.collect(target).await;
-                mapper.map(record).await
-            })
-            .buffer_unordered(target_concurrency);
-        while let Some(inventory) = collections.next().await {
-            if tx.send(inventory).await.is_err() {
-                return Err("inventory export worker stopped before collection completed");
-            }
-        }
-        Ok::<(), &'static str>(())
+    // JoinSet aborts the producer if an upload error exits this scope early.
+    let mut producer = tokio::task::JoinSet::new();
+    producer.spawn(async move {
+        let collections = inventory_collections(
+            &source,
+            target_config.targets,
+            target_concurrency,
+            CollectionOrder::Completion,
+        );
+        forward_inventory(collections, tx, shutdown).await
     });
 
     let mut inventory_vec = Vec::new();
     let mut summary = InventoryCollectionSummary::default();
     let mut failed_uploads = 0;
-    let mut unexportable = 0;
     loop {
         let batch =
             receive_inventory_batch(&mut rx, target_concurrency, INVENTORY_EXPORT_FLUSH_INTERVAL)
@@ -438,40 +581,28 @@ async fn collect_and_upload_inventory(
             break;
         }
         summary.add(summarize_inventory_collection(&batch));
-        let batch_size = batch.len();
-        let (exportable, batch_unexportable) = partition_exportable_inventory(batch);
-        unexportable += batch_unexportable;
-        if batch_unexportable > 0 {
-            tracing::warn!(
-                batch_size,
-                unexportable_count = batch_unexportable,
-                "inventory mini-batch contains records without UUIDs; skipping export"
-            );
-        }
-        if exportable.is_empty() {
-            continue;
-        }
-        let exportable_count = exportable.len();
+        let exportable_count = batch.len();
         let (uploaded, upload_result) =
-            upload_inventory_batch(&mut backend_sink, session, exportable).await?;
+            upload_inventory_batch(&mut backend_sink, session, batch).await?;
         match upload_result {
             Ok(outcome) => {
-                let (accepted, failures) = partition_uploaded_inventory(uploaded, &outcome);
+                let outcomes = (0..uploaded.len()).map(|index| outcome.item_outcome(index));
+                let (accepted, failures) = partition_uploaded_inventory(uploaded, outcomes);
                 failed_uploads += failures.len();
                 for failure in &failures {
                     match failure {
                         InventoryUploadFailure::Rejected {
-                            node_uuid,
+                            mac,
                             status,
                             message,
                         } => tracing::warn!(
-                            node_uuid,
+                            mac,
                             status,
                             message = message.as_deref().unwrap_or(""),
                             "backend rejected inventory node"
                         ),
-                        InventoryUploadFailure::MissingResult { node_uuid } => tracing::warn!(
-                            node_uuid,
+                        InventoryUploadFailure::MissingResult { mac } => tracing::warn!(
+                            mac,
                             "backend returned success without a result row for inventory node"
                         ),
                     }
@@ -479,7 +610,7 @@ async fn collect_and_upload_inventory(
                 if !failures.is_empty() {
                     tracing::warn!(
                         exportable_count,
-                        accepted_count = accepted.len(),
+                        resolved_node_count = accepted.len(),
                         failed_count = failures.len(),
                         "inventory mini-batch export completed with failed nodes"
                     );
@@ -499,7 +630,9 @@ async fn collect_and_upload_inventory(
         }
     }
     producer
+        .join_next()
         .await
+        .expect("inventory producer was started")
         .map_err(|err| format!("inventory collection task failed: {err}"))?
         .map_err(|err| -> Box<dyn Error> { err.into() })?;
 
@@ -521,16 +654,39 @@ async fn collect_and_upload_inventory(
         );
     }
     Ok(InventorySyncOutcome {
-        inventories: Arc::new(inventory_vec),
+        nodes: inventory_vec,
         failed_uploads,
-        unexportable,
     })
 }
 
+async fn forward_inventory(
+    mut collections: impl Stream<Item = NodeInventory> + Unpin,
+    sender: tokio::sync::mpsc::Sender<NodeInventory>,
+    mut shutdown: Shutdown,
+) -> Result<(), &'static str> {
+    loop {
+        let inventory = tokio::select! {
+            biased;
+            () = shutdown.wait() => break,
+            inventory = collections.next() => match inventory {
+                Some(inventory) => inventory,
+                None => break,
+            },
+        };
+        tokio::select! {
+            biased;
+            () = shutdown.wait() => break,
+            result = sender.send(inventory) => {
+                result.map_err(|_| "inventory export worker stopped before collection completed")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 struct InventorySyncOutcome {
-    inventories: Arc<Vec<NodeInventory>>,
+    nodes: Vec<ResolvedNode>,
     failed_uploads: usize,
-    unexportable: usize,
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -578,21 +734,21 @@ struct AttestationCollectionSummary {
 
 fn summarize_attestation_collection(batch: &BatchAttestation) -> AttestationCollectionSummary {
     let successful = batch
-        .results_by_node_uuid
+        .results_by_bmc_mac
         .values()
         .filter(|attestation| attestation.success)
         .count();
     AttestationCollectionSummary {
-        total: batch.results_by_node_uuid.len(),
+        total: batch.results_by_bmc_mac.len(),
         successful,
-        failed: batch.results_by_node_uuid.len().saturating_sub(successful),
+        failed: batch.results_by_bmc_mac.len().saturating_sub(successful),
         evidences: batch
-            .results_by_node_uuid
+            .results_by_bmc_mac
             .values()
             .map(|attestation| attestation.evidences.len())
             .sum(),
         component_errors: batch
-            .results_by_node_uuid
+            .results_by_bmc_mac
             .values()
             .map(|attestation| attestation.component_errors.len())
             .sum(),
@@ -663,53 +819,57 @@ async fn upload_inventory_batch(
     Ok((inventories, result))
 }
 
-fn partition_uploaded_inventory(
+#[derive(Debug, Eq, PartialEq)]
+struct ResolvedNode {
+    mac: String,
+    node_uuid: String,
+}
+
+fn partition_uploaded_inventory<'a>(
     inventories: Vec<NodeInventory>,
-    outcome: &BackendBatchOutcome,
-) -> (Vec<NodeInventory>, Vec<InventoryUploadFailure>) {
-    let mut accepted = Vec::new();
+    outcomes: impl IntoIterator<Item = BackendNodeOutcome<'a>>,
+) -> (Vec<ResolvedNode>, Vec<InventoryUploadFailure>) {
+    let mut resolved = Vec::new();
     let mut failures = Vec::new();
+    let mut outcomes = outcomes.into_iter();
     for inventory in inventories {
-        let Some(node_uuid) = inventory.uuid.as_ref().map(ToString::to_string) else {
-            continue;
-        };
-        match outcome.node_outcome(&node_uuid) {
-            BackendNodeOutcome::Succeeded => accepted.push(inventory),
+        let mac = inventory.source.mac;
+        match outcomes.next().unwrap_or(BackendNodeOutcome::Missing) {
+            BackendNodeOutcome::Succeeded { node_uuid } => {
+                if let Some(node) = resolved_node(mac, node_uuid) {
+                    resolved.push(node);
+                }
+            }
             BackendNodeOutcome::Rejected { status, message } => {
                 failures.push(InventoryUploadFailure::Rejected {
-                    node_uuid,
+                    mac,
                     status: status.to_string(),
                     message: message.map(str::to_string),
                 });
             }
             BackendNodeOutcome::Missing => {
-                failures.push(InventoryUploadFailure::MissingResult { node_uuid });
+                failures.push(InventoryUploadFailure::MissingResult { mac });
             }
         }
     }
-    (accepted, failures)
+    (resolved, failures)
+}
+
+fn resolved_node(mac: String, node_uuid: Option<&str>) -> Option<ResolvedNode> {
+    let node_uuid = InventoryUuid::parse(node_uuid?)?.to_string();
+    Some(ResolvedNode { mac, node_uuid })
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum InventoryUploadFailure {
     Rejected {
-        node_uuid: String,
+        mac: String,
         status: String,
         message: Option<String>,
     },
     MissingResult {
-        node_uuid: String,
+        mac: String,
     },
-}
-
-fn partition_exportable_inventory(inventories: Vec<NodeInventory>) -> (Vec<NodeInventory>, usize) {
-    let total = inventories.len();
-    let exportable = inventories
-        .into_iter()
-        .filter(|inventory| inventory.uuid.is_some())
-        .collect::<Vec<_>>();
-    let unexportable = total.saturating_sub(exportable.len());
-    (exportable, unexportable)
 }
 
 #[derive(Debug)]
@@ -735,17 +895,37 @@ async fn collect_inventory_targets(
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?;
-    let mapper = RedfishMapper::new();
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
 
-    Ok(stream::iter(targets)
-        .map(|target| async {
-            let record = source.collect(target).await;
-            mapper.map(record).await
-        })
-        .buffered(target_concurrency)
-        .collect()
-        .await)
+    Ok(inventory_collections(
+        &source,
+        targets,
+        target_concurrency,
+        CollectionOrder::Configured,
+    )
+    .collect()
+    .await)
+}
+
+#[derive(Clone, Copy)]
+enum CollectionOrder {
+    Configured,
+    Completion,
+}
+
+fn inventory_collections<'a>(
+    source: &'a RedfishSource,
+    targets: Vec<config::Target>,
+    concurrency: usize,
+    order: CollectionOrder,
+) -> Pin<Box<dyn Stream<Item = NodeInventory> + Send + 'a>> {
+    let collections = stream::iter(targets).map(|target| source.collect(target));
+    match order {
+        CollectionOrder::Configured => Box::pin(collections.buffered(concurrency)),
+        CollectionOrder::Completion => Box::pin(collections.buffer_unordered(concurrency)),
+    }
 }
 
 fn start_dispatcher(
@@ -763,14 +943,14 @@ fn start_dispatcher(
             bmc_burst: options.bmc_burst,
             workflow_queue_capacity: WORKFLOW_QUEUE_CAPACITY,
         },
-        targets.iter().map(|target| target.mac.clone()),
+        targets.iter().map(|target| target.mac.to_string()),
     )?)
 }
 
 #[cfg(test)]
 mod tests {
     use bmc_attestation::models::{AttestationEvidence, ComponentError, NodeAttestation};
-    use bmc_inventory::models::{DomainError, InventorySourceInfo, InventoryUuid};
+    use bmc_inventory::models::{DomainError, InventorySourceInfo};
 
     use super::*;
 
@@ -781,10 +961,10 @@ mod tests {
         partial.domain_errors.push(DomainError {
             domain: "firmware".to_string(),
             resource: None,
-            message: "not supported".to_string(),
+            message: "not supported".into(),
         });
         let mut failed = inventory("10.0.0.3");
-        failed.target_error = Some("connection refused".to_string());
+        failed.target_error = Some("connection refused".into());
 
         assert_eq!(
             summarize_inventory_collection(&[successful, partial, failed]),
@@ -798,24 +978,70 @@ mod tests {
     }
 
     #[test]
-    fn inventory_without_uuid_is_unexportable() {
-        let mut exportable = inventory("10.0.0.1");
-        exportable.uuid = InventoryUuid::parse("9AEE71E4-6E80-11EE-A8AC-74D4DD550187");
-        let mut collection_failure = inventory("10.0.0.2");
-        collection_failure.target_error = Some("connection refused".to_string());
+    fn attestation_identity_comes_only_from_valid_backend_uuid() {
+        let mac = "00:11:22:33:44:55".to_string();
+        assert_eq!(resolved_node(mac.clone(), None), None);
+        assert_eq!(resolved_node(mac.clone(), Some("not-a-uuid")), None);
+        assert_eq!(resolved_node(mac.clone(), Some("")), None);
+        assert_eq!(
+            resolved_node(mac.clone(), Some("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")),
+            Some(ResolvedNode {
+                mac,
+                node_uuid: "9aee71e4-6e80-11ee-a8ac-74d4dd550187".to_string(),
+            })
+        );
+    }
 
-        let (exportable, unexportable) =
-            partition_exportable_inventory(vec![exportable, collection_failure]);
-
-        assert_eq!(exportable.len(), 1);
-        assert_eq!(exportable[0].source.address, "10.0.0.1");
-        assert_eq!(unexportable, 1);
+    #[test]
+    fn upload_results_map_to_mac_by_position_and_use_backend_identity() {
+        let first = inventory("10.0.0.1");
+        let mut failed_collection = inventory("10.0.0.2");
+        failed_collection.source.mac = "00:11:22:33:44:66".to_string();
+        failed_collection.target_error = Some("unavailable".into());
+        let mut rejected = inventory("10.0.0.3");
+        rejected.source.mac = "00:11:22:33:44:77".to_string();
+        let mut missing = inventory("10.0.0.4");
+        missing.source.mac = "00:11:22:33:44:88".to_string();
+        let uuid = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
+        let (nodes, failures) = partition_uploaded_inventory(
+            vec![first, failed_collection, rejected, missing],
+            [
+                BackendNodeOutcome::Succeeded {
+                    node_uuid: Some(uuid),
+                },
+                BackendNodeOutcome::Succeeded { node_uuid: None },
+                BackendNodeOutcome::Rejected {
+                    status: "CONFLICT",
+                    message: Some("ambiguous identity"),
+                },
+            ],
+        );
+        assert_eq!(
+            nodes,
+            vec![ResolvedNode {
+                mac: "00:11:22:33:44:55".to_string(),
+                node_uuid: uuid.to_string(),
+            }]
+        );
+        assert_eq!(
+            failures,
+            vec![
+                InventoryUploadFailure::Rejected {
+                    mac: "00:11:22:33:44:77".to_string(),
+                    status: "CONFLICT".to_string(),
+                    message: Some("ambiguous identity".to_string()),
+                },
+                InventoryUploadFailure::MissingResult {
+                    mac: "00:11:22:33:44:88".to_string()
+                },
+            ]
+        );
     }
 
     #[test]
     fn attestation_summary_counts_results_evidence_and_component_errors() {
         let successful = NodeAttestation {
-            node_uuid: "node-1".to_string(),
+            bmc_mac: "00:11:22:33:44:55".to_string(),
             target_name: "target-1".to_string(),
             bmc_address: "10.0.0.1".to_string(),
             success: true,
@@ -833,14 +1059,14 @@ mod tests {
             component_errors: vec![],
         };
         let mut failed = NodeAttestation::failed(
-            "node-2".to_string(),
+            "00:11:22:33:44:66".to_string(),
             "target-2".to_string(),
             "10.0.0.2".to_string(),
             "unsupported",
         );
         failed.component_errors.push(ComponentError {
             component_id: Some("GPU_0".to_string()),
-            message: "unsupported".to_string(),
+            message: "unsupported".into(),
         });
         let batch =
             BatchAttestation::new("2026-01-01T00:00:00Z".to_string(), vec![successful, failed]);
@@ -862,7 +1088,7 @@ mod tests {
         let results = (0..5)
             .map(|index| {
                 NodeAttestation::failed(
-                    format!("node-{index}"),
+                    format!("00:11:22:33:44:{index:02x}"),
                     format!("target-{index}"),
                     format!("10.0.0.{index}"),
                     "unsupported",
@@ -876,7 +1102,7 @@ mod tests {
         assert_eq!(
             batches
                 .iter()
-                .map(|batch| batch.results_by_node_uuid.len())
+                .map(|batch| batch.results_by_bmc_mac.len())
                 .collect::<Vec<_>>(),
             [2, 2, 1]
         );
@@ -898,9 +1124,198 @@ mod tests {
             bmc_requests_per_second: 1,
             bmc_burst: 1,
             timeout_seconds: 1,
+            latency_probe: false,
         };
 
-        assert!(build_attestation_targets(&options, &[]).is_err());
+        assert!(build_attestation_targets(&options).is_err());
+    }
+
+    #[test]
+    fn build_attestation_targets_uses_configured_bmc_mac() {
+        let mut config_path = std::env::temp_dir();
+        config_path.push(format!(
+            "fleet-intelligence-oob-attestation-targets-{}.toml",
+            std::process::id()
+        ));
+        let mut credentials_path = std::env::temp_dir();
+        credentials_path.push(format!(
+            "fleet-intelligence-oob-attestation-credentials-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &credentials_path,
+            r#"{"profiles":{"bmc":{"username":"admin","password":"secret"}}}"#,
+        )
+        .expect("write credentials");
+        std::fs::write(
+            &config_path,
+            format!(
+                r#"
+                [credentials]
+                file = {credentials_path:?}
+
+                [[targets]]
+                ip = "10.0.0.1"
+                mac = "00-11-22-33-44-55"
+                credentials_profile = "bmc"
+            "#
+            ),
+        )
+        .expect("write config");
+        let options = InventoryOptions {
+            config: config_path.to_string_lossy().into_owned(),
+            insecure_tls: false,
+            detail: false,
+            format: InventoryFormat::Json,
+            target_concurrency: 1,
+            bmc_max_in_flight: 1,
+            bmc_requests_per_second: 1,
+            bmc_burst: 1,
+            timeout_seconds: 1,
+            latency_probe: false,
+        };
+
+        let targets = build_attestation_targets(&options).expect("attestation targets");
+        std::fs::remove_file(config_path).expect("remove config");
+        std::fs::remove_file(credentials_path).expect("remove credentials");
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "00:11:22:33:44:55");
+        assert_eq!(targets[0].bmc_mac, "00:11:22:33:44:55");
+    }
+
+    fn reporting_options() -> RuntimeOptions {
+        RuntimeOptions {
+            inventory: InventoryOptions {
+                config: "unused-targets.toml".to_string(),
+                insecure_tls: false,
+                detail: false,
+                format: InventoryFormat::Json,
+                target_concurrency: 0,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 1,
+                bmc_burst: 1,
+                timeout_seconds: 1,
+                latency_probe: false,
+            },
+            backend_url: Some("https://private.example.com".to_string()),
+            agent_token: Some("must-not-be-reported".to_string()),
+            interval_seconds: 0,
+            log_level: "info".to_string(),
+        }
+    }
+
+    #[test]
+    fn runtime_config_uses_effective_options() {
+        let runtime = reporting_options();
+        let config = runtime.runtime_config();
+        assert_eq!(config.inventory_interval_seconds, 1);
+        assert_eq!(config.target_concurrency, 1);
+        assert_eq!(config.bmc_max_in_flight, 1);
+        assert!(!config.latency_probe);
+        assert_eq!(config.log_level, "info");
+    }
+
+    #[test]
+    fn behavior_reporting_preserves_unknown_and_explicit_values() {
+        let options = reporting_options();
+        let absent = options
+            .collector_config_from_env(|_| Err(std::env::VarError::NotPresent))
+            .unwrap();
+        assert!(absent.runtime.proxy_enabled.is_none());
+        assert!(absent.nico_health.is_none());
+        assert!(absent.otel_gateway.is_none());
+        for (enabled, destination) in [
+            ("true", "bundledGateway"),
+            ("true", "external"),
+            ("false", "disabled"),
+        ] {
+            let report = options
+                .collector_config_from_env(|name| {
+                    Ok(match name {
+                        "FLEETINT_PROXY_ENABLED" => "false",
+                        "FLEETINT_NICO_ENABLED" => enabled,
+                        "FLEETINT_NICO_LOG_LEVEL" => "debug",
+                        "FLEETINT_NICO_TELEMETRY_DESTINATION" => destination,
+                        "FLEETINT_OTEL_GATEWAY_ENABLED" => "false",
+                        "FLEETINT_OTEL_GATEWAY_LOG_LEVEL" => "error",
+                        _ => panic!("unexpected environment access: {name}"),
+                    }
+                    .to_string())
+                })
+                .unwrap();
+            assert_eq!(report.runtime.proxy_enabled, Some(false));
+            let nico = report.nico_health.unwrap();
+            assert_eq!(nico.enabled, enabled == "true");
+            assert_eq!(nico.log_level.as_deref(), Some("debug"));
+            assert_eq!(nico.telemetry_destination.as_deref(), Some(destination));
+            let gateway = report.otel_gateway.unwrap();
+            assert!(!gateway.enabled);
+            assert_eq!(gateway.log_level.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn behavior_reporting_rejects_invalid_or_orphan_settings_without_echoing_values() {
+        let options = reporting_options();
+        for name in [
+            "FLEETINT_PROXY_ENABLED",
+            "FLEETINT_NICO_LOG_LEVEL",
+            "FLEETINT_NICO_TELEMETRY_DESTINATION",
+            "FLEETINT_OTEL_GATEWAY_LOG_LEVEL",
+        ] {
+            let error = options
+                .collector_config_from_env(|key| {
+                    if key == name {
+                        Ok("must-not-be-reported".into())
+                    } else {
+                        Err(std::env::VarError::NotPresent)
+                    }
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(name));
+            assert!(!error.contains("must-not-be-reported"));
+        }
+        for name in ["FLEETINT_NICO_LOG_LEVEL", "FLEETINT_OTEL_GATEWAY_LOG_LEVEL"] {
+            assert!(
+                options
+                    .collector_config_from_env(|key| {
+                        if key == name {
+                            Ok("info".into())
+                        } else {
+                            Err(std::env::VarError::NotPresent)
+                        }
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn optional_enablement_distinguishes_unknown_false_and_invalid_values() {
+        for name in ["FLEETINT_NICO_ENABLED", "FLEETINT_OTEL_GATEWAY_ENABLED"] {
+            assert_eq!(
+                parse_optional_bool(name, Err(std::env::VarError::NotPresent)).unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("true".into())).unwrap(),
+                Some(true)
+            );
+            assert_eq!(
+                parse_optional_bool(name, Ok("false".into())).unwrap(),
+                Some(false)
+            );
+            for value in ["", "1", "TRUE", "invalid"] {
+                assert_eq!(
+                    parse_optional_bool(name, Ok(value.into()))
+                        .unwrap_err()
+                        .to_string(),
+                    format!("{name} must be true or false")
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -958,23 +1373,22 @@ mod tests {
             name: None,
             compute_zone: None,
             node_group: None,
-            uuid: None,
             source: InventorySourceInfo {
                 source_type: "redfish".to_string(),
                 mac: "00:11:22:33:44:55".to_string(),
                 address: address.to_string(),
-                host_name: None,
                 redfish_version: None,
                 service_uuid: None,
                 vendor: None,
             },
-            primary_system_id: None,
             managers: vec![],
             systems: vec![],
             chassis: vec![],
             firmware: vec![],
+            fabrics: Vec::new(),
             domain_errors: vec![],
             target_error: None,
+            latency: Vec::new(),
         }
     }
 }

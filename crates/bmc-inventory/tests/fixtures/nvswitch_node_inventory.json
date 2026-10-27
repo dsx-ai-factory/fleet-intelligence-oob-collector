@@ -1,0 +1,277 @@
+{
+  "chassis": [
+    {
+      "assetTag": null,
+      "chassisType": "Component",
+      "description": null,
+      "id": "MGX_NVSwitch_0",
+      "links": {
+        "ComputerSystems": [
+          {
+            "odataId": "/redfish/v1/Systems/System_0"
+          }
+        ],
+        "ManagedBy": [
+          {
+            "odataId": "/redfish/v1/Managers/BMC_0"
+          }
+        ],
+        "Switches": [
+          {
+            "odataId": "/redfish/v1/Fabrics/MGX_NVLinkFabric_0/Switches/NVSwitch_0"
+          }
+        ]
+      },
+      "location": {
+        "partLocation": {
+          "locationOrdinalValue": null,
+          "locationType": "Embedded",
+          "orientation": null,
+          "reference": null,
+          "serviceLabel": null
+        },
+        "partLocationContext": null,
+        "placement": null
+      },
+      "manufacturer": "NVIDIA",
+      "model": "N5400_LD",
+      "name": "MGX_NVSwitch_0",
+      "odataId": "/redfish/v1/Chassis/MGX_NVSwitch_0",
+      "partNumber": "NVS-PN-0001",
+      "pcieDevices": [],
+      "powerState": "On",
+      "serialNumber": "NVS-SN-0001",
+      "sku": "SKU-NVS-01",
+      "status": {
+        "conditions": [],
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+      },
+      "powerSupplies": []
+    }
+  ],
+  "collectedAt": "2026-01-01T00:00:00Z",
+  "computeZone": "us-west-dc1",
+  "domainErrors": [],
+  "enrolledAt": "2026-01-02T00:00:00Z",
+  "fabrics": [
+    {
+      "description": null,
+      "fabricType": "NVLink",
+      "id": "MGX_NVLinkFabric_0",
+      "links": {},
+      "name": "MGX_NVLinkFabric_0 Resource",
+      "odataId": "/redfish/v1/Fabrics/MGX_NVLinkFabric_0",
+      "status": null,
+      "switches": [
+        {
+          "description": null,
+          "firmwareVersion": "35_2014_2184",
+          "id": "NVSwitch_0",
+          "links": {
+            "Chassis": [
+              {
+                "odataId": "/redfish/v1/Chassis/MGX_NVSwitch_0"
+              }
+            ]
+          },
+          "location": null,
+          "manufacturer": "NVIDIA",
+          "model": "NA",
+          "name": "NVSwitch_0 Resource",
+          "nvidiaSwitch": {
+            "deviceId": null,
+            "pcieReferenceClockEnabled": null,
+            "protectedPcieModeEnabled": null,
+            "switchIsolationMode": "SwitchCommunicationEnabled",
+            "vendorId": null
+          },
+          "odataId": "/redfish/v1/Fabrics/MGX_NVLinkFabric_0/Switches/NVSwitch_0",
+          "partNumber": "NA",
+          "serialNumber": "NA",
+          "sku": null,
+          "status": {
+            "conditions": [],
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          },
+          "switchType": "NVLink",
+          "uuid": "8e415f60-7182-4d9e-bf0a-2b3c4d5e6f70"
+        },
+        {
+          "description": null,
+          "firmwareVersion": "35_2014_2184",
+          "id": "NVSwitch_1",
+          "links": {
+            "Chassis": [
+              {
+                "odataId": "/redfish/v1/Chassis/MGX_NVSwitch_1"
+              }
+            ]
+          },
+          "location": null,
+          "manufacturer": "NVIDIA",
+          "model": "NA",
+          "name": "NVSwitch_1 Resource",
+          "nvidiaSwitch": {
+            "deviceId": null,
+            "pcieReferenceClockEnabled": null,
+            "protectedPcieModeEnabled": null,
+            "switchIsolationMode": "SwitchCommunicationEnabled",
+            "vendorId": null
+          },
+          "odataId": "/redfish/v1/Fabrics/MGX_NVLinkFabric_0/Switches/NVSwitch_1",
+          "partNumber": "NA",
+          "serialNumber": "NA",
+          "sku": null,
+          "status": {
+            "conditions": [],
+            "health": "OK",
+            "healthRollup": "OK",
+            "state": "Enabled"
+          },
+          "switchType": "NVLink",
+          "uuid": "9f526071-8293-4eaf-8a1b-3c4d5e6f7081"
+        }
+      ],
+      "uuid": null
+    }
+  ],
+  "firmware": [
+    {
+      "description": "Other image",
+      "id": "MGX_FW_NVSwitch_0",
+      "links": {},
+      "name": "Software Inventory",
+      "odataId": "/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_NVSwitch_0",
+      "relatedItem": [
+        {
+          "odataId": "/redfish/v1/Chassis/MGX_NVSwitch_0"
+        }
+      ],
+      "releaseDate": null,
+      "serviceId": "FirmwareInventory",
+      "status": {
+        "conditions": [],
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+      },
+      "version": "35_2014_2184"
+    }
+  ],
+  "kind": "nvswitch",
+  "latency": [],
+  "managers": [
+    {
+      "description": "Baseboard Management Controller",
+      "firmwareVersion": "88.0002.1336",
+      "id": "BMC_0",
+      "links": {
+        "ActiveSoftwareImage": [
+          {
+            "odataId": "/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_BMC_0"
+          }
+        ],
+        "ManagerForChassis": [
+          {
+            "odataId": "/redfish/v1/Chassis/BMC_eeprom"
+          }
+        ],
+        "ManagerForServers": [
+          {
+            "odataId": "/redfish/v1/Systems/System_0"
+          }
+        ],
+        "ManagerInChassis": [
+          {
+            "odataId": "/redfish/v1/Chassis/BMC_eeprom"
+          }
+        ],
+        "SoftwareImages": [
+          {
+            "odataId": "/redfish/v1/UpdateService/FirmwareInventory/MGX_FW_BMC_0"
+          }
+        ]
+      },
+      "managerType": "BMC",
+      "model": "OpenBmc",
+      "name": "OpenBmc Manager",
+      "odataId": "/redfish/v1/Managers/BMC_0",
+      "status": {
+        "conditions": [],
+        "health": "OK",
+        "healthRollup": "OK",
+        "state": "Enabled"
+      },
+      "uuid": "7d304e5f-6071-4c8d-ae9f-1a2b3c4d5e6f"
+    }
+  ],
+  "name": "nvswitch-01",
+  "nodeGroup": "gb200-training",
+  "schemaVersion": "inventory.v1alpha1",
+  "source": {
+    "address": "10.0.0.2",
+    "mac": "00:11:22:33:44:66",
+    "redfishVersion": "1.17.0",
+    "serviceUuid": "6c2f3d4e-5f60-4b7c-9d8e-0f1a2b3c4d5e",
+    "sourceType": "redfish",
+    "vendor": "NVIDIA"
+  },
+  "systems": [
+    {
+      "assetTag": null,
+      "biosVersion": null,
+      "description": "Computer System",
+      "hostName": null,
+      "id": "System_0",
+      "links": {
+        "Chassis": [
+          {
+            "odataId": "/redfish/v1/Chassis/BMC_eeprom"
+          }
+        ],
+        "ManagedBy": [
+          {
+            "odataId": "/redfish/v1/Managers/BMC_0"
+          }
+        ]
+      },
+      "manufacturer": null,
+      "memorySummary": {
+        "memoryMirroring": null,
+        "status": null,
+        "totalSystemMemoryGiB": 0.0,
+        "totalSystemPersistentMemoryGiB": null
+      },
+      "model": null,
+      "name": "System_0",
+      "odataId": "/redfish/v1/Systems/System_0",
+      "powerState": "On",
+      "processorSummary": {
+        "coreCount": null,
+        "count": 0,
+        "logicalProcessorCount": null,
+        "model": null,
+        "status": null,
+        "threadingEnabled": null
+      },
+      "processors": [],
+      "secureBootEnabled": null,
+      "serialNumber": null,
+      "sku": null,
+      "status": {
+        "conditions": [],
+        "health": "OK",
+        "healthRollup": null,
+        "state": "Enabled"
+      },
+      "uuid": "5b1e2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "memory": [],
+      "storage": []
+    }
+  ],
+  "targetError": null
+}

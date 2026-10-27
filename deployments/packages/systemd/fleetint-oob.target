@@ -1,0 +1,9 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Fleet Intelligence full OOB collection stack
+Wants=fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
+After=fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
+
+[Install]
+WantedBy=multi-user.target

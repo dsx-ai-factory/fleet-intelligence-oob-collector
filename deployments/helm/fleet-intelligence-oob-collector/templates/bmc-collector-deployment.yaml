@@ -1,3 +1,7 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.bmcCollector.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,9 +17,15 @@ spec:
       {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.bmcCollector.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "fleet-intelligence-oob-collector.selectorLabels" . | nindent 8 }}
     spec:
+      {{- include "fleet-intelligence-oob-collector.scheduling" .Values.bmcCollector | nindent 6 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -41,77 +51,70 @@ spec:
           args:
             - run
             - --config
-            - /etc/fleet-intelligence/{{ .Values.config.configKey }}
+            - /etc/fleet-intelligence/config.toml
             - --interval-seconds
-            - {{ .Values.bmcCollector.intervalSeconds | quote }}
+            - {{ .Values.bmcCollector.intervalSeconds | int | quote }}
             - --target-concurrency
-            - {{ .Values.bmcCollector.targetConcurrency | quote }}
+            - {{ .Values.bmcCollector.targetConcurrency | int | quote }}
             - --bmc-max-in-flight
-            - {{ .Values.bmcCollector.bmcMaxInFlight | quote }}
+            - {{ .Values.bmcCollector.redfish.maxInFlight | int | quote }}
             - --bmc-requests-per-second
-            - {{ .Values.bmcCollector.bmcRequestsPerSecond | quote }}
+            - {{ .Values.bmcCollector.redfish.requestsPerSecond | int | quote }}
             - --bmc-burst
-            - {{ .Values.bmcCollector.bmcBurst | quote }}
+            - {{ .Values.bmcCollector.redfish.requestsPerSecond | int | quote }}
             - --timeout-seconds
-            - {{ .Values.bmcCollector.timeoutSeconds | quote }}
-            {{- if .Values.bmcCollector.insecureTls }}
+            - {{ .Values.bmcCollector.redfish.timeoutSeconds | int | quote }}
+            {{- if .Values.bmcCollector.redfish.insecureTls }}
             - --insecure-tls
             {{- end }}
+            {{- if not .Values.bmcCollector.latencyProbe.enabled }}
+            - --disable-latency-probe
+            {{- end }}
           env:
+            - name: FLEETINT_PROXY_ENABLED
+              value: {{ .Values.proxy.enabled | quote }}
+            - name: FLEETINT_NICO_LOG_LEVEL
+              value: {{ .Values.nicoHardwareHealth.logLevel | quote }}
+            - name: FLEETINT_OTEL_GATEWAY_LOG_LEVEL
+              value: {{ .Values.otelGateway.logLevel | quote }}
+            - name: FLEETINT_NICO_TELEMETRY_DESTINATION
+              value: {{ if not .Values.nicoHardwareHealth.enabled }}"disabled"{{ else if .Values.otelGateway.enabled }}"bundledGateway"{{ else }}"external"{{ end }}
+            - name: FLEETINT_NICO_ENABLED
+              value: {{ .Values.nicoHardwareHealth.enabled | quote }}
+            - name: FLEETINT_OTEL_GATEWAY_ENABLED
+              value: {{ .Values.otelGateway.enabled | quote }}
             - name: RUST_LOG
               value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}
             - name: FLEETINT_BACKEND_URL
-              value: {{ required "bmcCollector.backendUrl is required" .Values.bmcCollector.backendUrl | quote }}
+              value: {{ required "backend.url is required" .Values.backend.url | quote }}
             - name: FLEETINT_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "bmcCollector.agentTokenSecretName is required" .Values.bmcCollector.agentTokenSecretName | quote }}
-                  key: agent-token
-            {{- with .Values.bmcCollector.proxy.httpProxy }}
-            - name: HTTP_PROXY
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.bmcCollector.proxy.httpsProxy }}
-            - name: HTTPS_PROXY
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.bmcCollector.proxy.allProxy }}
-            - name: ALL_PROXY
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.bmcCollector.proxy.noProxy }}
-            - name: NO_PROXY
-              value: {{ . | quote }}
-            {{- end }}
+                  name: {{ required "backend.agentToken.existingSecret is required" .Values.backend.agentToken.existingSecret | quote }}
+                  key: {{ .Values.backend.agentToken.secretKey | quote }}
+            {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bmcCollector.resources | nindent 12 }}
           volumeMounts:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
-            {{- if .Values.credentials.secrets }}
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
-            {{- end }}
       volumes:
         - name: hardware-config
           configMap:
-            name: {{ required "config.configMapName is required" .Values.config.configMapName | quote }}
+            name: {{ include "fleet-intelligence-oob-collector.fullname" . }}-config
             items:
-              - key: {{ .Values.config.configKey | quote }}
-                path: {{ .Values.config.configKey | quote }}
+              - key: collector.toml
+                path: config.toml
                 mode: 0440
-        {{- if .Values.credentials.secrets }}
         - name: bmc-credentials
-          projected:
+          secret:
+            secretName: {{ .Values.credentials.existingSecret | quote }}
             defaultMode: 0440
-            sources:
-              {{- range .Values.credentials.secrets }}
-              - secret:
-                  name: {{ required "credentials.secrets[].name is required" .name | quote }}
-                  items:
-                    - key: username
-                      path: {{ printf "%s/username" .target | quote }}
-                    - key: password
-                      path: {{ printf "%s/password" .target | quote }}
-              {{- end }}
-        {{- end }}
+            items:
+              - key: {{ .Values.credentials.secretKey | quote }}
+                path: credentials.json
+{{- end }}

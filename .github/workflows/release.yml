@@ -1,3 +1,6 @@
+# Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 name: Release
 
 on:
@@ -16,7 +19,8 @@ env:
   IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
   NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
-  NICO_SOURCE_REF: a76c3c56baab6385e3198494569f78441dbc6bca
+  # Shared JSON credential support from dsx-ai-factory/infra-controller#7730.
+  NICO_SOURCE_REF: 70914e1cb8afcb82c9a0a30f67f2eb653352748e
   CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
@@ -177,7 +181,7 @@ jobs:
       - name: Check out pinned NICo source
         uses: actions/checkout@v4
         with:
-          repository: NVIDIA/infra-controller
+          repository: dsx-ai-factory/infra-controller
           ref: ${{ env.NICO_SOURCE_REF }}
           path: nico-source
           persist-credentials: false

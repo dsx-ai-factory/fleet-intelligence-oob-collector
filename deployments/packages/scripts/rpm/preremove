@@ -1,0 +1,11 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+# RPM passes 0 for final removal; upgrades leave units enabled and running.
+if [ "${1:-1}" = 0 ]; then
+    systemctl --no-reload disable fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+    if [ -d /run/systemd/system ]; then
+        systemctl stop fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+    fi
+fi

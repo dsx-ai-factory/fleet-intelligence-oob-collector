@@ -4,6 +4,9 @@ Thank you for your interest in contributing to Fleet Intelligence Out-of-Band
 Collector. This project is a Rust workspace for collecting Fleet Intelligence
 data from server BMC interfaces through out-of-band management paths.
 
+Participation in this project is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Ways to Contribute
 
 You can help by:
@@ -22,6 +25,17 @@ For non-trivial changes, open an issue first so maintainers can discuss the
 problem, scope, and expected design. This is especially important for changes to
 Fleet Intelligence data models, backend API behavior, Redfish traversal, or
 collector runtime semantics.
+
+## Contribution Workflow
+
+1. Fork this repository on GitHub.
+2. Create a branch from `main` named `<type>/<short-dash-separated-name>`, for example `git checkout -b feat/my-feature`.
+3. Commit your changes with a DCO sign-off, for example `git commit -s -m "feat(cli): add my feature"`.
+4. Push the branch to your fork, for example `git push origin feat/my-feature`.
+5. Open a pull request against `main`.
+
+Report bugs and request features through
+[GitHub Issues](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/issues).
 
 ## Development Setup
 
@@ -43,7 +57,8 @@ Run tests:
 cargo test --workspace
 ```
 
-Run formatting and lint checks before opening a pull request:
+Code style follows standard Rust formatting. Run formatting and lint checks,
+and add tests for new functionality, before opening a pull request:
 
 ```bash
 cargo fmt --all --check
@@ -92,6 +107,43 @@ When opening a pull request:
   commands, configuration, data models, deployment behavior, or output formats
   change.
 - Keep unrelated refactors out of feature and bug fix PRs.
+
+## Commit and Pull Request Conventions
+
+Use the same format for commit subjects and pull request titles:
+
+```text
+<type>(<scope>): <description>
+```
+
+- Allowed types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`, `revert`.
+- Scope is optional and lowercase, for example `cli`, `inventory`, or `deps`.
+- Write a concise, imperative description, for example `fix(inventory): handle missing chassis`.
+- For breaking changes, add `!` after the type/scope, for example `feat(cli)!: remove deprecated flag`, and explain the impact and migration in the PR body.
+- Sign off every commit with `git commit -s`, using your real name and a valid email address, to comply with the DCO.
+- Name branches `<type>/<short-dash-separated-name>`, for example `fix/missing-chassis` or `docs/configuration-guide`. Use one of the allowed types above.
+- Target `main` unless maintainers specify a release branch.
+
+PR descriptions must explain the behavior change, link related GitHub issues
+(use `Closes #123` when appropriate), report validation and remaining limitations,
+and highlight breaking changes. Add relevant tests and documentation, follow the
+PR template, and ensure CI passes. PR titles describe the final user-visible
+result and may appear in release notes.
+
+Maintainers should **squash merge** each focused PR, using the PR title as the
+final commit subject. Contributors may keep separate review commits; they do not
+need to squash before review. Preserve all contributors' DCO `Signed-off-by:`
+trailers in the final squash commit and verify the final message before merging.
+
+### PR title validation
+
+The **Contribution conventions / PR title** GitHub Actions check validates PR
+titles when a PR is opened, edited, or updated. Maintainers should require this
+check in branch protection and configure squash merging to use the PR title as
+the final commit subject. Local commit-format hooks are optional; individual
+commit messages do not become target-branch subjects when squash merging.
+Contributors must still sign off every commit, and maintainers must preserve
+those sign-offs in the final squash commit.
 
 ## Release Process
 
@@ -163,3 +215,8 @@ git commit --amend --signoff
 ```
 
 For more information about the DCO, see https://developercertificate.org/.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the
+[Apache License 2.0](LICENSE).

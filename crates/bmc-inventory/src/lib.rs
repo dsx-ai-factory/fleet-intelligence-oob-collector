@@ -1,9 +1,26 @@
-// The large serde_json::json! golden inventory test nests processors under
-// systems deeply enough to exceed the default macro recursion limit.
-#![cfg_attr(test, recursion_limit = "256")]
+// Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 pub mod config;
-pub mod mapper;
 pub mod models;
 pub mod sink;
 pub mod source;
+
+/// Collector release version shared by the CLI and inventory uploads.
+pub const COLLECTOR_VERSION: &str = match option_env!("FLEETINT_BUILD_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
