@@ -59,11 +59,6 @@ uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
 whole-collection authentication retry remain deterministic.
 
-Inventory acknowledgements contain per-item status and optional placement,
-without a node UUID. Runtime upload summaries count accepted and failed
-observations directly. UUID fields in inventory resources remain part of the
-collected model and are independent of upload acknowledgement handling.
-
 ### Backend transport and credential handling
 
 Enrollment, inventory uploads, nonce requests, and attestation uploads use the

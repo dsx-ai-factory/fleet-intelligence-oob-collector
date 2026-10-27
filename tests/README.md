@@ -27,7 +27,7 @@ tests/
 `shutdown.rs` runs collector child processes against localhost fixtures to
 verify SIGINT/SIGTERM handling during enrollment, Redfish collection, and an
 in-flight backend upload. It also exercises a complete backend cycle with one
-HTTP 401, re-enrollment, refreshed inventory timestamps, UUID-free acceptance,
+HTTP 401, re-enrollment, refreshed inventory timestamps, inventory acceptance,
 and JWT rotation from the nonce response. It never contacts real BMCs or
 customer backends.
 
