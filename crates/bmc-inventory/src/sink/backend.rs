@@ -17,10 +17,9 @@
 use std::error::Error;
 use std::time::Duration;
 
-pub use bmc_backend::{BackendHttpError, DEFAULT_BACKEND_TIMEOUT_SECONDS};
-use bmc_backend::{
-    BackendUrl, RedirectPolicy, SecretString, ensure_success, http_client,
-    request as backend_request,
+pub use backend_client::{BackendHttpError, DEFAULT_BACKEND_TIMEOUT_SECONDS};
+use backend_client::{
+    BackendUrl, SecretString, ensure_success, http_client_builder, request as backend_request,
 };
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
@@ -159,7 +158,8 @@ impl HttpBackendClient {
         Ok(Self {
             endpoint: BackendUrl::parse(&endpoint.into())?.as_url().clone(),
             jwt: SecretString::from(jwt.into()),
-            client: http_client(request_timeout, RedirectPolicy::Default)?,
+            client: http_client_builder(request_timeout, reqwest::redirect::Policy::default())?
+                .build()?,
             collector_config: config,
         })
     }
@@ -179,8 +179,9 @@ impl HttpBackendClient {
         request_timeout: Duration,
     ) -> Result<String, Box<dyn Error>> {
         let endpoint = BackendUrl::parse(endpoint)?;
-        let client = http_client(request_timeout, RedirectPolicy::Default)?;
-        let jwt = bmc_backend::enroll(&client, endpoint.as_url(), agent_token).await?;
+        let client =
+            http_client_builder(request_timeout, reqwest::redirect::Policy::default())?.build()?;
+        let jwt = backend_client::enroll(&client, endpoint.as_url(), agent_token).await?;
         Ok(jwt.expose_secret().to_string())
     }
 
@@ -356,7 +357,11 @@ mod tests {
 
     #[test]
     fn backend_http_client_sets_user_agent() {
-        let client = http_client(Duration::from_secs(1), RedirectPolicy::Default).expect("client");
+        let client =
+            http_client_builder(Duration::from_secs(1), reqwest::redirect::Policy::default())
+                .unwrap()
+                .build()
+                .expect("client");
         let request = backend_request(
             &client,
             reqwest::Method::POST,
@@ -367,7 +372,7 @@ mod tests {
 
         assert_eq!(
             request.headers()[reqwest::header::USER_AGENT],
-            bmc_backend::BACKEND_USER_AGENT
+            backend_client::BACKEND_USER_AGENT
         );
     }
 

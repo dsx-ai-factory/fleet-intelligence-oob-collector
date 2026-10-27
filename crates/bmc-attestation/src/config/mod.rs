@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use bmc_backend::SecretString;
+use backend_client::SecretString;
 
 #[path = "default.rs"]
 pub mod defaults;

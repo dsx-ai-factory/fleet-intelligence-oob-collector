@@ -25,13 +25,12 @@
 use std::error::Error;
 use std::time::Duration;
 
+pub use backend_client::is_auth_failure;
+use backend_client::{
+    BackendUrl, DEFAULT_BACKEND_TIMEOUT_SECONDS, SecretString, http_client_builder,
+};
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::source::now_rfc3339;
-pub use bmc_backend::is_auth_failure;
-use bmc_backend::{
-    BackendUrl, DEFAULT_BACKEND_TIMEOUT_SECONDS, PathMode, RedirectPolicy, SecretString,
-    http_client,
-};
 
 /// Resolved backend endpoints derived from a single API base URL.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,12 +58,8 @@ impl BackendEndpoints {
 
         let base = BackendUrl::parse(&base_url)?;
         Ok(Self {
-            enroll_endpoint: base
-                .endpoint("v1/agent/enroll", PathMode::Append)
-                .to_string(),
-            oob_nodes_endpoint: base
-                .endpoint("v1/agent/oob_nodes", PathMode::Append)
-                .to_string(),
+            enroll_endpoint: base.append_endpoint("v1/agent/enroll").to_string(),
+            oob_nodes_endpoint: base.append_endpoint("v1/agent/oob_nodes").to_string(),
             nonce_path: attestation_config::defaults::DEFAULT_BACKEND_NONCE_PATH.to_string(),
             attestation_path: attestation_config::defaults::DEFAULT_BACKEND_ATTESTATION_PATH
                 .to_string(),
@@ -99,10 +94,11 @@ impl BackendSession {
         enroll_endpoint: String,
         agent_token: SecretString,
     ) -> Result<Self, Box<dyn Error>> {
-        let client = http_client(
+        let client = http_client_builder(
             Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
-            RedirectPolicy::Default,
-        )?;
+            reqwest::redirect::Policy::default(),
+        )?
+        .build()?;
         let Enrollment { jwt, enrolled_at } =
             enroll_once(&client, &enroll_endpoint, agent_token.expose_secret()).await?;
         Ok(Self {
@@ -154,7 +150,7 @@ async fn enroll_once(
     agent_token: &str,
 ) -> Result<Enrollment, Box<dyn Error>> {
     let endpoint = BackendUrl::parse(enroll_endpoint)?;
-    let jwt = bmc_backend::enroll(client, endpoint.as_url(), agent_token).await?;
+    let jwt = backend_client::enroll(client, endpoint.as_url(), agent_token).await?;
     Ok(Enrollment {
         jwt,
         enrolled_at: now_rfc3339(),
@@ -215,19 +211,5 @@ mod tests {
             required_backend_option(Some("value".to_string()), "backend URL").expect("value"),
             "value"
         );
-    }
-
-    #[test]
-    fn is_auth_failure_only_treats_unauthorized_as_jwt_rejection() {
-        let unauthorized: Box<dyn Error> =
-            Box::new(bmc_backend::BackendHttpError::new(401, "expired token"));
-        let forbidden: Box<dyn Error> =
-            Box::new(bmc_backend::BackendHttpError::new(403, "invalid token"));
-        let server_error: Box<dyn Error> =
-            Box::new(bmc_backend::BackendHttpError::new(500, "backend failed"));
-
-        assert!(is_auth_failure(unauthorized.as_ref()));
-        assert!(!is_auth_failure(forbidden.as_ref()));
-        assert!(!is_auth_failure(server_error.as_ref()));
     }
 }

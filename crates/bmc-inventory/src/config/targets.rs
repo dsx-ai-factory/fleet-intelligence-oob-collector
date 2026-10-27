@@ -20,7 +20,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-use bmc_backend::SecretString;
+use backend_client::SecretString;
 
 use mac_address::MacAddress;
 use serde::Deserialize;

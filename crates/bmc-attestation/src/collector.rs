@@ -23,7 +23,7 @@
 
 use std::error::Error;
 
-use bmc_backend::is_auth_failure;
+use backend_client::is_auth_failure;
 use bmc_dispatch::Dispatcher;
 use futures::stream::{self, StreamExt};
 

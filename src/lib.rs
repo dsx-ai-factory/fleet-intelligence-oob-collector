@@ -23,11 +23,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use backend_client::SecretString;
 use bmc_attestation::collector;
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::models::BatchAttestation;
 use bmc_attestation::sink::BackendSink as AttestationBackendSink;
-use bmc_backend::SecretString;
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
 use bmc_inventory::models::NodeInventory;

@@ -20,7 +20,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-use bmc_backend::SecretString;
+use backend_client::SecretString;
 use bmc_inventory::config::{self, NicoConfigOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{

@@ -8,7 +8,7 @@ models and backend transport.
 | Component | Responsibility |
 | --- | --- |
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
-| `bmc-backend` | Backend URL validation, HTTP policy, enrollment transport, typed HTTP errors, and redacted credential text |
+| `backend-client` | Backend URL validation, HTTP policy, enrollment transport, typed HTTP errors, and redacted credential text |
 | `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
 | `bmc-inventory` | Redfish inventory collection, mapping, and output |
 | `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
@@ -67,7 +67,7 @@ collected model and are independent of upload acknowledgement handling.
 ### Backend transport and credential handling
 
 Enrollment, inventory uploads, nonce requests, and attestation uploads use the
-shared `bmc-backend` transport helpers. The session owns enrollment credentials,
+shared `backend-client` transport helpers. The session owns enrollment credentials,
 the current JWT, and its enrollment HTTP client; re-enrollment reuses that
 client. Each sink retains its payload mapping and response semantics.
 Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error

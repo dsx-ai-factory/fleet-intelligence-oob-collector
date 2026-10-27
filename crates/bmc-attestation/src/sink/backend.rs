@@ -17,10 +17,9 @@
 use std::error::Error;
 use std::time::Duration;
 
-pub use bmc_backend::BackendHttpError;
-use bmc_backend::{
-    BackendUrl, PathMode, RedirectPolicy, SecretString, ensure_success, http_client,
-    request as backend_request,
+pub use backend_client::BackendHttpError;
+use backend_client::{
+    BackendUrl, SecretString, ensure_success, http_client_builder, request as backend_request,
 };
 use serde::Deserialize;
 use url::Url;
@@ -112,7 +111,7 @@ impl HttpBackendClient {
             );
         }
         let base_url = BackendUrl::parse(base_url.as_ref())?;
-        let client = http_client(timeout, RedirectPolicy::None)?;
+        let client = http_client_builder(timeout, reqwest::redirect::Policy::none())?.build()?;
         Ok(Self {
             base_url,
             nonce_path,
@@ -122,15 +121,13 @@ impl HttpBackendClient {
         })
     }
 
-    fn endpoint(&self, path: &str) -> Result<Url, Box<dyn Error>> {
-        Ok(self.base_url.endpoint(path, PathMode::Replace))
-    }
-
     fn nonce_endpoint(&self, bmc_mac: &str) -> Result<Url, Box<dyn Error>> {
         if bmc_mac.is_empty() {
             return Err("bmc_mac cannot be empty".into());
         }
-        self.endpoint(&self.nonce_path.replace("{bmc_mac}", bmc_mac))
+        Ok(self
+            .base_url
+            .root_endpoint(&self.nonce_path.replace("{bmc_mac}", bmc_mac)))
     }
 }
 
@@ -177,7 +174,7 @@ impl BackendClient for HttpBackendClient {
         if self.jwt.expose_secret().is_empty() {
             return Err("backend jwt cannot be empty".into());
         }
-        let endpoint = self.endpoint(&self.attestation_path)?;
+        let endpoint = self.base_url.root_endpoint(&self.attestation_path);
         let request = batch.backend_request();
         tracing::info!(%endpoint, "exporting attestation data to backend");
         let successful_count = request
@@ -247,7 +244,7 @@ mod tests {
 
         assert_eq!(
             request.headers()[reqwest::header::USER_AGENT],
-            bmc_backend::BACKEND_USER_AGENT
+            backend_client::BACKEND_USER_AGENT
         );
     }
 

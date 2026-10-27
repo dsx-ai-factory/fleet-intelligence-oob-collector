@@ -31,7 +31,7 @@ HTTP 401, re-enrollment, refreshed inventory timestamps, UUID-free acceptance,
 and JWT rotation from the nonce response. It never contacts real BMCs or
 customer backends.
 
-`cli.rs` checks that help output does not reveal the bootstrap token's
-environment value. `bmc-backend` unit tests cover URL validation, explicit
-path/redirect policies, request headers, enrollment parsing, typed HTTP errors,
-and credential redaction. Its HTTP tests run only against localhost fixtures.
+`shutdown.rs` also checks that help output hides the bootstrap token's
+environment value. Unit tests in `crates/backend-client/src/lib.rs` cover URL
+validation, backend paths, enrollment parsing, typed HTTP errors, and credential
+redaction. HTTP fixtures use localhost only.

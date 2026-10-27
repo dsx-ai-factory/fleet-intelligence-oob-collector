@@ -5,7 +5,7 @@
 members = [
     ".",
     "crates/bmc-attestation",
-    "crates/bmc-backend",
+    "crates/backend-client",
     "crates/bmc-dispatch",
     "crates/bmc-error",
     "crates/bmc-inventory",
@@ -22,7 +22,7 @@ async-trait = "0.1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 bmc-attestation = { path = "crates/bmc-attestation" }
-bmc-backend = { path = "crates/bmc-backend" }
+backend-client = { path = "crates/backend-client" }
 bmc-dispatch = { path = "crates/bmc-dispatch" }
 bmc-error = { path = "crates/bmc-error" }
 bmc-inventory = { path = "crates/bmc-inventory" }
@@ -69,7 +69,7 @@ name = "bmc-collector"
 path = "src/main.rs"
 
 [dependencies]
-bmc-backend.workspace = true
+backend-client.workspace = true
 reqwest.workspace = true
 clap.workspace = true
 bmc-attestation.workspace = true
