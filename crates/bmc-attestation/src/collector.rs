@@ -21,6 +21,7 @@
 //! Redfish, and maps the result into a `NodeAttestation`. Backend session and
 //! upload concerns are left to the caller.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 
 use backend_client::is_auth_failure;
@@ -47,6 +48,9 @@ pub struct CollectionOutcome {
     /// A rotated agent token, if the backend issued one on a nonce response, so the
     /// caller can refresh its session and authenticate the upload with it.
     pub refreshed_jwt: Option<String>,
+    /// BMCs whose collection failed in a way a later attempt this cycle could
+    /// fix: rejected credentials or a transient error.
+    pub retry_bmc_macs: BTreeSet<String>,
 }
 
 /// Collect attestation evidence for every target concurrently.
@@ -78,7 +82,7 @@ pub async fn collect(
     // Each per-target nonce client starts from the current token; any rotation the
     // backend returns is captured below for the caller to apply.
 
-    type TargetOutcome = Result<(Option<NodeAttestation>, Option<String>), Box<dyn Error>>;
+    type TargetOutcome = Result<(Option<NodeAttestation>, Option<String>, bool), Box<dyn Error>>;
 
     let collected: Vec<TargetOutcome> = stream::iter(targets)
         .map(|target| {
@@ -98,6 +102,7 @@ pub async fn collect(
                             "no dispatcher endpoint configured for attestation",
                         )),
                         None,
+                        false,
                     ));
                 };
                 let nonce = match client.get_nonce(&bmc_mac).await {
@@ -111,7 +116,7 @@ pub async fn collect(
                             error = %SanitizedErrorMessage::new(err.to_string()),
                             "nonce request failed; skipping attestation for target"
                         );
-                        return Ok((None, None));
+                        return Ok((None, None, false));
                     }
                 };
                 // The backend may rotate the agent token on a nonce response.
@@ -131,7 +136,8 @@ pub async fn collect(
                         reload_credentials,
                     )
                     .await;
-                Ok((Some(mapper.map(record)), refreshed_jwt))
+                let retryable = record.retryable;
+                Ok((Some(mapper.map(record)), refreshed_jwt, retryable))
             }
         })
         .buffered(concurrency)
@@ -141,8 +147,12 @@ pub async fn collect(
     let mut attestations = Vec::with_capacity(collected.len());
     let mut refreshed_jwt = None;
     let mut skipped_targets = 0;
+    let mut retry_bmc_macs = BTreeSet::new();
     for outcome in collected {
-        let (record, refreshed) = outcome?;
+        let (record, refreshed, retryable) = outcome?;
+        if retryable && let Some(record) = &record {
+            retry_bmc_macs.insert(record.bmc_mac.clone());
+        }
         if refreshed.is_some() {
             refreshed_jwt = refreshed;
         }
@@ -157,6 +167,7 @@ pub async fn collect(
         batch: BatchAttestation::new(now_rfc3339(), attestations),
         skipped_targets,
         refreshed_jwt,
+        retry_bmc_macs,
     })
 }
 

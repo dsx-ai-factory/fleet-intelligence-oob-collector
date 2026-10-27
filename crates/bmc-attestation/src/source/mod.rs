@@ -18,7 +18,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use base64::Engine;
-use bmc_dispatch::RequestGate;
+use bmc_dispatch::{DispatchError, FailureKind, RequestGate};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -53,6 +53,9 @@ pub struct SourceRecord {
     pub collected_at: String,
     pub nonce_refresh_timestamp: Option<String>,
     pub result: Result<RedfishAttestationReport, String>,
+    /// The failure was a credential rejection or a transient error, so the
+    /// target is worth another attempt later in the cycle.
+    pub retryable: bool,
 }
 
 impl SourceRecord {
@@ -66,6 +69,7 @@ impl SourceRecord {
             collected_at: now_rfc3339(),
             nonce_refresh_timestamp,
             result: Err(error.into()),
+            retryable: false,
         }
     }
 }
@@ -117,9 +121,18 @@ struct BmcSession<'a> {
     credentials_reloaded: bool,
 }
 
+/// Whether a request may be sent again after a transient failure.
+#[derive(Clone, Copy)]
+enum Idempotency {
+    Retry,
+    /// The request has side effects, such as a measurement `POST`.
+    SendOnce,
+}
+
 impl BmcSession<'_> {
     async fn request_json<T: serde::de::DeserializeOwned>(
         &mut self,
+        idempotency: Idempotency,
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T, Box<dyn Error>> {
         loop {
@@ -127,26 +140,32 @@ impl BmcSession<'_> {
                 self.target.username.clone(),
                 self.target.password.clone(),
             );
-            let result = self
-                .gate
-                .execute_classified(
-                    &credentials,
-                    async {
-                        request()
-                            .basic_auth(&self.target.username, Some(&self.target.password))
-                            .send()
-                            .await?
-                            .error_for_status()?
-                            .json::<T>()
-                            .await
-                    },
-                    is_credential_rejection,
-                )
-                .await;
+            let send = || async {
+                request()
+                    .basic_auth(&self.target.username, Some(&self.target.password))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<T>()
+                    .await
+            };
+            let result = match idempotency {
+                Idempotency::Retry => {
+                    self.gate
+                        .execute_idempotent(&credentials, send, classify_error)
+                        .await
+                }
+                Idempotency::SendOnce => {
+                    self.gate
+                        .execute_classified(&credentials, send(), classify_error)
+                        .await
+                }
+            };
             match result {
                 Ok(value) => return Ok(value),
-                Err(bmc_dispatch::DispatchError::Transport(err))
-                    if is_credential_rejection(&err) && !self.credentials_reloaded => {}
+                Err(DispatchError::Transport(err))
+                    if classify_error(&err) == FailureKind::CredentialsRejected
+                        && !self.credentials_reloaded => {}
                 Err(err) => return Err(err.into()),
             }
             self.credentials_reloaded = true;
@@ -206,13 +225,16 @@ impl RedfishAttestationSource {
         let nonce_refresh_timestamp = nonce.nonce_refresh_timestamp.clone();
         let result = self
             .collect_report(&target, &nonce, &request, gate, reload_credentials)
-            .await
-            .map_err(|err| err.to_string());
+            .await;
+        let retryable = result
+            .as_ref()
+            .is_err_and(|error| is_retryable(error.as_ref()));
         SourceRecord {
             target,
             collected_at,
             nonce_refresh_timestamp,
-            result,
+            result: result.map_err(|err| err.to_string()),
+            retryable,
         }
     }
 
@@ -390,7 +412,9 @@ impl RedfishAttestationSource {
         path: &str,
     ) -> Result<T, Box<dyn Error>> {
         let url = join_redfish_path(&session.base_url, path)?;
-        session.request_json(|| self.client.get(url.clone())).await
+        session
+            .request_json(Idempotency::Retry, || self.client.get(url.clone()))
+            .await
     }
 
     async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(
@@ -401,14 +425,35 @@ impl RedfishAttestationSource {
     ) -> Result<T, Box<dyn Error>> {
         let url = join_redfish_path(&session.base_url, path)?;
         session
-            .request_json(|| self.client.post(url.clone()).json(body))
+            .request_json(Idempotency::SendOnce, || {
+                self.client.post(url.clone()).json(body)
+            })
             .await
     }
 }
 
-/// Only a 401 rejects the credentials; a 403 forbids one resource.
-fn is_credential_rejection(error: &reqwest::Error) -> bool {
-    error.status() == Some(reqwest::StatusCode::UNAUTHORIZED)
+/// Whether a failed collection could succeed on a later attempt this cycle:
+/// the BMC rejected the credentials, which may since have been rotated, or a
+/// request still failed transiently after its retries.
+fn is_retryable(error: &(dyn Error + 'static)) -> bool {
+    match error.downcast_ref::<DispatchError<reqwest::Error>>() {
+        Some(DispatchError::CredentialsRejected) => true,
+        Some(DispatchError::Transport(error)) => classify_error(error) != FailureKind::Permanent,
+        _ => false,
+    }
+}
+
+/// Only a 401 rejects the credentials; a 403 forbids one resource. Timeouts,
+/// failed connections and overload responses are transient.
+fn classify_error(error: &reqwest::Error) -> FailureKind {
+    match error.status().map(|status| status.as_u16()) {
+        Some(401) => FailureKind::CredentialsRejected,
+        Some(429 | 502 | 503 | 504) => FailureKind::Transient,
+        None if error.is_timeout() || error.is_connect() || error.is_request() => {
+            FailureKind::Transient
+        }
+        Some(_) | None => FailureKind::Permanent,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -873,7 +918,7 @@ mod tests {
                 .build()
                 .unwrap();
             let error = session
-                .request_json::<serde_json::Value>(|| {
+                .request_json::<serde_json::Value>(Idempotency::Retry, || {
                     client.get(format!("http://{address}/redfish/v1"))
                 })
                 .await
@@ -886,7 +931,7 @@ mod tests {
                 .execute_classified(
                     &bmc_dispatch::BmcCredentials::new("user".into(), "old".into()),
                     async { Ok::<_, Infallible>(()) },
-                    |_| false,
+                    |_| FailureKind::Permanent,
                 )
                 .await;
             assert_eq!(
@@ -902,6 +947,93 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    /// Answer every request with `status` and return the listening port.
+    async fn spawn_status_server(status: &'static str) -> u16 {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                read_request(&mut stream).await;
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn only_credential_and_transient_failures_are_retryable() {
+        for (status, retryable) in [
+            ("401 Unauthorized", true),
+            ("403 Forbidden", false),
+            ("404 Not Found", false),
+        ] {
+            let port = spawn_status_server(status).await;
+            let dispatcher = Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 1,
+                    bmc_max_in_flight: 1,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["bmc-1".to_string()],
+            )
+            .expect("dispatcher");
+            let mut source = RedfishAttestationSource::new(
+                443,
+                false,
+                Duration::from_secs(5),
+                Duration::from_secs(1),
+                Duration::from_millis(5),
+            )
+            .expect("source");
+            source.client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .expect("client");
+            // The Secret still holds the rejected credentials.
+            let reload = |target: &crate::config::Target| {
+                Ok((target.username.clone(), target.password.clone()))
+            };
+            let mut session = BmcSession {
+                target: crate::config::Target {
+                    name: "bmc-1".to_string(),
+                    bmc_mac: "00:11:22:33:44:55".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    credentials_profile: None,
+                    username: "user".to_string(),
+                    password: "secret".to_string(),
+                },
+                base_url: Url::parse(&format!("http://127.0.0.1:{port}")).expect("base URL"),
+                gate: dispatcher
+                    .attestation_gate("bmc-1")
+                    .expect("attestation gate"),
+                reload_credentials: &reload,
+                credentials_reloaded: false,
+            };
+
+            let error = source
+                .get_json::<serde_json::Value>(&mut session, "/redfish/v1/ComponentIntegrity")
+                .await
+                .expect_err("BMC refuses the request");
+            assert_eq!(is_retryable(error.as_ref()), retryable, "{status}");
+        }
+
+        let skipped: Box<dyn Error> =
+            Box::new(DispatchError::<reqwest::Error>::CredentialsRejected);
+        assert!(is_retryable(skipped.as_ref()), "skipped after a 401");
+        let no_components: Box<dyn Error> = "no GPU IRoT ComponentIntegrity resources found".into();
+        assert!(!is_retryable(no_components.as_ref()), "nothing to attest");
     }
 
     #[tokio::test]

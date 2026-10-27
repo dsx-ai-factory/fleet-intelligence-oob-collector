@@ -36,6 +36,29 @@ impl Runtime {
         target_count: usize,
         concurrency: usize,
     ) -> Self {
+        // Upload failed targets in the same pass instead of retrying them later.
+        Self::launch(
+            backend_port,
+            bmc_port,
+            interval_seconds,
+            target_count,
+            concurrency,
+            0,
+        )
+    }
+
+    fn start_with_target_retry(backend_port: u16, bmc_port: u16) -> Self {
+        Self::launch(backend_port, bmc_port, 86400, 1, 1, 300)
+    }
+
+    fn launch(
+        backend_port: u16,
+        bmc_port: u16,
+        interval_seconds: u64,
+        target_count: usize,
+        concurrency: usize,
+        target_retry_delay_seconds: u64,
+    ) -> Self {
         let config = std::env::temp_dir().join(format!(
             "fleetint-shutdown-{}-{}.toml",
             std::process::id(),
@@ -69,6 +92,10 @@ impl Runtime {
                 "30",
             ])
             .args(["--interval-seconds", &interval_seconds.to_string()])
+            .args([
+                "--target-retry-delay-seconds",
+                &target_retry_delay_seconds.to_string(),
+            ])
             .env(
                 "FLEETINT_BACKEND_URL",
                 format!("http://127.0.0.1:{backend_port}"),
@@ -197,17 +224,35 @@ async fn sigint_stops_during_pending_redfish_collection() {
 }
 
 #[tokio::test]
-async fn sigterm_finishes_in_flight_inventory_upload_before_exiting() {
+async fn sigterm_during_target_retry_uploads_held_failure_before_exiting() {
     let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
-    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
-    let bmc_port = unavailable.local_addr().unwrap().port();
-    drop(unavailable);
-    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+    // A BMC that drops every connection, so its target fails transiently.
+    let bmc = TcpListener::bind("127.0.0.1:0").await.expect("mock BMC");
+    let mut runtime = Runtime::start_with_target_retry(
+        backend.local_addr().unwrap().port(),
+        bmc.local_addr().unwrap().port(),
+    );
     let (mut enrollment, _) = accept_request(&backend).await;
     reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    // The first request and its two retries; the failed target is then held
+    // back while the collector waits to retry it.
+    for _ in 0..3 {
+        let (connection, _) = timeout(Duration::from_secs(10), bmc.accept())
+            .await
+            .expect("collector should retry the failed request")
+            .expect("accept mock Redfish connection");
+        drop(connection);
+    }
+    assert!(
+        timeout(Duration::from_millis(500), backend.accept())
+            .await
+            .is_err(),
+        "a transiently failed target is held back for a retry, not uploaded"
+    );
+
+    runtime.signal("-TERM").await;
     let (mut upload, request) = accept_request(&backend).await;
     assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
-    runtime.signal("-TERM").await;
     assert!(
         timeout(Duration::from_millis(100), runtime.child.wait())
             .await

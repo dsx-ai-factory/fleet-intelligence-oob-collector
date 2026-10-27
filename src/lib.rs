@@ -52,6 +52,11 @@ pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
 const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+/// How long to wait before collecting targets that failed as a whole once more
+/// in the same cycle. Long enough for a rebooting BMC to come back and for a
+/// short account lockout to expire, so a transient outage does not cost a
+/// target the whole cycle.
+pub const DEFAULT_TARGET_RETRY_DELAY_SECONDS: u64 = 5 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InventoryFormat {
@@ -79,6 +84,9 @@ pub struct RuntimeOptions {
     pub backend_url: Option<String>,
     pub agent_token: Option<String>,
     pub interval_seconds: u64,
+    /// Delay before the retry pass at targets that failed as a whole; `None`
+    /// skips the retry pass.
+    pub target_retry_delay: Option<Duration>,
     pub log_level: String,
 }
 
@@ -309,8 +317,21 @@ async fn run_collection_cycle(
         collector_config.clone(),
         endpoints.oob_nodes_endpoint.clone(),
         session,
-        Arc::clone(&dispatcher),
         targets,
+        InventoryRetry {
+            dispatcher: Arc::clone(&dispatcher),
+            reload_credentials: Box::new({
+                let credentials_file = credentials_file.clone();
+                move |target| {
+                    config::load_target_credentials(
+                        &credentials_file,
+                        &target.mac.to_string(),
+                        target.credentials_profile.as_deref(),
+                    )
+                }
+            }),
+            delay: options.target_retry_delay,
+        },
         shutdown.clone(),
     )
     .await
@@ -341,12 +362,15 @@ async fn run_collection_cycle(
     settings.concurrency = options.inventory.target_concurrency;
     settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
     let uploads = collect_and_upload_attestation(
-        &attestation_targets,
-        &credentials_file,
+        AttestationTargets {
+            targets: &attestation_targets,
+            credentials_file: &credentials_file,
+        },
         &settings,
         endpoints,
         session,
         dispatcher.as_ref(),
+        options.target_retry_delay,
         shutdown.clone(),
     )
     .await?;
@@ -394,13 +418,24 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
         .collect()
 }
 
+/// This cycle's attestation targets and the credentials file to reload them
+/// from.
+#[derive(Clone, Copy)]
+struct AttestationTargets<'a> {
+    targets: &'a [attestation_config::Target],
+    credentials_file: &'a Path,
+}
+
 async fn collect_and_upload_attestation(
-    targets: &[attestation_config::Target],
-    credentials_file: &Path,
+    AttestationTargets {
+        targets,
+        credentials_file,
+    }: AttestationTargets<'_>,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
+    retry_delay: Option<Duration>,
     mut shutdown: Shutdown,
 ) -> Result<AttestationUploadSummary, Box<dyn Error>> {
     let collect = |jwt: String| async move {
@@ -419,7 +454,7 @@ async fn collect_and_upload_attestation(
         () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
         result = collect(session.jwt().to_string()) => result,
     };
-    let outcome = match result {
+    let mut outcome = match result {
         Ok(outcome) => outcome,
         Err(err) if is_auth_failure(err.as_ref()) => {
             tracing::warn!(error = %err, "backend JWT rejected during nonce collection; enrolling again before retry");
@@ -432,6 +467,74 @@ async fn collect_and_upload_attestation(
         }
         Err(err) => return Err(err),
     };
+    // Carry any rotated token forward so the retry, the upload and subsequent
+    // cycles authenticate with the freshest JWT.
+    if let Some(token) = outcome.refreshed_jwt.take() {
+        session.set_jwt(token);
+    }
+
+    if let Some(retry_delay) = retry_delay
+        && !outcome.retry_bmc_macs.is_empty()
+    {
+        tracing::info!(
+            target_count = outcome.retry_bmc_macs.len(),
+            retry_delay_seconds = retry_delay.as_secs(),
+            "retrying failed attestation targets after a delay"
+        );
+        tokio::select! {
+            biased;
+            () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
+            () = tokio::time::sleep(retry_delay) => {}
+        }
+        let retry_targets = targets
+            .iter()
+            .filter(|target| outcome.retry_bmc_macs.contains(&target.bmc_mac))
+            .cloned()
+            .map(|mut target| {
+                match config::load_target_credentials(
+                    credentials_file,
+                    &target.bmc_mac,
+                    target.credentials_profile.as_deref(),
+                ) {
+                    Ok((username, password)) => {
+                        target.username = username;
+                        target.password = password;
+                    }
+                    Err(_) => tracing::warn!(
+                        bmc_mac = %target.bmc_mac,
+                        "failed to reload BMC credentials; retrying with this cycle's credentials"
+                    ),
+                }
+                target
+            })
+            .collect::<Vec<_>>();
+        dispatcher.clear_credential_rejections();
+        match collect_attestation(
+            &retry_targets,
+            credentials_file,
+            attestation_settings,
+            endpoints,
+            session.jwt(),
+            dispatcher,
+        )
+        .await
+        {
+            Ok(retried) => {
+                if let Some(token) = retried.refreshed_jwt {
+                    session.set_jwt(token);
+                }
+                outcome
+                    .batch
+                    .results_by_bmc_mac
+                    .extend(retried.batch.results_by_bmc_mac);
+            }
+            Err(error) => tracing::warn!(
+                error = %error,
+                "attestation retry failed; uploading the first attempt"
+            ),
+        }
+    }
+
     let summary = summarize_attestation_collection(&outcome.batch);
     if summary.failed > 0 || summary.component_errors > 0 || outcome.skipped_targets > 0 {
         tracing::warn!(
@@ -453,12 +556,6 @@ async fn collect_and_upload_attestation(
             "attestation collection completed"
         );
     }
-    // Carry any rotated token forward so the upload and subsequent cycles authenticate
-    // with the freshest JWT instead of the one we started the cycle with.
-    if let Some(token) = outcome.refreshed_jwt {
-        session.set_jwt(token);
-    }
-
     let mut uploads = upload_attestation_batches(
         endpoints,
         session,
@@ -636,13 +733,14 @@ async fn collect_and_upload_inventory(
     collector_config: CollectorConfig,
     endpoint: String,
     session: &mut BackendSession,
-    dispatcher: Arc<Dispatcher>,
     targets: Vec<config::Target>,
+    retry: InventoryRetry,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
+    let dispatcher = Arc::clone(&retry.dispatcher);
     let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
         LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
     );
@@ -651,13 +749,8 @@ async fn collect_and_upload_inventory(
     // JoinSet aborts the producer if an upload error exits this scope early.
     let mut producer = tokio::task::JoinSet::new();
     producer.spawn(async move {
-        let collections = inventory_collections(
-            &source,
-            targets,
-            target_concurrency,
-            CollectionOrder::Completion,
-        );
-        forward_inventory(collections, tx, shutdown).await
+        collect_inventory_with_retry(&source, targets, target_concurrency, &retry, tx, shutdown)
+            .await
     });
 
     let mut accepted_uploads = 0;
@@ -749,11 +842,116 @@ async fn collect_and_upload_inventory(
     })
 }
 
-async fn forward_inventory(
-    mut collections: impl Stream<Item = NodeInventory> + Unpin,
+/// Resolves current credentials for an inventory target.
+type TargetCredentialReloader =
+    dyn Fn(&config::Target) -> Result<(String, String), Box<dyn Error>> + Send + Sync;
+
+/// A second attempt, later in the cycle, at inventory targets that failed as a
+/// whole.
+struct InventoryRetry {
+    dispatcher: Arc<Dispatcher>,
+    /// Called for each target before the retry, so rotated credentials are
+    /// picked up.
+    reload_credentials: Box<TargetCredentialReloader>,
+    /// `None` skips the retry pass.
+    delay: Option<Duration>,
+}
+
+impl InventoryRetry {
+    /// Whether a target failed as a whole: the BMC rejected its credentials or
+    /// no inventory could be read from it.
+    fn wants(&self, inventory: &NodeInventory) -> bool {
+        self.delay.is_some()
+            && (inventory.target_error.is_some()
+                || self.dispatcher.credentials_rejected(&inventory.source.mac))
+    }
+}
+
+/// Collect every target and forward its inventory, holding back targets that
+/// failed as a whole. After `retry.delay`, collect those once more with
+/// reloaded credentials and forward that result instead.
+async fn collect_inventory_with_retry(
+    source: &RedfishSource,
+    targets: Vec<config::Target>,
+    concurrency: usize,
+    retry: &InventoryRetry,
     sender: tokio::sync::mpsc::Sender<NodeInventory>,
     mut shutdown: Shutdown,
 ) -> Result<(), &'static str> {
+    let mut by_mac = targets
+        .iter()
+        .map(|target| (target.mac.to_string(), target.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let collections =
+        inventory_collections(source, targets, concurrency, CollectionOrder::Completion);
+    let held = forward_inventory(collections, &sender, &mut shutdown, |inventory| {
+        retry.wants(inventory)
+    })
+    .await?;
+    let Some(delay) = retry.delay.filter(|_| !held.is_empty()) else {
+        return Ok(());
+    };
+    if shutdown.is_requested() {
+        return forward_held(held, &sender).await;
+    }
+
+    tracing::info!(
+        target_count = held.len(),
+        retry_delay_seconds = delay.as_secs(),
+        "retrying failed inventory targets after a delay"
+    );
+    tokio::select! {
+        biased;
+        () = shutdown.wait() => return forward_held(held, &sender).await,
+        () = tokio::time::sleep(delay) => {}
+    }
+    retry.dispatcher.clear_credential_rejections();
+    let targets = held
+        .iter()
+        .filter_map(|inventory| by_mac.remove(&inventory.source.mac))
+        .map(|mut target| {
+            match (retry.reload_credentials)(&target) {
+                Ok((username, password)) => {
+                    target.username = username;
+                    target.password = password;
+                }
+                Err(_) => tracing::warn!(
+                    bmc_mac = %target.mac,
+                    "failed to reload BMC credentials; retrying with this cycle's credentials"
+                ),
+            }
+            target
+        })
+        .collect();
+    let collections =
+        inventory_collections(source, targets, concurrency, CollectionOrder::Completion);
+    forward_inventory(collections, &sender, &mut shutdown, |_| false).await?;
+    Ok(())
+}
+
+/// Forward held-back inventories unchanged when shutdown interrupts the retry,
+/// so their failures are still reported.
+async fn forward_held(
+    held: Vec<NodeInventory>,
+    sender: &tokio::sync::mpsc::Sender<NodeInventory>,
+) -> Result<(), &'static str> {
+    for inventory in held {
+        sender
+            .send(inventory)
+            .await
+            .map_err(|_| "inventory export worker stopped before collection completed")?;
+    }
+    Ok(())
+}
+
+/// Forward collected inventories, returning those `hold` keeps back instead.
+async fn forward_inventory(
+    mut collections: impl Stream<Item = NodeInventory> + Unpin,
+    sender: &tokio::sync::mpsc::Sender<NodeInventory>,
+    shutdown: &mut Shutdown,
+    hold: impl Fn(&NodeInventory) -> bool,
+) -> Result<Vec<NodeInventory>, &'static str> {
+    let mut held = Vec::new();
     loop {
         let inventory = tokio::select! {
             biased;
@@ -763,6 +961,10 @@ async fn forward_inventory(
                 None => break,
             },
         };
+        if hold(&inventory) {
+            held.push(inventory);
+            continue;
+        }
         tokio::select! {
             biased;
             () = shutdown.wait() => break,
@@ -771,7 +973,7 @@ async fn forward_inventory(
             }
         }
     }
-    Ok(())
+    Ok(held)
 }
 
 struct InventorySyncOutcome {
@@ -1236,6 +1438,7 @@ mod tests {
             backend_url: Some("https://private.example.com".to_string()),
             agent_token: Some("must-not-be-reported".into()),
             interval_seconds: 0,
+            target_retry_delay: None,
             log_level: "info".to_string(),
         }
     }
@@ -1425,5 +1628,141 @@ mod tests {
             target_error: None,
             latency: Vec::new(),
         }
+    }
+
+    /// A BMC with a public service root that accepts only the `good` password,
+    /// answering every other authenticated request with 404. Returns its port
+    /// and the number of requests it rejected with 401.
+    async fn spawn_bmc_accepting_good_password() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const SERVICE_ROOT: &str = r##"{
+            "@odata.id": "/redfish/v1",
+            "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
+            "Id": "RootService",
+            "Name": "Root Service",
+            "RedfishVersion": "1.15.1",
+            "Links": {"Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}},
+            "Managers": {"@odata.id": "/redfish/v1/Managers"},
+            "Systems": {"@odata.id": "/redfish/v1/Systems"}
+        }"##;
+        // Basic credentials for user:good.
+        const GOOD_AUTHORIZATION: &str = "basic dxnlcjpnb29k";
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&rejected);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).to_lowercase();
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                let (status, body) = if path.trim_end_matches('/') == "/redfish/v1" {
+                    ("200 OK", SERVICE_ROOT)
+                } else if request.contains(GOOD_AUTHORIZATION) {
+                    ("404 Not Found", "{}")
+                } else {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    ("401 Unauthorized", "{}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (port, rejected)
+    }
+
+    #[tokio::test]
+    async fn failed_inventory_target_is_retried_once_with_reloaded_credentials() {
+        use std::sync::atomic::Ordering;
+
+        const MAC: &str = "00:11:22:33:44:55";
+        let (port, rejected) = spawn_bmc_accepting_good_password().await;
+        let target = move |password: &str| config::Target {
+            kind: bmc_inventory::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().expect("ip"),
+            port: Some(port),
+            mac: MAC.parse().expect("mac"),
+            address: format!("http://127.0.0.1:{port}"),
+            credentials_profile: None,
+            username: "user".to_string(),
+            password: password.to_string(),
+            labels: Default::default(),
+        };
+        let dispatcher = Arc::new(
+            Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 4,
+                    bmc_max_in_flight: 4,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                [MAC.to_string()],
+            )
+            .expect("dispatcher"),
+        );
+        let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
+            .expect("source");
+        // The credentials were rotated after the cycle loaded them.
+        let retry = InventoryRetry {
+            dispatcher: Arc::clone(&dispatcher),
+            reload_credentials: Box::new(|_| Ok(("user".into(), "good".into()))),
+            delay: Some(Duration::ZERO),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let (_signal, shutdown) = watch::channel(false);
+
+        collect_inventory_with_retry(
+            &source,
+            vec![target("bad")],
+            1,
+            &retry,
+            sender,
+            Shutdown(shutdown),
+        )
+        .await
+        .expect("collection");
+
+        let mut forwarded = Vec::new();
+        while let Ok(inventory) = receiver.try_recv() {
+            forwarded.push(inventory);
+        }
+        assert_eq!(
+            forwarded.len(),
+            1,
+            "the failed first attempt is replaced, not uploaded"
+        );
+        assert_eq!(
+            rejected.load(Ordering::SeqCst),
+            1,
+            "one failed login before the retry"
+        );
+        assert!(!dispatcher.credentials_rejected(MAC));
+        assert!(
+            forwarded[0]
+                .domain_errors
+                .iter()
+                .all(|error| !error.message.contains("401")),
+            "the retried result uses the reloaded credentials: {:?}",
+            forwarded[0].domain_errors
+        );
     }
 }

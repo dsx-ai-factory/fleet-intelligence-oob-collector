@@ -320,6 +320,18 @@ impl Dispatcher {
             gates.credentials.clear();
         }
     }
+
+    /// Whether the endpoint rejected its credentials since the last
+    /// [`Self::clear_credential_rejections`].
+    #[must_use]
+    pub fn credentials_rejected(&self, endpoint_id: &str) -> bool {
+        self.registry.lock().is_ok_and(|registry| {
+            registry
+                .gates
+                .get(endpoint_id)
+                .is_some_and(|gates| gates.credentials.is_set())
+        })
+    }
 }
 
 struct EndpointGates {
@@ -377,6 +389,12 @@ impl CredentialLatch {
             .map_or(true, |rejected| rejected.contains(&fingerprint))
     }
 
+    fn is_set(&self) -> bool {
+        self.rejected
+            .lock()
+            .map_or(true, |rejected| !rejected.is_empty())
+    }
+
     fn reject(&self, credentials: &BmcCredentials) {
         let fingerprint = self.hasher.hash_one(credentials);
         if self
@@ -417,30 +435,28 @@ impl RequestGate {
         &self,
         operation: impl Future<Output = Result<T, E>>,
     ) -> Result<T, DispatchError<E>> {
-        self.admit(operation, None, |_| false).await
+        self.admit(operation, None, |_| FailureKind::Permanent)
+            .await
     }
 
     /// [`Self::execute`] for an operation that authenticates with
-    /// `credentials`. When `rejects_credentials` classifies its error as a
-    /// credential rejection, later requests to this endpoint with the same
-    /// credentials fail locally until the next cycle.
-    ///
-    /// Classify only a 401: a 403 forbids one resource, not the credentials.
+    /// `credentials`. When `classify` reports
+    /// [`FailureKind::CredentialsRejected`], later requests to this endpoint
+    /// with the same credentials fail locally until the latch is cleared.
     pub async fn execute_classified<T, E>(
         &self,
         credentials: &BmcCredentials,
         operation: impl Future<Output = Result<T, E>>,
-        rejects_credentials: impl FnOnce(&E) -> bool,
+        classify: impl FnOnce(&E) -> FailureKind,
     ) -> Result<T, DispatchError<E>> {
-        self.admit(operation, Some(credentials), rejects_credentials)
-            .await
+        self.admit(operation, Some(credentials), classify).await
     }
 
     async fn admit<T, E>(
         &self,
         operation: impl Future<Output = Result<T, E>>,
         credentials: Option<&BmcCredentials>,
-        rejects_credentials: impl FnOnce(&E) -> bool,
+        classify: impl FnOnce(&E) -> FailureKind,
     ) -> Result<T, DispatchError<E>> {
         let rejected =
             || credentials.is_some_and(|credentials| self.credentials.rejects(credentials));
@@ -474,18 +490,97 @@ impl RequestGate {
         }
         let result = operation.await;
         if let (Err(error), Some(credentials)) = (&result, credentials)
-            && rejects_credentials(error)
+            && classify(error) == FailureKind::CredentialsRejected
         {
             self.credentials.reject(credentials);
         }
         let _ = completed_tx.send(());
         result.map_err(DispatchError::Transport)
     }
+
+    /// [`Self::execute_classified`] for an idempotent request, which is sent
+    /// again after a short backoff when it fails transiently.
+    ///
+    /// Each attempt is admitted through the gate, so retries respect the
+    /// endpoint's rate and concurrency limits, release the slot while waiting,
+    /// and stop once its credentials are rejected. Never use this for a
+    /// request with side effects.
+    pub async fn execute_idempotent<T, E, Fut>(
+        &self,
+        credentials: &BmcCredentials,
+        operation: impl FnMut() -> Fut,
+        classify: impl Fn(&E) -> FailureKind,
+    ) -> Result<T, DispatchError<E>>
+    where
+        Fut: Future<Output = Result<T, E>>,
+    {
+        self.execute_with_retries(credentials, &RETRY_DELAYS, operation, classify)
+            .await
+    }
+
+    async fn execute_with_retries<T, E, Fut>(
+        &self,
+        credentials: &BmcCredentials,
+        delays: &[Duration],
+        mut operation: impl FnMut() -> Fut,
+        classify: impl Fn(&E) -> FailureKind,
+    ) -> Result<T, DispatchError<E>>
+    where
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut delays = delays.iter();
+        loop {
+            let result = self
+                .execute_classified(credentials, operation(), &classify)
+                .await;
+            if let Err(DispatchError::Transport(error)) = &result
+                && classify(error) == FailureKind::Transient
+                && let Some(delay) = delays.next()
+            {
+                tokio::time::sleep(with_jitter(*delay)).await;
+                continue;
+            }
+            return result;
+        }
+    }
 }
 
-/// Whether an nv-redfish transport error is a credential rejection.
-fn is_credential_rejection<E: BmcError>(error: &E) -> bool {
-    error.error_class() == BmcErrorClass::HttpResponse { status: 401 }
+/// Backoff before each retry of a transiently failed idempotent request.
+///
+/// Rides out a BMC that briefly times out or sheds load. A longer outage is
+/// left to the caller's next collection attempt.
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
+
+/// Add up to 25% random delay, so requests that failed together do not all
+/// retry at the same instant.
+fn with_jitter(delay: Duration) -> Duration {
+    let random = std::collections::hash_map::RandomState::new().hash_one(());
+    delay + delay.mul_f64((random % 1000) as f64 / 4000.0)
+}
+
+/// How a failed BMC request affects later requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The BMC rejected the credentials (HTTP 401). Later requests to that BMC
+    /// fail locally until the latch is cleared.
+    CredentialsRejected,
+    /// A timeout, a dropped connection, or an overload response (HTTP 429,
+    /// 502, 503 or 504). An idempotent request may be sent again.
+    Transient,
+    /// Anything else, such as a 403, a 404 or an undecodable body.
+    Permanent,
+}
+
+/// Classify an nv-redfish transport error.
+fn classify_bmc_error<E: BmcError>(error: &E) -> FailureKind {
+    match error.error_class() {
+        BmcErrorClass::HttpResponse { status: 401 } => FailureKind::CredentialsRejected,
+        BmcErrorClass::Transport
+        | BmcErrorClass::HttpResponse {
+            status: 429 | 502 | 503 | 504,
+        } => FailureKind::Transient,
+        _ => FailureKind::Permanent,
+    }
 }
 
 fn build_endpoint(config: EndpointConfig) -> (Endpoint, Queue, Queue) {
@@ -611,7 +706,22 @@ impl<C: HttpClient> DispatchingHttpClient<C> {
         request: impl Future<Output = Result<T, C::Error>>,
     ) -> Result<T, DispatchError<C::Error>> {
         self.gate
-            .admit(request, credentials, is_credential_rejection)
+            .admit(request, credentials, classify_bmc_error)
+            .await
+    }
+
+    /// [`Self::dispatch`] for a read, which is retried after a transient
+    /// failure.
+    async fn dispatch_read<T, Fut>(
+        &self,
+        credentials: &BmcCredentials,
+        request: impl FnMut() -> Fut,
+    ) -> Result<T, DispatchError<C::Error>>
+    where
+        Fut: Future<Output = Result<T, C::Error>>,
+    {
+        self.gate
+            .execute_idempotent(credentials, request, classify_bmc_error)
             .await
     }
 }
@@ -632,10 +742,10 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
-        self.dispatch(
-            Some(credentials),
-            self.inner.get(url, credentials, etag, custom_headers),
-        )
+        self.dispatch_read(credentials, || {
+            self.inner
+                .get(url.clone(), credentials, etag.clone(), custom_headers)
+        })
         .await
     }
 
@@ -648,10 +758,9 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
-        self.dispatch(
-            Some(credentials),
-            self.inner.poll(url, credentials, custom_headers),
-        )
+        self.dispatch_read(credentials, || {
+            self.inner.poll(url.clone(), credentials, custom_headers)
+        })
         .await
     }
 
@@ -847,13 +956,78 @@ mod tests {
     }
 
     #[test]
-    fn only_unauthorized_rejects_credentials() {
-        for (status, rejects) in [(401, true), (403, false), (500, false)] {
+    fn classifies_bmc_failures() {
+        use super::FailureKind::{CredentialsRejected, Permanent, Transient};
+
+        for (status, expected) in [
+            (401, CredentialsRejected),
+            (403, Permanent),
+            (404, Permanent),
+            (500, Permanent),
+            (429, Transient),
+            (502, Transient),
+            (503, Transient),
+            (504, Transient),
+        ] {
             assert_eq!(
-                super::is_credential_rejection(&StatusResponse(status)),
-                rejects,
+                super::classify_bmc_error(&StatusResponse(status)),
+                expected,
                 "HTTP {status}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_only_transient_failures_within_budget() {
+        use super::FailureKind::{CredentialsRejected, Permanent, Transient};
+
+        let delays = [Duration::from_millis(1); 2];
+        // Scenario, attempt outcomes, expected attempts, expected success.
+        type Case<'a> = (&'a str, &'a [Result<(), super::FailureKind>], usize, bool);
+        let cases: [Case<'_>; 5] = [
+            ("succeeds first", &[Ok(())], 1, true),
+            ("recovers after a blip", &[Err(Transient), Ok(())], 2, true),
+            (
+                "gives up after the budget",
+                &[Err(Transient), Err(Transient), Err(Transient), Ok(())],
+                3,
+                false,
+            ),
+            (
+                "does not retry a permanent failure",
+                &[Err(Permanent), Ok(())],
+                1,
+                false,
+            ),
+            (
+                "does not retry a 401",
+                &[Err(CredentialsRejected), Ok(())],
+                1,
+                false,
+            ),
+        ];
+        for (scenario, outcomes, expected_attempts, succeeds) in cases {
+            let dispatcher =
+                Dispatcher::start(config(), ["bmc-1".to_string()]).expect("dispatcher");
+            let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+            let attempts = AtomicUsize::new(0);
+            let result = gate
+                .execute_with_retries(
+                    &BmcCredentials::new("user".into(), "password".into()),
+                    &delays,
+                    || {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        std::future::ready(outcomes[attempt])
+                    },
+                    |kind: &super::FailureKind| *kind,
+                )
+                .await;
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                expected_attempts,
+                "{scenario}"
+            );
+            assert_eq!(result.is_ok(), succeeds, "{scenario}");
         }
     }
 
@@ -881,7 +1055,7 @@ mod tests {
                         let _ = release_rx.await;
                         Err::<(), _>(StatusResponse(401))
                     },
-                    super::is_credential_rejection,
+                    super::classify_bmc_error,
                 )
                 .await
         });
@@ -899,7 +1073,7 @@ mod tests {
                         queued_sent.fetch_add(1, Ordering::SeqCst);
                         Ok::<_, Infallible>(())
                     },
-                    |_| false,
+                    |_| super::FailureKind::Permanent,
                 )
                 .await
         });
@@ -927,7 +1101,7 @@ mod tests {
                     sent.fetch_add(1, Ordering::SeqCst);
                     Ok::<_, Infallible>(())
                 },
-                |_| false,
+                |_| super::FailureKind::Permanent,
             )
         };
         assert!(matches!(
@@ -937,6 +1111,7 @@ mod tests {
         assert_eq!(sent.load(Ordering::SeqCst), 0, "no request reached bmc-1");
         send(&new).await.expect("reloaded credentials are tried");
         assert_eq!(sent.load(Ordering::SeqCst), 1);
+        assert!(dispatcher.credentials_rejected("bmc-1"));
 
         dispatcher
             .inventory_gate("bmc-2")
@@ -946,6 +1121,7 @@ mod tests {
             .expect("other endpoints are unaffected");
 
         dispatcher.clear_credential_rejections();
+        assert!(!dispatcher.credentials_rejected("bmc-1"));
         send(&old)
             .await
             .expect("the next cycle tries the credentials again");
