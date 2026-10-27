@@ -111,6 +111,7 @@ dependencies = [
  "bmc-dispatch",
  "bmc-error",
  "futures",
+ "mac_address",
  "reqwest",
  "serde",
  "serde_json",

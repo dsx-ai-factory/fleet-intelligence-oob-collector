@@ -20,6 +20,7 @@ use std::fmt;
 use std::time::Duration;
 
 use bmc_error::SanitizedErrorMessage;
+use mac_address::MacAddress;
 use serde::Deserialize;
 use url::Url;
 
@@ -67,8 +68,9 @@ impl BatchResponse {
         for item in self.results {
             let Some(result) = item
                 .bmc_mac
-                .as_ref()
-                .and_then(|mac| outcome.targets.get_mut(mac))
+                .as_deref()
+                .and_then(|mac| mac.trim().parse::<MacAddress>().ok())
+                .and_then(|mac| outcome.targets.get_mut(&mac.to_string()))
             else {
                 // Do not echo arbitrary backend-provided identifiers or messages.
                 outcome.unexpected_results += 1;

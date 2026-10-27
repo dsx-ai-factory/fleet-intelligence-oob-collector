@@ -7,8 +7,8 @@ use tokio::net::TcpListener;
 use super::*;
 use crate::models::NodeAttestation;
 
-const FIRST_MAC: &str = "00:11:22:33:44:55";
-const SECOND_MAC: &str = "00:11:22:33:44:66";
+const FIRST_MAC: &str = "AA:BB:CC:DD:EE:55";
+const SECOND_MAC: &str = "AA:BB:CC:DD:EE:66";
 
 fn batch() -> BatchAttestation {
     BatchAttestation::new(
@@ -18,6 +18,58 @@ fn batch() -> BatchAttestation {
             .map(|mac| NodeAttestation::failed(mac.into(), mac.into(), "192.0.2.1".into(), "test"))
             .collect(),
     )
+}
+
+#[test]
+fn response_mac_formats_share_lookup_and_duplicate_detection() {
+    for alias in [
+        "aa:bb:cc:dd:ee:55",
+        "AA-BB-CC-DD-EE-55",
+        "aabbccddee55",
+        " Aa-bB-cC-dD-eE-55 ",
+    ] {
+        for duplicate in [false, true] {
+            let mut results = vec![
+                serde_json::json!({"bmcMac": alias, "status": "OK"}),
+                serde_json::json!({"bmcMac": SECOND_MAC, "status": "OK"}),
+            ];
+            if duplicate {
+                results.push(serde_json::json!({"bmcMac": FIRST_MAC, "status": "ERROR"}));
+            }
+            let response: BatchResponse =
+                serde_json::from_value(serde_json::json!({"results": results})).unwrap();
+            let outcome = response.outcomes(&batch());
+            assert_eq!(
+                outcome.targets[FIRST_MAC],
+                if duplicate {
+                    TargetUploadOutcome::Duplicate
+                } else {
+                    TargetUploadOutcome::Accepted
+                },
+                "{alias}"
+            );
+            assert_eq!(outcome.targets[SECOND_MAC], TargetUploadOutcome::Accepted);
+            assert_eq!(outcome.unexpected_results, 0);
+        }
+    }
+}
+
+#[test]
+fn invalid_response_macs_stay_unconfirmed_without_exposing_input() {
+    let response: BatchResponse = serde_json::from_value(serde_json::json!({
+        "results": [
+            {"bmcMac": SECOND_MAC, "status": "OK"},
+            {"bmcMac": "", "status": "OK"},
+            {"bmcMac": "AA:BB:CC:DD:EE", "status": "OK"},
+            {"bmcMac": "https://user:secret@example.com/error", "status": "OK"}
+        ]
+    }))
+    .unwrap();
+    let outcome = response.outcomes(&batch());
+    assert_eq!(outcome.targets[FIRST_MAC], TargetUploadOutcome::Missing);
+    assert_eq!(outcome.targets[SECOND_MAC], TargetUploadOutcome::Accepted);
+    assert_eq!(outcome.unexpected_results, 3);
+    assert!(!format!("{outcome:?}").contains("secret"));
 }
 
 #[test]
@@ -164,16 +216,18 @@ async fn submit_response(status: u16, body: &str) -> Result<BatchUploadOutcome, 
 
 #[tokio::test]
 async fn http_success_returns_per_target_outcomes() {
-    submit_response(
+    let outcome = submit_response(
         200,
         &serde_json::json!({"results": [
-            {"bmcMac": SECOND_MAC, "status": "OK"},
-            {"bmcMac": FIRST_MAC, "status": "OK"}
+            {"bmcMac": SECOND_MAC.to_ascii_lowercase(), "status": "OK"},
+            {"bmcMac": FIRST_MAC.replace(':', "-"), "status": "OK"}
         ]})
         .to_string(),
     )
     .await
     .expect("accepted");
+    assert_eq!(outcome.targets[FIRST_MAC], TargetUploadOutcome::Accepted);
+    assert_eq!(outcome.targets[SECOND_MAC], TargetUploadOutcome::Accepted);
 
     let partial = submit_response(
         200,

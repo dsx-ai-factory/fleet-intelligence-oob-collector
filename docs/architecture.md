@@ -60,7 +60,8 @@ metadata. After concurrent nonce and evidence collection completes, results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
 whole-collection authentication retry remain deterministic. Upload responses
-are matched by BMC MAC, independently of response order. Each target is reported
+are matched by BMC MAC, independently of response order, letter case, or
+separator format. Each target is reported
 as accepted, rejected, or unconfirmed. Missing or duplicate results leave only
 that target unconfirmed; an unreadable response leaves the mini-batch unconfirmed.
 Unexpected response rows are reported separately. Other mini-batches still run
