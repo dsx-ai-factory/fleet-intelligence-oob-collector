@@ -60,11 +60,12 @@ metadata. After concurrent nonce and evidence collection completes, results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
 whole-collection authentication retry remain deterministic. Upload responses
-are matched by BMC MAC, independently of response order. An HTTP success is
-accepted only when every submitted MAC has exactly one result with status `OK`;
-rejected, missing, duplicate, unexpected, or malformed results fail that
-mini-batch. Other mini-batches still run unless shutdown is requested or
-re-enrollment fails. Accepted items are not retried because another item fails.
+are matched by BMC MAC, independently of response order. Each target is reported
+as accepted, rejected, or unconfirmed. Missing or duplicate results leave only
+that target unconfirmed; an unreadable response leaves the mini-batch unconfirmed.
+Unexpected response rows are reported separately. Other mini-batches still run
+unless shutdown is requested or re-enrollment fails. Accepted items are not
+retried because another item fails.
 
 ## Collection lifecycle
 
@@ -83,8 +84,11 @@ The collector loads one resolved target and credential snapshot per cycle and
 synchronizes the dispatcher's BMC endpoint set before starting collection.
 Inventory and attestation use that same snapshot. Startup validation supplies
 the first snapshot; subsequent cycles reload the TOML and JSON credential files.
-Updates during a cycle take effect on the next cycle. Invalid configuration
-skips the cycle without collecting against a stale target set.
+Target updates during a cycle take effect on the next cycle. During attestation,
+a BMC `401 Unauthorized` reloads credentials for that target and retries the
+failed request once, keeping the same nonce and previously collected evidence.
+Only one credential reload is allowed per target per attestation attempt. Invalid
+configuration skips the cycle without collecting against a stale target set.
 
 The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
 and sleep. Shutdown cancels Redfish collection and closes the inventory

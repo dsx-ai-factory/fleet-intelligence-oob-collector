@@ -30,7 +30,9 @@ use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
 use crate::models::{BatchAttestation, NodeAttestation};
 use crate::sink::{BackendClient, BackendHttpError, HttpBackendClient};
-use crate::source::{MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339};
+use crate::source::{
+    CredentialReloader, MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339,
+};
 
 /// Result of running the attestation pipeline over a batch of targets.
 pub struct CollectionOutcome {
@@ -51,7 +53,7 @@ fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
 
 /// Collect attestation evidence for every target concurrently.
 ///
-/// Per target: build a backend client from `jwt`, request a nonce, collect signed
+/// Per target: clone the backend client, request a nonce, collect signed
 /// measurements over Redfish, and map them. A non-auth target-level failure
 /// (client/nonce error) becomes a failed `NodeAttestation` rather than aborting the
 /// batch. A backend auth failure (HTTP 401) is propagated as a batch-level
@@ -60,11 +62,9 @@ fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
 pub async fn collect(
     targets: &[Target],
     settings: &AttestationConfig,
-    backend_url: &str,
-    nonce_path: &str,
-    attestation_path: &str,
-    jwt: &str,
+    backend: &HttpBackendClient,
     dispatcher: &Dispatcher,
+    reload_credentials: &CredentialReloader<'_>,
 ) -> Result<CollectionOutcome, Box<dyn Error>> {
     let source = RedfishAttestationSource::new(
         settings.port,
@@ -78,10 +78,8 @@ pub async fn collect(
         measurement_indices: settings.measurement_indices.clone(),
     };
     let concurrency = settings.concurrency.max(1);
-    let timeout = settings.redfish_timeout;
     // Each per-target nonce client starts from the current token; any rotation the
     // backend returns is captured below for the caller to apply.
-    let base_jwt = jwt.to_string();
 
     type TargetOutcome = Result<(NodeAttestation, Option<String>), Box<dyn Error>>;
 
@@ -89,10 +87,7 @@ pub async fn collect(
         .map(|target| {
             let source = source.clone();
             let measurement = measurement.clone();
-            let backend_url = backend_url.to_string();
-            let nonce_path = nonce_path.to_string();
-            let attestation_path = attestation_path.to_string();
-            let jwt = base_jwt.clone();
+            let mut client = backend.clone();
             let target = target.clone();
             let bmc_mac = target.bmc_mac.clone();
             let gate = dispatcher.attestation_gate(&target.name);
@@ -107,26 +102,6 @@ pub async fn collect(
                         ),
                         None,
                     ));
-                };
-                let mut client = match HttpBackendClient::new(
-                    &backend_url,
-                    &nonce_path,
-                    &attestation_path,
-                    jwt,
-                    timeout,
-                ) {
-                    Ok(client) => client,
-                    Err(err) => {
-                        return Ok((
-                            NodeAttestation::failed(
-                                bmc_mac,
-                                target.name,
-                                target.address,
-                                format!("backend client: {err}"),
-                            ),
-                            None,
-                        ));
-                    }
                 };
                 let nonce = match client.get_nonce(&bmc_mac).await {
                     Ok(response) => response,
@@ -159,6 +134,7 @@ pub async fn collect(
                         },
                         measurement,
                         gate,
+                        reload_credentials,
                     )
                     .await;
                 Ok((mapper.map(record), refreshed_jwt))
@@ -187,6 +163,7 @@ pub async fn collect(
 #[cfg(test)]
 mod tests {
     use bmc_dispatch::DispatcherConfig;
+    use std::time::Duration;
 
     use super::*;
 
@@ -225,6 +202,7 @@ mod tests {
             name: "bmc-1".to_string(),
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
+            credentials_profile: Some("bmc".to_string()),
             username: "user".to_string(),
             password: "secret".to_string(),
         };
@@ -232,11 +210,16 @@ mod tests {
         let outcome = collect(
             &[target],
             &AttestationConfig::default(),
-            "https://backend.invalid",
-            "/nonce/{bmc_mac}",
-            "/attestation",
-            "token",
+            &HttpBackendClient::new(
+                "https://backend.invalid",
+                "/nonce/{bmc_mac}",
+                "/attestation",
+                "token",
+                Duration::from_secs(1),
+            )
+            .unwrap(),
             &dispatcher,
+            &|_| panic!("missing gate"),
         )
         .await
         .expect("missing gate becomes a target failure");

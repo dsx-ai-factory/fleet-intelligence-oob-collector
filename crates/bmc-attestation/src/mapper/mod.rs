@@ -159,6 +159,7 @@ mod tests {
             name: "node-a".to_string(),
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
+            credentials_profile: None,
             username: "root".to_string(),
             password: "secret".to_string(),
         }

@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
@@ -26,6 +26,16 @@ impl Runtime {
     }
 
     fn start_with_interval(backend_port: u16, bmc_port: u16, interval_seconds: u64) -> Self {
+        Self::start_with_targets(backend_port, bmc_port, interval_seconds, 1, 1)
+    }
+
+    fn start_with_targets(
+        backend_port: u16,
+        bmc_port: u16,
+        interval_seconds: u64,
+        target_count: usize,
+        concurrency: usize,
+    ) -> Self {
         let config = std::env::temp_dir().join(format!(
             "fleetint-shutdown-{}-{}.toml",
             std::process::id(),
@@ -37,11 +47,14 @@ impl Runtime {
             r#"{"profiles":{"bmc":{"username":"example-user","password":"example-password"}}}"#,
         )
         .expect("write test credentials");
+        let targets = (1..=target_count).map(|index| format!(
+            "[[targets]]\nip = \"127.0.0.1\"\nport = {bmc_port}\nmac = \"02:00:00:00:00:{index:02X}\"\ncredentials_profile = \"bmc\"\n"
+        )).collect::<String>();
         std::fs::write(
             &config,
             format!(
-                "[credentials]\nfile = {:?}\n[[targets]]\nip = \"127.0.0.1\"\nport = {bmc_port}\nmac = \"02:00:00:00:00:01\"\ncredentials_profile = \"bmc\"\n",
-                credentials.to_str().expect("UTF-8 credential path")
+                "[credentials]\nfile = {:?}\n{targets}",
+                credentials.to_str().unwrap()
             ),
         )
         .expect("write test configuration");
@@ -51,7 +64,7 @@ impl Runtime {
             .args([
                 "--disable-latency-probe",
                 "--target-concurrency",
-                "1",
+                &concurrency.to_string(),
                 "--timeout-seconds",
                 "30",
             ])
@@ -331,11 +344,129 @@ async fn rejected_attestation_item_is_not_logged_as_successful_sync() {
         .await
         .unwrap();
     assert!(
-        logs.contains("attestation mini-batch export failed"),
+        logs.contains("attestation target export rejected"),
         "{logs}"
     );
     assert!(
-        !logs.contains("attestation backend sync completed"),
+        !logs
+            .lines()
+            .any(|line| line.contains("attestation backend sync completed")
+                && !line.contains("with upload failures")),
         "{logs}"
     );
+}
+
+#[tokio::test]
+async fn partial_uploads_report_each_target_and_continue_later_batches() {
+    for malformed in [false, true] {
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bmc_port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        let mut runtime = Runtime::start_with_targets(
+            backend.local_addr().unwrap().port(),
+            bmc_port,
+            86400,
+            4,
+            3,
+        );
+        let (mut enrollment, _) = accept_request(&backend).await;
+        reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+        let mut nonces = 0;
+        while nonces < 4 {
+            let (mut stream, request) = accept_request(&backend).await;
+            if request.starts_with("PUT /v1/agent/oob_nodes ") {
+                let body = request.split_once("\r\n\r\n").unwrap().1;
+                // The fixture serializes one source object per inventory observation.
+                let count = body.matches(r#""source":"#).count();
+                assert!((1..=3).contains(&count));
+                let results = vec![r#"{"status":"OK"}"#; count].join(",");
+                reply(&mut stream, &format!(r#"{{"results":[{results}]}}"#)).await;
+            } else {
+                assert!(request.contains("/nonce "));
+                nonces += 1;
+                reply(&mut stream, r#"{"nonce":"example-nonce"}"#).await;
+            }
+        }
+        let (mut upload, request) = accept_request(&backend).await;
+        assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+        if malformed {
+            reply(&mut upload, "not JSON").await;
+        } else {
+            reply(
+                &mut upload,
+                r#"{"results":[
+                {"bmcMac":"02:00:00:00:00:02","status":"INTERNAL_ERROR"},
+                {"bmcMac":"02:00:00:00:00:01","status":"OK"}
+            ]}"#,
+            )
+            .await;
+        }
+        let (mut upload, request) = accept_request(&backend).await;
+        assert!(request.contains("02:00:00:00:00:04"));
+        assert!(!request.contains("02:00:00:00:00:01"));
+        if !malformed {
+            reply_status(&mut upload, 401, r#"{"error":"expired"}"#).await;
+            let (mut reenrollment, request) = accept_request(&backend).await;
+            assert!(request.starts_with("POST /v1/agent/enroll "));
+            reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
+            let (retry, request) = accept_request(&backend).await;
+            assert!(request.contains("02:00:00:00:00:04"));
+            assert!(!request.contains("02:00:00:00:00:01"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer renewed-jwt")
+            );
+            upload = retry;
+        }
+        reply(
+            &mut upload,
+            r#"{"results":[{"bmcMac":"02:00:00:00:00:04","status":"OK"}]}"#,
+        )
+        .await;
+        // Observe the completed summary before requesting shutdown.
+        let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
+        let mut logs = String::new();
+        timeout(Duration::from_secs(3), async {
+            loop {
+                let mut line = String::new();
+                assert!(stderr.read_line(&mut line).await.unwrap() > 0);
+                let completed = line.contains("sleeping until next cycle");
+                logs.push_str(&line);
+                if completed {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("upload summary");
+        runtime.signal("-TERM").await;
+        runtime.expect_clean_exit().await;
+        assert!(
+            logs.contains("attestation target export accepted"),
+            "{logs}"
+        );
+        let summary = logs
+            .lines()
+            .find(|line| line.contains("attestation backend sync completed with upload failures"))
+            .expect(&logs);
+        if malformed {
+            assert!(
+                summary.contains("accepted_count=1") && summary.contains("unconfirmed_count=3"),
+                "{summary}"
+            );
+        } else {
+            assert!(
+                summary.contains("accepted_count=2")
+                    && summary.contains("rejected_count=1")
+                    && summary.contains("unconfirmed_count=1"),
+                "{summary}"
+            );
+            assert!(
+                logs.contains("attestation target export rejected"),
+                "{logs}"
+            );
+        }
+    }
 }

@@ -159,6 +159,17 @@ pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
     Ok(load_config(path)?.targets)
 }
 
+/// Reload credentials for an existing target without changing its configuration.
+pub fn load_target_credentials(
+    file: &Path,
+    mac: &str,
+    profile: Option<&str>,
+) -> Result<(String, String), Box<dyn Error>> {
+    let credentials = SharedCredentials::load(file, Path::new("."))?;
+    let resolved = credentials.resolve(mac.parse()?, profile)?;
+    Ok((resolved.username, resolved.password))
+}
+
 pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let config: Config = toml::from_str(contents).map_err(|error| {
         // Invalid input may contain secrets; never echo TOML input.
@@ -1032,6 +1043,40 @@ mod tests {
         );
         std::fs::remove_file(config).unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn credential_refresh_keeps_profile_and_mac_override_precedence() {
+        let file = write_credential(
+            "refresh-credentials",
+            r#"{"profiles":{"bmc":{"username":"old","password":"old"}}}"#,
+        );
+        assert_eq!(
+            load_target_credentials(&file, "00:11:22:33:44:55", Some("bmc")).unwrap(),
+            ("old".into(), "old".into())
+        );
+        let replacement = file.with_extension("next");
+        std::fs::write(
+            &replacement,
+            r#"{
+            "profiles":{"bmc":{"username":"new","password":"shared"}},
+            "overrides":{"00:11:22:33:44:55":{"password":"individual"}}
+        }"#,
+        )
+        .unwrap();
+        std::fs::rename(replacement, &file).unwrap();
+        assert_eq!(
+            load_target_credentials(&file, "00:11:22:33:44:55", Some("bmc")).unwrap(),
+            ("new".into(), "individual".into())
+        );
+        std::fs::write(
+            &file,
+            r#"{"profiles":{"bmc":{"password":["private-value"]}}}"#,
+        )
+        .unwrap();
+        let error = load_target_credentials(&file, "00:11:22:33:44:55", Some("bmc")).unwrap_err();
+        assert!(!error.to_string().contains("private-value"));
+        std::fs::remove_file(file).unwrap();
     }
 
     #[test]

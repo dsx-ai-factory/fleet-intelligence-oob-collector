@@ -16,4 +16,7 @@
 
 mod backend;
 
-pub use backend::{BackendClient, BackendHttpError, BackendSink, HttpBackendClient, NonceResponse};
+pub use backend::{
+    BackendClient, BackendHttpError, BackendSink, BatchUploadOutcome, HttpBackendClient,
+    NonceResponse, TargetUploadOutcome,
+};

@@ -105,6 +105,55 @@ struct GpuContext {
     vbios_version: Option<String>,
 }
 
+/// Resolves current credentials for a target whose identity and endpoint stay fixed.
+pub type CredentialReloader<'a> =
+    dyn Fn(&crate::config::Target) -> Result<(String, String), Box<dyn Error>> + Send + Sync + 'a;
+
+struct BmcSession<'a> {
+    target: crate::config::Target,
+    base_url: Url,
+    gate: RequestGate,
+    reload_credentials: &'a CredentialReloader<'a>,
+    credentials_reloaded: bool,
+}
+
+impl BmcSession<'_> {
+    async fn request_json<T: serde::de::DeserializeOwned>(
+        &mut self,
+        request: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<T, Box<dyn Error>> {
+        loop {
+            let result = self
+                .gate
+                .execute(async {
+                    request()
+                        .basic_auth(&self.target.username, Some(&self.target.password))
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .json::<T>()
+                        .await
+                })
+                .await;
+            match result {
+                Ok(value) => return Ok(value),
+                Err(bmc_dispatch::DispatchError::Transport(err))
+                    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED)
+                        && !self.credentials_reloaded => {}
+                Err(err) => return Err(err.into()),
+            }
+            self.credentials_reloaded = true;
+            // Only credentials can change here. Retry this request with the same
+            // nonce, retaining measurements already collected for other components.
+            let (username, password) = (self.reload_credentials)(&self.target)
+                .map_err(|_| "failed to reload BMC credentials")?;
+            self.target.username = username;
+            self.target.password = password;
+            tracing::info!(bmc_mac = %self.target.bmc_mac, "BMC credentials reloaded; retrying authentication once");
+        }
+    }
+}
+
 impl RedfishAttestationSource {
     pub fn new(
         port: u16,
@@ -143,11 +192,12 @@ impl RedfishAttestationSource {
         nonce: NonceData,
         request: MeasurementRequest,
         gate: RequestGate,
+        reload_credentials: &CredentialReloader<'_>,
     ) -> SourceRecord {
         let collected_at = now_rfc3339();
         let nonce_refresh_timestamp = nonce.nonce_refresh_timestamp.clone();
         let result = self
-            .collect_report(&target, &nonce, &request, &gate)
+            .collect_report(&target, &nonce, &request, gate, reload_credentials)
             .await
             .map_err(|err| err.to_string());
         SourceRecord {
@@ -163,12 +213,17 @@ impl RedfishAttestationSource {
         target: &crate::config::Target,
         nonce: &NonceData,
         request: &MeasurementRequest,
-        gate: &RequestGate,
+        gate: RequestGate,
+        reload_credentials: &CredentialReloader<'_>,
     ) -> Result<RedfishAttestationReport, Box<dyn Error>> {
-        let base_url = bmc_url(&target.address, self.port)?;
-        let components = self
-            .discover_gpu_irot_components(&base_url, target, gate)
-            .await?;
+        let mut session = BmcSession {
+            target: target.clone(),
+            base_url: bmc_url(&target.address, self.port)?,
+            gate,
+            reload_credentials,
+            credentials_reloaded: false,
+        };
+        let components = self.discover_gpu_irot_components(&mut session).await?;
         if components.is_empty() {
             return Err("no GPU IRoT ComponentIntegrity resources found".into());
         }
@@ -177,7 +232,7 @@ impl RedfishAttestationSource {
         let mut component_errors = Vec::new();
         for component in components {
             match self
-                .collect_component(&base_url, target, &component, nonce, request, gate)
+                .collect_component(&mut session, &component, nonce, request)
                 .await
             {
                 Ok(evidence) => evidences.push(evidence),
@@ -196,22 +251,15 @@ impl RedfishAttestationSource {
 
     async fn discover_gpu_irot_components(
         &self,
-        base_url: &Url,
-        target: &crate::config::Target,
-        gate: &RequestGate,
+        session: &mut BmcSession<'_>,
     ) -> Result<Vec<ComponentCandidate>, Box<dyn Error>> {
         let collection = self
-            .get_json::<ComponentIntegrityCollection>(
-                base_url,
-                target,
-                "/redfish/v1/ComponentIntegrity",
-                gate,
-            )
+            .get_json::<ComponentIntegrityCollection>(session, "/redfish/v1/ComponentIntegrity")
             .await?;
         let mut out = Vec::new();
         for member in collection.members {
             let resource = self
-                .get_json::<ComponentIntegrityResource>(base_url, target, &member.odata_id, gate)
+                .get_json::<ComponentIntegrityResource>(session, &member.odata_id)
                 .await?;
             if let Some(candidate) = component_candidate(member.odata_id, resource) {
                 out.push(candidate);
@@ -222,34 +270,29 @@ impl RedfishAttestationSource {
 
     async fn collect_component(
         &self,
-        base_url: &Url,
-        target: &crate::config::Target,
+        session: &mut BmcSession<'_>,
         component: &ComponentCandidate,
         nonce: &NonceData,
         request: &MeasurementRequest,
-        gate: &RequestGate,
     ) -> Result<AttestationEvidenceData, Box<dyn Error>> {
         let task = self
             .post_json::<SpdmMeasurementBody, TaskResponse>(
-                base_url,
-                target,
+                session,
                 &component.action_target,
                 &SpdmMeasurementBody {
                     slot_id: DEFAULT_SPDM_SLOT_ID,
                     measurement_indices: request.measurement_indices.clone(),
                     nonce: nonce.nonce.clone(),
                 },
-                gate,
             )
             .await?;
         if let Some(task_path) = task.odata_id.as_deref() {
-            self.wait_for_task(base_url, target, task_path, gate)
-                .await?;
+            self.wait_for_task(session, task_path).await?;
         }
 
         let data_path = format!("{}/data", component.action_target.trim_end_matches('/'));
         let data = self
-            .get_json::<SpdmMeasurementData>(base_url, target, &data_path, gate)
+            .get_json::<SpdmMeasurementData>(session, &data_path)
             .await?;
         if data.signed_measurements.is_empty() {
             return Err("SPDM measurement data missing SignedMeasurements".into());
@@ -257,22 +300,18 @@ impl RedfishAttestationSource {
 
         let cert = self
             .get_json::<CertificateChain>(
-                base_url,
-                target,
+                session,
                 &format!(
                     "/redfish/v1/Chassis/{}/Certificates/CertChain",
                     component.id
                 ),
-                gate,
             )
             .await?;
         if cert.certificate_string.is_empty() {
             return Err("certificate chain missing CertificateString".into());
         }
         let certificate = base64::engine::general_purpose::STANDARD.encode(cert.certificate_string);
-        let gpu_context = self
-            .gpu_context(base_url, target, &component.id, gate)
-            .await;
+        let gpu_context = self.gpu_context(session, &component.id).await;
 
         Ok(AttestationEvidenceData {
             component_id: component.id.clone(),
@@ -287,22 +326,18 @@ impl RedfishAttestationSource {
 
     async fn wait_for_task(
         &self,
-        base_url: &Url,
-        target: &crate::config::Target,
+        session: &mut BmcSession<'_>,
         task_path: &str,
-        gate: &RequestGate,
     ) -> Result<(), Box<dyn Error>> {
         let deadline = std::time::Instant::now() + self.task_timeout;
         loop {
             let remaining = deadline
                 .checked_duration_since(std::time::Instant::now())
                 .ok_or_else(|| format!("SPDM task {task_path} timed out"))?;
-            let task = tokio::time::timeout(
-                remaining,
-                self.get_json::<TaskResponse>(base_url, target, task_path, gate),
-            )
-            .await
-            .map_err(|_| format!("SPDM task {task_path} timed out"))??;
+            let task =
+                tokio::time::timeout(remaining, self.get_json::<TaskResponse>(session, task_path))
+                    .await
+                    .map_err(|_| format!("SPDM task {task_path} timed out"))??;
             if let Some(state) = task.task_state.as_deref() {
                 if is_success_task_state(state) {
                     return Ok(());
@@ -322,21 +357,10 @@ impl RedfishAttestationSource {
         }
     }
 
-    async fn gpu_context(
-        &self,
-        base_url: &Url,
-        target: &crate::config::Target,
-        component_id: &str,
-        gate: &RequestGate,
-    ) -> GpuContext {
+    async fn gpu_context(&self, session: &mut BmcSession<'_>, component_id: &str) -> GpuContext {
         let mut context = GpuContext::default();
         let chassis = self
-            .get_json::<ChassisContext>(
-                base_url,
-                target,
-                &format!("/redfish/v1/Chassis/{component_id}"),
-                gate,
-            )
+            .get_json::<ChassisContext>(session, &format!("/redfish/v1/Chassis/{component_id}"))
             .await
             .ok();
         if let Some(chassis) = chassis {
@@ -354,48 +378,23 @@ impl RedfishAttestationSource {
 
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
-        base_url: &Url,
-        target: &crate::config::Target,
+        session: &mut BmcSession<'_>,
         path: &str,
-        gate: &RequestGate,
     ) -> Result<T, Box<dyn Error>> {
-        let url = join_redfish_path(base_url, path)?;
-        Ok(gate
-            .execute(async {
-                self.client
-                    .get(url)
-                    .basic_auth(&target.username, Some(&target.password))
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json::<T>()
-                    .await
-            })
-            .await?)
+        let url = join_redfish_path(&session.base_url, path)?;
+        session.request_json(|| self.client.get(url.clone())).await
     }
 
     async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(
         &self,
-        base_url: &Url,
-        target: &crate::config::Target,
+        session: &mut BmcSession<'_>,
         path: &str,
         body: &B,
-        gate: &RequestGate,
     ) -> Result<T, Box<dyn Error>> {
-        let url = join_redfish_path(base_url, path)?;
-        Ok(gate
-            .execute(async {
-                self.client
-                    .post(url)
-                    .basic_auth(&target.username, Some(&target.password))
-                    .json(body)
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json::<T>()
-                    .await
-            })
-            .await?)
+        let url = join_redfish_path(&session.base_url, path)?;
+        session
+            .request_json(|| self.client.post(url.clone()).json(body))
+            .await
     }
 }
 
@@ -657,6 +656,220 @@ mod tests {
         );
     }
 
+    // Private HTTP fixtures exercise retry behavior; public collection still requires HTTPS.
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut request = Vec::new();
+        loop {
+            let mut bytes = [0; 4096];
+            let count = socket.read(&mut bytes).await.unwrap();
+            assert!(count > 0, "incomplete request");
+            request.extend_from_slice(&bytes[..count]);
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                let length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                    .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+                if request.len() >= end + 4 + length {
+                    return String::from_utf8(request).unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rotated_credentials_retry_measurement_with_same_nonce_only_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // Rotate on the measurement POST, then reject a later request too.
+            // Successful measurements survive; the second 401 cannot reload again.
+            for (index, (status, body)) in [
+                (401, "{}"),
+                (200, "{}"),
+                (200, r#"{"SignedMeasurements":"signed","Version":"1"}"#),
+                (200, r#"{"CertificateString":"certificate"}"#),
+                (200, "{}"),
+                (401, "{}"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                let credentials = if index == 0 {
+                    "user:old"
+                } else {
+                    "rotated:new"
+                };
+                let authorization = base64::engine::general_purpose::STANDARD.encode(credentials);
+                let actual_auth = request
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                    .unwrap()
+                    .1
+                    .trim();
+                assert_eq!(actual_auth, format!("Basic {authorization}"));
+                if index < 2 {
+                    assert!(request.starts_with("POST /measurements "));
+                    assert!(request.contains(r#""Nonce":"same-nonce""#));
+                }
+                socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            ["bmc-1".to_string()],
+        )
+        .unwrap();
+        let reload_count = AtomicUsize::new(0);
+        let reload = |target: &crate::config::Target| {
+            assert_eq!(target.bmc_mac, "00:11:22:33:44:55");
+            assert_eq!(target.address, "192.0.2.1");
+            assert_eq!(target.credentials_profile.as_deref(), Some("bmc"));
+            reload_count.fetch_add(1, Ordering::Relaxed);
+            Ok(("rotated".into(), "new".into()))
+        };
+        let mut session = BmcSession {
+            target: crate::config::Target {
+                name: "bmc-1".into(),
+                bmc_mac: "00:11:22:33:44:55".into(),
+                address: "192.0.2.1".into(),
+                credentials_profile: Some("bmc".into()),
+                username: "user".into(),
+                password: "old".into(),
+            },
+            base_url: format!("http://{address}").parse().unwrap(),
+            gate: dispatcher.attestation_gate("bmc-1").unwrap(),
+            reload_credentials: &reload,
+            credentials_reloaded: false,
+        };
+        let mut source = RedfishAttestationSource::new(
+            443,
+            false,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+        source.client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let evidence = source
+            .collect_component(
+                &mut session,
+                &ComponentCandidate {
+                    id: "GPU_0".into(),
+                    action_target: "/measurements".into(),
+                },
+                &NonceData {
+                    nonce: "same-nonce".into(),
+                    nonce_refresh_timestamp: None,
+                },
+                &MeasurementRequest {
+                    measurement_indices: vec![1],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(evidence.nonce, "same-nonce");
+        assert_eq!(evidence.evidence, "signed");
+        assert!(
+            source
+                .get_json::<serde_json::Value>(&mut session, "/later")
+                .await
+                .is_err()
+        );
+        assert_eq!(reload_count.load(Ordering::Relaxed), 1);
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_retry_is_bounded_and_credential_reload_errors_are_safe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        for (status, reload_fails, requests, reloads) in
+            [(401, false, 2, 1), (403, false, 1, 0), (401, true, 1, 1)]
+        {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                for _ in 0..requests {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    read_request(&mut socket).await;
+                    socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                }
+            });
+            let dispatcher = Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 1,
+                    bmc_max_in_flight: 1,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["bmc-1".into()],
+            )
+            .unwrap();
+            let count = AtomicUsize::new(0);
+            let reload = |_: &crate::config::Target| {
+                count.fetch_add(1, Ordering::Relaxed);
+                if reload_fails {
+                    Err("private-credential-detail".into())
+                } else {
+                    Ok(("rotated".into(), "new".into()))
+                }
+            };
+            let mut session = BmcSession {
+                target: crate::config::Target {
+                    name: "bmc-1".into(),
+                    bmc_mac: "00:11:22:33:44:55".into(),
+                    address: "192.0.2.1".into(),
+                    credentials_profile: None,
+                    username: "user".into(),
+                    password: "old".into(),
+                },
+                base_url: format!("http://{address}").parse().unwrap(),
+                gate: dispatcher.attestation_gate("bmc-1").unwrap(),
+                reload_credentials: &reload,
+                credentials_reloaded: false,
+            };
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let error = session
+                .request_json::<serde_json::Value>(|| {
+                    client.get(format!("http://{address}/redfish/v1"))
+                })
+                .await
+                .unwrap_err();
+            assert!(!error.to_string().contains("private-credential-detail"));
+            assert_eq!(count.load(Ordering::Relaxed), reloads);
+            tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn task_poll_deadline_includes_dispatcher_wait() {
         let dispatcher = Dispatcher::start(
@@ -699,18 +912,21 @@ mod tests {
             name: "bmc-1".to_string(),
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
+            credentials_profile: Some("bmc".to_string()),
             username: "user".to_string(),
             password: "secret".to_string(),
         };
         let base_url = Url::parse("https://192.0.2.1").expect("base URL");
+        let mut session = BmcSession {
+            target,
+            base_url,
+            gate: poll_gate,
+            reload_credentials: &|_| panic!("no HTTP request should start"),
+            credentials_reloaded: false,
+        };
         let started_at = std::time::Instant::now();
         let error = source
-            .wait_for_task(
-                &base_url,
-                &target,
-                "/redfish/v1/TaskService/Tasks/1",
-                &poll_gate,
-            )
+            .wait_for_task(&mut session, "/redfish/v1/TaskService/Tasks/1")
             .await
             .expect_err("dispatcher wait should consume the task deadline");
 

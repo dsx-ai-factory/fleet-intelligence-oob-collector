@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -39,45 +39,50 @@ struct BatchItemResult {
     status: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum TargetUploadOutcome {
+    Accepted,
+    Rejected(SanitizedErrorMessage),
+    Missing,
+    Duplicate,
+}
+
+#[derive(Debug)]
+pub struct BatchUploadOutcome {
+    pub targets: BTreeMap<String, TargetUploadOutcome>,
+    pub unexpected_results: usize,
+}
+
 impl BatchResponse {
-    /// Results are keyed by MAC and may arrive in any order. HTTP success is
-    /// insufficient: every submitted source must have exactly one accepted row.
-    fn validate(self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>> {
-        let mut seen = BTreeSet::new();
-        let mut failures = Vec::new();
+    /// Preserve each target's outcome even when other response rows are invalid.
+    fn outcomes(self, batch: &BatchAttestation) -> BatchUploadOutcome {
+        let mut outcome = BatchUploadOutcome {
+            targets: batch
+                .results_by_bmc_mac
+                .keys()
+                .map(|mac| (mac.clone(), TargetUploadOutcome::Missing))
+                .collect(),
+            unexpected_results: 0,
+        };
         for item in self.results {
-            let Some(mac) = item.bmc_mac else {
-                failures.push("result missing BMC MAC".to_string());
+            let Some(result) = item
+                .bmc_mac
+                .as_ref()
+                .and_then(|mac| outcome.targets.get_mut(mac))
+            else {
+                // Do not echo arbitrary backend-provided identifiers or messages.
+                outcome.unexpected_results += 1;
                 continue;
             };
-            if !batch.results_by_bmc_mac.contains_key(&mac) {
-                // Do not echo arbitrary backend-provided identifiers or messages.
-                failures.push("result for an unexpected BMC MAC".to_string());
-                continue;
-            }
-            if !seen.insert(mac.clone()) {
-                failures.push(format!("duplicate result for BMC {mac}"));
-                continue;
-            }
-            if !item.status.eq_ignore_ascii_case("OK") {
-                failures.push(format!("BMC {mac} rejected with status {:?}", item.status));
-            }
+            *result = if *result != TargetUploadOutcome::Missing {
+                TargetUploadOutcome::Duplicate
+            } else if item.status.eq_ignore_ascii_case("OK") {
+                TargetUploadOutcome::Accepted
+            } else {
+                TargetUploadOutcome::Rejected(SanitizedErrorMessage::new(item.status))
+            };
         }
-        for mac in batch.results_by_bmc_mac.keys() {
-            if !seen.contains(mac) {
-                failures.push(format!("missing result for BMC {mac}"));
-            }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(SanitizedErrorMessage::new(format!(
-                "attestation batch export failed: {}",
-                failures.join("; ")
-            ))
-            .to_string()
-            .into())
-        }
+        outcome
     }
 }
 
@@ -107,7 +112,10 @@ pub trait BackendClient {
     fn jwt(&self) -> &str;
     fn set_jwt(&mut self, jwt: String);
     async fn get_nonce(&mut self, bmc_mac: &str) -> Result<NonceResponse, Box<dyn Error>>;
-    async fn submit_batch(&self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>>;
+    async fn submit_batch(
+        &self,
+        batch: &BatchAttestation,
+    ) -> Result<BatchUploadOutcome, Box<dyn Error>>;
 }
 
 impl BackendSink<HttpBackendClient> {
@@ -142,7 +150,10 @@ impl<C> BackendSink<C>
 where
     C: BackendClient,
 {
-    pub async fn write(&self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>> {
+    pub async fn write(
+        &self,
+        batch: &BatchAttestation,
+    ) -> Result<BatchUploadOutcome, Box<dyn Error>> {
         self.client.submit_batch(batch).await
     }
 }
@@ -260,7 +271,10 @@ impl BackendClient for HttpBackendClient {
         Ok(response)
     }
 
-    async fn submit_batch(&self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>> {
+    async fn submit_batch(
+        &self,
+        batch: &BatchAttestation,
+    ) -> Result<BatchUploadOutcome, Box<dyn Error>> {
         if self.jwt.is_empty() {
             return Err("backend jwt cannot be empty".into());
         }
@@ -303,7 +317,7 @@ impl BackendClient for HttpBackendClient {
                 request_id,
             )));
         }
-        response.json::<BatchResponse>().await?.validate(batch)
+        Ok(response.json::<BatchResponse>().await?.outcomes(batch))
     }
 }
 

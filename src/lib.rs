@@ -19,6 +19,7 @@ mod backend;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +27,10 @@ use std::time::Duration;
 use bmc_attestation::collector;
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::models::BatchAttestation;
-use bmc_attestation::sink::BackendSink as AttestationBackendSink;
+use bmc_attestation::sink::{
+    BackendSink as AttestationBackendSink, BatchUploadOutcome,
+    HttpBackendClient as AttestationBackendClient, TargetUploadOutcome,
+};
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
 use bmc_inventory::models::{InventoryUuid, NodeInventory};
@@ -217,8 +221,11 @@ async fn run_runtime_until_shutdown(
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let configured_targets = config::load_targets(&options.inventory.config)?;
-    let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
+    let target_config = config::load_config(&options.inventory.config)?;
+    let dispatcher = Arc::new(start_dispatcher(
+        &options.inventory,
+        &target_config.targets,
+    )?);
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let agent_token = required_backend_option(options.agent_token.take(), "agent token")?;
@@ -233,15 +240,15 @@ async fn run_runtime_until_shutdown(
 
     // Reuse startup validation as the first cycle's snapshot. Later cycles reload
     // once, before dispatcher synchronization or either collection phase.
-    let mut initial_targets = Some(configured_targets);
+    let mut initial_config = Some(target_config);
     loop {
         if shutdown.is_requested() {
             return Ok(());
         }
         let cycle = async {
-            let targets = match initial_targets.take() {
-                Some(targets) => targets,
-                None => config::load_targets(&options.inventory.config)?,
+            let target_config = match initial_config.take() {
+                Some(config) => config,
+                None => config::load_config(&options.inventory.config)?,
             };
             run_collection_cycle(
                 &options,
@@ -249,7 +256,7 @@ async fn run_runtime_until_shutdown(
                 &endpoints,
                 &mut session,
                 Arc::clone(&dispatcher),
-                targets,
+                target_config,
                 shutdown.clone(),
             )
             .await
@@ -276,7 +283,7 @@ async fn run_runtime_until_shutdown(
     }
 }
 
-/// A cycle shares one resolved target/credential snapshot across both phases.
+/// A cycle shares one target snapshot; a BMC 401 can refresh credentials in place.
 /// Inventory runs first to enroll new sources, but its failure must not prevent
 /// attesting sources already enrolled by MAC in an earlier cycle.
 async fn run_collection_cycle(
@@ -285,10 +292,14 @@ async fn run_collection_cycle(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
-    targets: Vec<config::Target>,
+    target_config: config::CollectorConfig,
     shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let started_at = std::time::Instant::now();
+    let config::CollectorConfig {
+        targets,
+        credentials_file,
+    } = target_config;
     dispatcher.sync_endpoints(targets.iter().map(|target| target.mac.to_string()))?;
     let attestation_targets = build_attestation_targets(&targets);
     match collect_and_upload_inventory(
@@ -327,8 +338,9 @@ async fn run_collection_cycle(
     settings.insecure_tls = options.inventory.insecure_tls;
     settings.concurrency = options.inventory.target_concurrency;
     settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
-    collect_and_upload_attestation(
+    let uploads = collect_and_upload_attestation(
         &attestation_targets,
+        &credentials_file,
         &settings,
         endpoints,
         session,
@@ -339,11 +351,22 @@ async fn run_collection_cycle(
     if shutdown.is_requested() {
         return Ok(());
     }
-    tracing::info!(
-        elapsed_seconds = started_at.elapsed().as_secs_f64(),
-        node_count = attestation_targets.len(),
-        "attestation backend sync completed"
-    );
+    if uploads.rejected > 0 || uploads.unconfirmed > 0 || uploads.unexpected_results > 0 {
+        tracing::warn!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            rejected_count = uploads.rejected,
+            unconfirmed_count = uploads.unconfirmed,
+            unexpected_result_count = uploads.unexpected_results,
+            "attestation backend sync completed with upload failures"
+        );
+    } else {
+        tracing::info!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            "attestation backend sync completed"
+        );
+    }
     Ok(())
 }
 
@@ -354,6 +377,7 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
             name: target.mac.to_string(),
             bmc_mac: target.mac.to_string(),
             address: target.address.clone(),
+            credentials_profile: target.credentials_profile.clone(),
             username: target.username.clone(),
             password: target.password.clone(),
         })
@@ -362,18 +386,27 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
 
 async fn collect_and_upload_attestation(
     targets: &[attestation_config::Target],
+    credentials_file: &Path,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
     mut shutdown: Shutdown,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<AttestationUploadSummary, Box<dyn Error>> {
     let collect = |jwt: String| async move {
-        collect_attestation(targets, attestation_settings, endpoints, &jwt, dispatcher).await
+        collect_attestation(
+            targets,
+            credentials_file,
+            attestation_settings,
+            endpoints,
+            &jwt,
+            dispatcher,
+        )
+        .await
     };
     let result = tokio::select! {
         biased;
-        () = shutdown.wait() => return Ok(()),
+        () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
         result = collect(session.jwt().to_string()) => result,
     };
     let outcome = match result {
@@ -383,7 +416,7 @@ async fn collect_and_upload_attestation(
             session.reenroll().await?;
             tokio::select! {
                 biased;
-                () = shutdown.wait() => return Ok(()),
+                () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
                 result = collect(session.jwt().to_string()) => result?,
             }
         }
@@ -433,10 +466,10 @@ async fn upload_attestation_batches(
     timeout: Duration,
     batch_size: usize,
     shutdown: &Shutdown,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<AttestationUploadSummary, Box<dyn Error>> {
     let batches = split_attestation_batch(batch, batch_size);
     let batch_count = batches.len();
-    let mut failures = Vec::new();
+    let mut summary = AttestationUploadSummary::default();
 
     for (index, batch) in batches.into_iter().enumerate() {
         if shutdown.is_requested() {
@@ -458,13 +491,37 @@ async fn upload_attestation_batches(
         }
 
         match result {
-            Ok(()) => tracing::info!(
-                batch_index = index + 1,
-                batch_count,
-                node_count,
-                "attestation mini-batch export completed"
-            ),
+            Ok(outcome) => {
+                summary.unexpected_results += outcome.unexpected_results;
+                if outcome.unexpected_results > 0 {
+                    tracing::warn!(
+                        batch_index = index + 1,
+                        unexpected_result_count = outcome.unexpected_results,
+                        "attestation response contains unrecognized results"
+                    );
+                }
+                for (bmc_mac, outcome) in outcome.targets {
+                    match outcome {
+                        TargetUploadOutcome::Accepted => {
+                            summary.accepted += 1;
+                            tracing::info!(%bmc_mac, "attestation target export accepted");
+                        }
+                        TargetUploadOutcome::Rejected(status) => {
+                            summary.rejected += 1;
+                            tracing::warn!(%bmc_mac, %status, "attestation target export rejected");
+                        }
+                        TargetUploadOutcome::Missing | TargetUploadOutcome::Duplicate => {
+                            summary.unconfirmed += 1;
+                            tracing::warn!(%bmc_mac, reason = ?outcome, "attestation target export unconfirmed");
+                        }
+                    }
+                }
+            }
             Err(err) => {
+                summary.unconfirmed += node_count;
+                for bmc_mac in batch.results_by_bmc_mac.keys() {
+                    tracing::warn!(%bmc_mac, error = %err, "attestation target export unconfirmed");
+                }
                 tracing::error!(
                     batch_index = index + 1,
                     batch_count,
@@ -472,21 +529,19 @@ async fn upload_attestation_batches(
                     error = %err,
                     "attestation mini-batch export failed"
                 );
-                failures.push(err.to_string());
             }
         }
     }
 
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} attestation mini-batch export(s) failed; first error: {}",
-            failures.len(),
-            failures[0]
-        )
-        .into())
-    }
+    Ok(summary)
+}
+
+#[derive(Default)]
+struct AttestationUploadSummary {
+    accepted: usize,
+    rejected: usize,
+    unconfirmed: usize,
+    unexpected_results: usize,
 }
 
 fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {
@@ -504,19 +559,31 @@ fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<B
 
 async fn collect_attestation(
     targets: &[attestation_config::Target],
+    credentials_file: &Path,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     jwt: &str,
     dispatcher: &Dispatcher,
 ) -> Result<collector::CollectionOutcome, Box<dyn Error>> {
-    collector::collect(
-        targets,
-        attestation_settings,
+    let backend = AttestationBackendClient::new(
         &endpoints.base_url,
         &endpoints.nonce_path,
         &endpoints.attestation_path,
         jwt,
+        attestation_settings.redfish_timeout,
+    )?;
+    collector::collect(
+        targets,
+        attestation_settings,
+        &backend,
         dispatcher,
+        &|target| {
+            config::load_target_credentials(
+                credentials_file,
+                &target.bmc_mac,
+                target.credentials_profile.as_deref(),
+            )
+        },
     )
     .await
 }
@@ -526,7 +593,7 @@ async fn upload_attestation(
     jwt: &str,
     batch: &BatchAttestation,
     timeout: std::time::Duration,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BatchUploadOutcome, Box<dyn Error>> {
     let sink = AttestationBackendSink::new(
         &endpoints.base_url,
         &endpoints.nonce_path,
@@ -1164,6 +1231,7 @@ mod tests {
         assert_eq!(targets[0].name, "00:11:22:33:44:55");
         assert_eq!(targets[0].bmc_mac, "00:11:22:33:44:55");
         assert_eq!(targets[0].address, "10.0.0.1");
+        assert_eq!(targets[0].credentials_profile.as_deref(), Some("bmc"));
         assert_eq!(targets[0].username, "admin");
         assert_eq!(targets[0].password, "secret");
     }

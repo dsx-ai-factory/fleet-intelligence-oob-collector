@@ -21,60 +21,67 @@ fn batch() -> BatchAttestation {
 }
 
 #[test]
-fn accepts_results_by_mac_in_any_order_without_node_uuids() {
-    let response: BatchResponse = serde_json::from_value(serde_json::json!({
-        "results": [
-            {"bmcMac": SECOND_MAC, "status": "OK"},
-            {"bmcMac": FIRST_MAC, "status": "OK"}
-        ]
-    }))
-    .unwrap();
-    response
-        .validate(&batch())
-        .expect("both MACs were accepted");
-}
-
-#[test]
-fn rejects_partial_missing_duplicate_and_unexpected_results() {
+fn preserves_accepted_targets_in_partial_or_invalid_responses() {
     let cases = [
+        (
+            serde_json::json!([
+                {"bmcMac": SECOND_MAC, "status": "OK"},
+                {"bmcMac": FIRST_MAC, "status": "OK"}
+            ]),
+            TargetUploadOutcome::Accepted,
+            TargetUploadOutcome::Accepted,
+            0,
+        ),
         (
             serde_json::json!([
                 {"bmcMac": FIRST_MAC, "status": "OK"},
                 {"bmcMac": SECOND_MAC, "status": "INTERNAL_ERROR"}
             ]),
-            "BMC 00:11:22:33:44:66 rejected",
+            TargetUploadOutcome::Accepted,
+            TargetUploadOutcome::Rejected(SanitizedErrorMessage::new("INTERNAL_ERROR")),
+            0,
         ),
         (
-            serde_json::json!([{ "bmcMac": FIRST_MAC, "status": "OK" }]),
-            "missing result for BMC 00:11:22:33:44:66",
-        ),
-        (
-            serde_json::json!([
-                {"bmcMac": FIRST_MAC, "status": "OK"},
-                {"bmcMac": SECOND_MAC, "status": "OK"},
-                {"bmcMac": FIRST_MAC, "status": "OK"}
-            ]),
-            "duplicate result for BMC",
+            serde_json::json!([{"bmcMac": FIRST_MAC, "status": "OK"}]),
+            TargetUploadOutcome::Accepted,
+            TargetUploadOutcome::Missing,
+            0,
         ),
         (
             serde_json::json!([
                 {"bmcMac": FIRST_MAC, "status": "OK"},
                 {"bmcMac": SECOND_MAC, "status": "OK"},
-                {"bmcMac": "00:11:22:33:44:77", "status": "OK"}
+                {"bmcMac": SECOND_MAC, "status": "ERROR"}
             ]),
-            "unexpected BMC MAC",
+            TargetUploadOutcome::Accepted,
+            TargetUploadOutcome::Duplicate,
+            0,
         ),
         (
-            serde_json::json!([{ "status": "INVALID_MAC" }]),
-            "result missing BMC MAC",
+            serde_json::json!([
+                {"bmcMac": FIRST_MAC, "status": "OK"},
+                {"bmcMac": SECOND_MAC, "status": "OK"},
+                {"bmcMac": "00:11:22:33:44:77", "status": "OK"},
+                {"status": "INVALID_MAC"}
+            ]),
+            TargetUploadOutcome::Accepted,
+            TargetUploadOutcome::Accepted,
+            2,
         ),
-        (serde_json::json!([]), "missing result for BMC"),
+        (
+            serde_json::json!([]),
+            TargetUploadOutcome::Missing,
+            TargetUploadOutcome::Missing,
+            0,
+        ),
     ];
-    for (results, expected) in cases {
+    for (results, first, second, unexpected) in cases {
         let response: BatchResponse =
             serde_json::from_value(serde_json::json!({"results": results})).unwrap();
-        let error = response.validate(&batch()).expect_err(expected).to_string();
-        assert!(error.contains(expected), "{error}");
+        let outcome = response.outcomes(&batch());
+        assert_eq!(outcome.targets[FIRST_MAC], first);
+        assert_eq!(outcome.targets[SECOND_MAC], second);
+        assert_eq!(outcome.unexpected_results, unexpected);
     }
 }
 
@@ -87,17 +94,14 @@ fn upload_diagnostics_do_not_expose_backend_urls_or_messages() {
         ]
     }))
     .unwrap();
-    let error = response
-        .validate(&batch())
-        .expect_err("rejected")
-        .to_string();
-    assert!(error.contains("URL_REDACTED"));
-    assert!(!error.contains("secret"));
-    assert!(!error.contains("private-body"));
+    let outcome = format!("{:?}", response.outcomes(&batch()));
+    assert!(outcome.contains("URL_REDACTED"));
+    assert!(!outcome.contains("secret"));
+    assert!(!outcome.contains("private-body"));
 }
 
 /// Exercise the real HTTP submit/deserialize path against a localhost fixture.
-async fn submit_response(status: u16, body: &str) -> Result<(), Box<dyn Error>> {
+async fn submit_response(status: u16, body: &str) -> Result<BatchUploadOutcome, Box<dyn Error>> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let body = body.to_string();
@@ -159,7 +163,7 @@ async fn submit_response(status: u16, body: &str) -> Result<(), Box<dyn Error>> 
 }
 
 #[tokio::test]
-async fn http_success_requires_complete_accepted_results() {
+async fn http_success_returns_per_target_outcomes() {
     submit_response(
         200,
         &serde_json::json!({"results": [
@@ -171,13 +175,30 @@ async fn http_success_requires_complete_accepted_results() {
     .await
     .expect("accepted");
 
-    for body in [
-        r#"{"results":[{"bmcMac":"00:11:22:33:44:55","status":"INTERNAL_ERROR"}]}"#,
-        r#"{"results":[]}"#,
-        r#"{}"#,
-        "not JSON",
-        "",
-    ] {
+    let partial = submit_response(
+        200,
+        &serde_json::json!({"results": [
+            {"bmcMac": FIRST_MAC, "status": "OK"},
+            {"bmcMac": SECOND_MAC, "status": "INTERNAL_ERROR"}
+        ]})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(partial.targets[FIRST_MAC], TargetUploadOutcome::Accepted);
+    assert!(matches!(
+        partial.targets[SECOND_MAC],
+        TargetUploadOutcome::Rejected(_)
+    ));
+    assert_eq!(
+        submit_response(200, r#"{"results":[]}"#)
+            .await
+            .unwrap()
+            .targets[FIRST_MAC],
+        TargetUploadOutcome::Missing
+    );
+
+    for body in [r#"{}"#, "not JSON", ""] {
         assert!(submit_response(200, body).await.is_err(), "{body}");
     }
 }

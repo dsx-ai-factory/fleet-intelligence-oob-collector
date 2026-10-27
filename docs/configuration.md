@@ -44,8 +44,11 @@ matching ignores letter case. Unknown fields, invalid MACs, malformed JSON,
 unknown profiles, or unresolved usernames reject the configuration without
 including credential values in errors.
 
-The collector reads the file on each collection cycle. Replace the complete
-file atomically, including when rotating a Kubernetes Secret. NICo reloads the
+The collector reads the file on each collection cycle. During attestation, a BMC
+`401 Unauthorized` also triggers one credential reload and request retry per
+target, using its existing profile and MAC override. Target configuration stays
+fixed until the next cycle. Replace the complete file atomically, including
+when rotating a Kubernetes Secret. NICo reloads the
 same file through its cached reader and refreshes consumers after authentication
 failures. Use an absolute path for both processes; relative collector paths are
 resolved from the directory containing its TOML file.
