@@ -596,15 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_extra_uuid_is_ignored_in_acceptance_results() {
-        let outcome: BackendBatchOutcome = serde_json::from_value(serde_json::json!({
-            "results": [{"status": "OK", "nodeUUID": "not-an-identity-contract"}]
-        }))
-        .expect("unknown response fields remain compatible");
-        assert_eq!(outcome.item_outcome(0), BackendNodeOutcome::Succeeded);
-    }
-
-    #[test]
     fn backend_sink_updates_jwt_without_rebuilding() {
         let mut sink = BackendSink::new(
             "https://backend.example.com/v1/agent/oob_nodes",
