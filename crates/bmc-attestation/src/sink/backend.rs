@@ -14,16 +14,72 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+use bmc_error::SanitizedErrorMessage;
 use serde::Deserialize;
 use url::Url;
 
 use crate::models::BatchAttestation;
 
 const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
+
+#[derive(Deserialize)]
+struct BatchResponse {
+    results: Vec<BatchItemResult>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchItemResult {
+    bmc_mac: Option<String>,
+    status: String,
+}
+
+impl BatchResponse {
+    /// Results are keyed by MAC and may arrive in any order. HTTP success is
+    /// insufficient: every submitted source must have exactly one accepted row.
+    fn validate(self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>> {
+        let mut seen = BTreeSet::new();
+        let mut failures = Vec::new();
+        for item in self.results {
+            let Some(mac) = item.bmc_mac else {
+                failures.push("result missing BMC MAC".to_string());
+                continue;
+            };
+            if !batch.results_by_bmc_mac.contains_key(&mac) {
+                // Do not echo arbitrary backend-provided identifiers or messages.
+                failures.push("result for an unexpected BMC MAC".to_string());
+                continue;
+            }
+            if !seen.insert(mac.clone()) {
+                failures.push(format!("duplicate result for BMC {mac}"));
+                continue;
+            }
+            if !item.status.eq_ignore_ascii_case("OK") {
+                failures.push(format!("BMC {mac} rejected with status {:?}", item.status));
+            }
+        }
+        for mac in batch.results_by_bmc_mac.keys() {
+            if !seen.contains(mac) {
+                failures.push(format!("missing result for BMC {mac}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(SanitizedErrorMessage::new(format!(
+                "attestation batch export failed: {}",
+                failures.join("; ")
+            ))
+            .to_string()
+            .into())
+        }
+    }
+}
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -247,7 +303,7 @@ impl BackendClient for HttpBackendClient {
                 request_id,
             )));
         }
-        Ok(())
+        response.json::<BatchResponse>().await?.validate(batch)
     }
 }
 
@@ -321,6 +377,10 @@ impl fmt::Display for BackendHttpError {
 }
 
 impl Error for BackendHttpError {}
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod upload_tests;
 
 #[cfg(test)]
 mod tests {

@@ -26,4 +26,11 @@ tests/
 
 `shutdown.rs` runs collector child processes against localhost fixtures to
 verify SIGINT/SIGTERM handling during enrollment, Redfish collection, and an
-in-flight backend upload. It never contacts real BMCs or customer backends.
+in-flight backend upload. It also checks that inventory and attestation share
+one target/credential snapshot, that unresolved inventory does not gate
+attestation, and that inventory-phase errors do not skip attestation attempts.
+It never contacts real BMCs or customer backends.
+
+`crates/bmc-attestation/src/sink/backend_tests.rs` covers per-MAC response
+validation and exercises HTTP uploads against a localhost backend fixture,
+including partial rejection, malformed responses, and typed JWT rejection.

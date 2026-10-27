@@ -30,7 +30,10 @@ the Redfish ComputerSystem resource.
 All observations, including collection failures, are sent to the backend.
 Batch results correspond to submitted observations by position. The backend
 resolves node identity and returns `nodeUUID` for resolved observations.
-Attestation runs only for accepted observations with a valid returned node UUID.
+Attestation addresses configured BMCs by MAC independently of the returned node
+UUID or the current inventory upload outcome. The backend requires an active
+OOB source registered through inventory, which may come from an earlier cycle.
+Unknown or deleted sources cannot request nonces or persist attestation results.
 
 ## Partial Collection
 

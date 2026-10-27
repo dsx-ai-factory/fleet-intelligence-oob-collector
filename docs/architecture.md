@@ -52,11 +52,19 @@ end of the collection cycle. The current worker flushes when the batch reaches
 the configured target concurrency or after 30 seconds, and the channel holds
 at most twice that concurrency. Backend item results are matched to submitted
 observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
-runs for configured BMC targets after inventory synchronization. After
-concurrent nonce and evidence collection completes, attestation results are
+runs for configured BMC targets after the inventory phase, even if that phase
+fails. The backend requires an active OOB source registered through inventory,
+including sources registered in an earlier cycle; a resolved node UUID is not
+required. Backend verification also uses inventory-derived model and firmware
+metadata. After concurrent nonce and evidence collection completes, results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
-whole-collection authentication retry remain deterministic.
+whole-collection authentication retry remain deterministic. Upload responses
+are matched by BMC MAC, independently of response order. An HTTP success is
+accepted only when every submitted MAC has exactly one result with status `OK`;
+rejected, missing, duplicate, unexpected, or malformed results fail that
+mini-batch. Other mini-batches still run unless shutdown is requested or
+re-enrollment fails. Accepted items are not retried because another item fails.
 
 ## Collection lifecycle
 
@@ -71,9 +79,12 @@ causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by
 missing customer context; a trusted edge must inject that context before
 requests reach the agent API.
 
-The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
-set at the start of each cycle. Mounted target configuration and JSON
-credential updates are read on the next cycle.
+The collector loads one resolved target and credential snapshot per cycle and
+synchronizes the dispatcher's BMC endpoint set before starting collection.
+Inventory and attestation use that same snapshot. Startup validation supplies
+the first snapshot; subsequent cycles reload the TOML and JSON credential files.
+Updates during a cycle take effect on the next cycle. Invalid configuration
+skips the cycle without collecting against a stale target set.
 
 The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
 and sleep. Shutdown cancels Redfish collection and closes the inventory
