@@ -81,8 +81,7 @@ For the broader Fleet Intelligence platform documentation, see [docs.nvidia.com/
 
 Component-specific details are available in the
 [inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md),
-[Helm chart reference](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
-and [local observability guide](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/dev/local-observability/README.md).
+and [Helm chart reference](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
 
 ## Contributing
 
