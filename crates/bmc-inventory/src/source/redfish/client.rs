@@ -125,7 +125,10 @@ impl RedfishSource {
         let bmc = Arc::new(HttpBmc::new(
             DispatchingHttpClient::new(self.client.clone(), gate),
             url,
-            BmcCredentials::new(target.username.clone(), target.password.clone()),
+            BmcCredentials::new(
+                target.username.clone(),
+                target.password.expose_secret().to_string(),
+            ),
             CacheSettings::with_capacity(32),
         ));
         Ok((ServiceRoot::new(bmc.clone()).await?, bmc))
@@ -200,7 +203,7 @@ mod tests {
             address: format!("127.0.0.1:{port}"),
             credentials_profile: None,
             username: "user".to_string(),
-            password: "password".to_string(),
+            password: "password".into(),
             labels: Default::default(),
         };
 
@@ -226,7 +229,7 @@ mod tests {
             address: "10.0.0.1".to_string(),
             credentials_profile: None,
             username: "user".to_string(),
-            password: "password".to_string(),
+            password: "password".into(),
             labels: Default::default(),
         };
 

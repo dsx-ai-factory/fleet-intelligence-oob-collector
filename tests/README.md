@@ -26,4 +26,12 @@ tests/
 
 `shutdown.rs` runs collector child processes against localhost fixtures to
 verify SIGINT/SIGTERM handling during enrollment, Redfish collection, and an
-in-flight backend upload. It never contacts real BMCs or customer backends.
+in-flight backend upload. It also exercises a complete backend cycle with one
+HTTP 401, re-enrollment, refreshed inventory timestamps, UUID-free acceptance,
+and JWT rotation from the nonce response. It never contacts real BMCs or
+customer backends.
+
+`cli.rs` checks that help output does not reveal the bootstrap token's
+environment value. `bmc-backend` unit tests cover URL validation, explicit
+path/redirect policies, request headers, enrollment parsing, typed HTTP errors,
+and credential redaction. Its HTTP tests run only against localhost fixtures.

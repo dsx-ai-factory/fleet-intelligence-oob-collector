@@ -16,6 +16,8 @@
 
 use std::time::Duration;
 
+use bmc_backend::SecretString;
+
 #[path = "default.rs"]
 pub mod defaults;
 
@@ -39,11 +41,29 @@ pub struct Target {
     pub bmc_mac: String,
     pub address: String,
     pub username: String,
-    pub password: String,
+    pub password: SecretString,
 }
 
 impl Default for AttestationConfig {
     fn default() -> Self {
         defaults::attestation_config()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_debug_redacts_passwords_after_cloning() {
+        let target = Target {
+            name: "bmc-1".into(),
+            bmc_mac: "00:11:22:33:44:55".into(),
+            address: "192.0.2.1".into(),
+            username: "example-user".into(),
+            password: "example-private-password".into(),
+        };
+        assert!(!format!("{:?}", target.clone()).contains("example-private-password"));
+        assert_eq!(target.password.expose_secret(), "example-private-password");
     }
 }

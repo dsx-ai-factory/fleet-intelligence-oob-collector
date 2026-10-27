@@ -15,18 +15,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::error::Error;
-use std::fmt;
 use std::time::Duration;
 
+pub use bmc_backend::{BackendHttpError, DEFAULT_BACKEND_TIMEOUT_SECONDS};
+use bmc_backend::{
+    BackendUrl, RedirectPolicy, SecretString, ensure_success, http_client,
+    request as backend_request,
+};
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
+use url::Url;
 
 use crate::COLLECTOR_VERSION;
 use crate::models::NodeInventory;
-
-pub const DEFAULT_BACKEND_TIMEOUT_SECONDS: u64 = 30;
-pub const DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS: u64 = 10;
-const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,8 +127,8 @@ pub trait BackendClient {
 
 #[derive(Clone)]
 pub struct HttpBackendClient {
-    endpoint: String,
-    jwt: String,
+    endpoint: Url,
+    jwt: SecretString,
     client: reqwest::Client,
     collector_config: CollectorConfig,
 }
@@ -156,9 +157,9 @@ impl HttpBackendClient {
             return Err("backend request timeout must be greater than zero".into());
         }
         Ok(Self {
-            endpoint: endpoint.into(),
-            jwt: jwt.into(),
-            client: backend_http_client(request_timeout)?,
+            endpoint: BackendUrl::parse(&endpoint.into())?.as_url().clone(),
+            jwt: SecretString::from(jwt.into()),
+            client: http_client(request_timeout, RedirectPolicy::Default)?,
             collector_config: config,
         })
     }
@@ -177,69 +178,15 @@ impl HttpBackendClient {
         agent_token: &str,
         request_timeout: Duration,
     ) -> Result<String, Box<dyn Error>> {
-        if agent_token.trim().is_empty() {
-            return Err("agent token cannot be empty".into());
-        }
-        if request_timeout.is_zero() {
-            return Err("backend request timeout must be greater than zero".into());
-        }
-
-        let client = backend_http_client(request_timeout)?;
-        let response = backend_request(&client, reqwest::Method::POST, endpoint)
-            .bearer_auth(agent_token)
-            .send()
-            .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let server = response_header(&response, reqwest::header::SERVER.as_str());
-            let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::with_metadata(
-                status.as_u16(),
-                body,
-                server,
-                request_id,
-            )));
-        }
-        let response: EnrollResponse = response.json().await?;
-
-        if response.jwt_assertion.trim().is_empty() {
-            return Err("enrollment response missing jwtAssertion field".into());
-        }
-
-        Ok(response.jwt_assertion)
+        let endpoint = BackendUrl::parse(endpoint)?;
+        let client = http_client(request_timeout, RedirectPolicy::Default)?;
+        let jwt = bmc_backend::enroll(&client, endpoint.as_url(), agent_token).await?;
+        Ok(jwt.expose_secret().to_string())
     }
 
     fn set_jwt(&mut self, jwt: impl Into<String>) {
-        self.jwt = jwt.into();
+        self.jwt = SecretString::from(jwt.into());
     }
-}
-
-fn backend_http_client(request_timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .timeout(request_timeout)
-        .connect_timeout(
-            request_timeout.min(Duration::from_secs(DEFAULT_BACKEND_CONNECT_TIMEOUT_SECONDS)),
-        )
-        .build()
-}
-
-fn backend_request(
-    client: &reqwest::Client,
-    method: reqwest::Method,
-    endpoint: &str,
-) -> reqwest::RequestBuilder {
-    client
-        .request(method, endpoint)
-        .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
-}
-
-fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
-    response
-        .headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
 }
 
 #[async_trait::async_trait(?Send)]
@@ -249,25 +196,14 @@ impl BackendClient for HttpBackendClient {
         inventories: &[NodeInventory],
     ) -> Result<BackendBatchOutcome, Box<dyn Error>> {
         let response = backend_request(&self.client, reqwest::Method::PUT, &self.endpoint)
-            .bearer_auth(&self.jwt)
+            .bearer_auth(self.jwt.expose_secret())
             .json(&build_batch_upsert_request(
                 inventories,
                 &self.collector_config,
             ))
             .send()
             .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let server = response_header(&response, reqwest::header::SERVER.as_str());
-            let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::with_metadata(
-                status.as_u16(),
-                body,
-                server,
-                request_id,
-            )));
-        }
+        let response = ensure_success(response).await?;
 
         let response: BatchUpsertResponse = response.json().await?;
         Ok(BackendBatchOutcome {
@@ -289,9 +225,7 @@ impl BackendBatchOutcome {
             return BackendNodeOutcome::Missing;
         };
         if result.status.eq_ignore_ascii_case("OK") {
-            BackendNodeOutcome::Succeeded {
-                node_uuid: result.node_uuid.as_deref(),
-            }
+            BackendNodeOutcome::Succeeded
         } else {
             BackendNodeOutcome::Rejected {
                 status: &result.status,
@@ -301,12 +235,10 @@ impl BackendBatchOutcome {
     }
 }
 
-/// Result for one submitted observation. An accepted observation may be unresolved.
+/// Acceptance result for one submitted observation, matched by input position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendNodeOutcome<'a> {
-    Succeeded {
-        node_uuid: Option<&'a str>,
-    },
+    Succeeded,
     Rejected {
         status: &'a str,
         message: Option<&'a str>,
@@ -331,73 +263,6 @@ fn build_batch_upsert_request<'a>(
         },
         data,
     }
-}
-
-#[derive(Debug)]
-pub struct BackendHttpError {
-    status: u16,
-    server: Option<String>,
-    request_id: Option<String>,
-    body: String,
-}
-
-impl BackendHttpError {
-    pub fn new(status: u16, body: impl Into<String>) -> Self {
-        Self::with_metadata(status, body, None, None)
-    }
-
-    fn with_metadata(
-        status: u16,
-        body: impl Into<String>,
-        server: Option<String>,
-        request_id: Option<String>,
-    ) -> Self {
-        let body = body.into();
-        let body = body
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect();
-        Self {
-            status,
-            server,
-            request_id,
-            body,
-        }
-    }
-
-    pub fn status(&self) -> u16 {
-        self.status
-    }
-}
-
-impl fmt::Display for BackendHttpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "backend request failed http_status={}", self.status)?;
-        if let Some(server) = &self.server {
-            write!(f, " server={server:?}")?;
-        }
-        if let Some(request_id) = &self.request_id {
-            write!(f, " request_id={request_id:?}")?;
-        }
-        if !self.body.trim().is_empty() {
-            write!(f, " response_body={:?}", self.body)?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for BackendHttpError {}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EnrollResponse {
-    jwt_assertion: String,
 }
 
 #[derive(serde::Serialize)]
@@ -478,8 +343,6 @@ type BatchUpsertResponse = BackendBatchOutcome;
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NodeUpsertResult {
-    #[serde(rename = "nodeUUID", alias = "nodeUuid")]
-    node_uuid: Option<String>,
     status: String,
     message: Option<String>,
 }
@@ -493,18 +356,18 @@ mod tests {
 
     #[test]
     fn backend_http_client_sets_user_agent() {
-        let client = backend_http_client(Duration::from_secs(1)).expect("client");
+        let client = http_client(Duration::from_secs(1), RedirectPolicy::Default).expect("client");
         let request = backend_request(
             &client,
             reqwest::Method::POST,
-            "https://backend.example.com",
+            &"https://backend.example.com".parse().unwrap(),
         )
         .build()
         .expect("request");
 
         assert_eq!(
             request.headers()[reqwest::header::USER_AGENT],
-            BACKEND_USER_AGENT
+            bmc_backend::BACKEND_USER_AGENT
         );
     }
 
@@ -700,24 +563,17 @@ mod tests {
         let outcome = BackendBatchOutcome {
             results: vec![
                 NodeUpsertResult {
-                    node_uuid: Some("node-1".to_string()),
                     status: "ok".to_string(),
                     message: None,
                 },
                 NodeUpsertResult {
-                    node_uuid: Some("node-2".to_string()),
                     status: "INVALID".to_string(),
                     message: Some("rejected".to_string()),
                 },
             ],
         };
 
-        assert_eq!(
-            outcome.item_outcome(0),
-            BackendNodeOutcome::Succeeded {
-                node_uuid: Some("node-1")
-            }
-        );
+        assert_eq!(outcome.item_outcome(0), BackendNodeOutcome::Succeeded);
         assert_eq!(
             outcome.item_outcome(1),
             BackendNodeOutcome::Rejected {
@@ -729,37 +585,21 @@ mod tests {
     }
 
     #[test]
-    fn batch_response_deserializes_backend_node_uuid_spelling() {
-        let response: BatchUpsertResponse = serde_json::from_value(serde_json::json!({
-            "results": [{
-                "message": "payload uuid missing",
-                "nodeUUID": "9aee71e4-6e80-11ee-a8ac-74d4dd550187",
-                "status": "OK"
-            }]
+    fn inventory_acknowledgement_accepts_placement_without_uuid() {
+        let outcome: BackendBatchOutcome = serde_json::from_value(serde_json::json!({
+            "results": [{"status": "OK", "computeZone": "zone-1", "nodeGroup": "group-1"}]
         }))
-        .expect("batch response");
-        let outcome = BackendBatchOutcome {
-            results: response.results,
-        };
-
-        assert_eq!(
-            outcome.item_outcome(0),
-            BackendNodeOutcome::Succeeded {
-                node_uuid: Some("9aee71e4-6e80-11ee-a8ac-74d4dd550187")
-            }
-        );
+        .expect("current backend acknowledgement");
+        assert_eq!(outcome.item_outcome(0), BackendNodeOutcome::Succeeded);
     }
 
     #[test]
-    fn accepted_observation_can_have_no_resolved_node() {
+    fn legacy_extra_uuid_is_ignored_in_acceptance_results() {
         let outcome: BackendBatchOutcome = serde_json::from_value(serde_json::json!({
-            "results": [{"status": "OK"}]
+            "results": [{"status": "OK", "nodeUUID": "not-an-identity-contract"}]
         }))
-        .expect("accepted unresolved observation");
-        assert_eq!(
-            outcome.item_outcome(0),
-            BackendNodeOutcome::Succeeded { node_uuid: None }
-        );
+        .expect("unknown response fields remain compatible");
+        assert_eq!(outcome.item_outcome(0), BackendNodeOutcome::Succeeded);
     }
 
     #[test]
@@ -773,7 +613,7 @@ mod tests {
 
         sink.set_jwt("new-jwt");
 
-        assert_eq!(sink.client.jwt, "new-jwt");
+        assert_eq!(sink.client.jwt.expose_secret(), "new-jwt");
     }
 
     #[tokio::test]
@@ -802,24 +642,6 @@ mod tests {
         assert!(err.to_string().contains("timeout"));
     }
 
-    #[test]
-    fn backend_error_includes_full_body_and_response_metadata() {
-        let body = "first line\nsecond line".to_string();
-        let error = BackendHttpError::with_metadata(
-            403,
-            body.clone(),
-            Some("awselb/2.0".to_string()),
-            Some("request-123".to_string()),
-        );
-        let message = error.to_string();
-
-        assert!(message.contains("http_status=403"));
-        assert!(message.contains("server=\"awselb/2.0\""));
-        assert!(message.contains("request_id=\"request-123\""));
-        assert!(message.contains("response_body=\"first line second line\""));
-        assert!(!message.contains('\n'));
-    }
-
     #[derive(Clone)]
     struct RecordingClient {
         put_batches: Rc<RefCell<Vec<Vec<String>>>>,
@@ -841,7 +663,6 @@ mod tests {
                 results: inventories
                     .iter()
                     .map(|_| NodeUpsertResult {
-                        node_uuid: Some("9aee71e4-6e80-11ee-a8ac-74d4dd550187".to_string()),
                         status: "OK".to_string(),
                         message: None,
                     })

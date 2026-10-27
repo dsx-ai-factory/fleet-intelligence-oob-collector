@@ -160,7 +160,7 @@ mod tests {
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "10.0.0.1".to_string(),
             username: "root".to_string(),
-            password: "secret".to_string(),
+            password: "secret".into(),
         }
     }
 }

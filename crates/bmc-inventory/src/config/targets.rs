@@ -20,6 +20,8 @@ use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+use bmc_backend::SecretString;
+
 use mac_address::MacAddress;
 use serde::Deserialize;
 
@@ -87,7 +89,7 @@ pub struct Target {
     pub address: String,
     pub credentials_profile: Option<String>,
     pub username: String,
-    pub password: String,
+    pub password: SecretString,
     pub labels: BTreeMap<String, String>,
 }
 
@@ -328,7 +330,7 @@ impl RawTargetConfig {
             address,
             credentials_profile: self.credentials_profile,
             username: credentials.username,
-            password: credentials.password,
+            password: credentials.password.into(),
             labels: self.labels,
         })
     }
@@ -782,7 +784,10 @@ mod tests {
         assert_eq!(config.targets[2].kind, TargetKind::PowerShelf);
         assert_eq!(config.targets[2].name.as_deref(), Some("power-shelf-01"));
         assert_eq!(config.targets[2].mac.to_string(), "02:00:0A:00:00:0C");
-        assert_eq!(config.targets[1].password, "replace-with-target-password");
+        assert_eq!(
+            config.targets[1].password.expose_secret(),
+            "replace-with-target-password"
+        );
         std::fs::remove_file(credentials).unwrap();
     }
 
@@ -944,7 +949,7 @@ mod tests {
             )
             .expect("shared JSON config");
             assert_eq!(config.targets[0].username, username);
-            assert_eq!(config.targets[0].password, password);
+            assert_eq!(config.targets[0].password.expose_secret(), password);
             assert!(!format!("{:?}", config.targets[0]).contains("individual"));
         }
         for (profile, expected) in [
@@ -1016,7 +1021,9 @@ mod tests {
             ),
         );
         assert_eq!(
-            load_config(config.to_str().unwrap()).unwrap().targets[0].password,
+            load_config(config.to_str().unwrap()).unwrap().targets[0]
+                .password
+                .expose_secret(),
             "first"
         );
         let replacement = path.with_extension("next");
@@ -1027,7 +1034,9 @@ mod tests {
         .unwrap();
         std::fs::rename(replacement, &path).unwrap();
         assert_eq!(
-            load_config(config.to_str().unwrap()).unwrap().targets[0].password,
+            load_config(config.to_str().unwrap()).unwrap().targets[0]
+                .password
+                .expose_secret(),
             "second"
         );
         std::fs::remove_file(config).unwrap();

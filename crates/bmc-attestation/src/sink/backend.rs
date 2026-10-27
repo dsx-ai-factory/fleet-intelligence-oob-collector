@@ -15,15 +15,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::error::Error;
-use std::fmt;
 use std::time::Duration;
 
+pub use bmc_backend::BackendHttpError;
+use bmc_backend::{
+    BackendUrl, PathMode, RedirectPolicy, SecretString, ensure_success, http_client,
+    request as backend_request,
+};
 use serde::Deserialize;
 use url::Url;
 
 use crate::models::BatchAttestation;
-
-const BACKEND_USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 pub struct BackendSink<C = HttpBackendClient> {
     client: C,
@@ -31,10 +33,10 @@ pub struct BackendSink<C = HttpBackendClient> {
 
 #[derive(Clone)]
 pub struct HttpBackendClient {
-    base_url: Url,
+    base_url: BackendUrl,
     nonce_path: String,
     attestation_path: String,
-    jwt: String,
+    jwt: SecretString,
     client: reqwest::Client,
 }
 
@@ -42,7 +44,7 @@ pub struct HttpBackendClient {
 #[serde(rename_all = "camelCase")]
 pub struct NonceResponse {
     pub nonce: String,
-    pub jwt_assertion: Option<String>,
+    pub jwt_assertion: Option<SecretString>,
     pub nonce_refresh_timestamp: Option<String>,
 }
 
@@ -109,34 +111,19 @@ impl HttpBackendClient {
                     .into(),
             );
         }
-        let base_url = base_url.as_ref().parse::<Url>()?;
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .connect_timeout(timeout.min(Duration::from_secs(10)))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+        let base_url = BackendUrl::parse(base_url.as_ref())?;
+        let client = http_client(timeout, RedirectPolicy::None)?;
         Ok(Self {
             base_url,
             nonce_path,
             attestation_path: attestation_path.into(),
-            jwt: jwt.into(),
+            jwt: SecretString::from(jwt.into()),
             client,
         })
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, Box<dyn Error>> {
-        let mut url = self.base_url.clone();
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|()| "backend base URL cannot be a base")?;
-        segments.clear();
-        for segment in path.trim_start_matches('/').split('/') {
-            if !segment.is_empty() {
-                segments.push(segment);
-            }
-        }
-        drop(segments);
-        Ok(url)
+        Ok(self.base_url.endpoint(path, PathMode::Replace))
     }
 
     fn nonce_endpoint(&self, bmc_mac: &str) -> Result<Url, Box<dyn Error>> {
@@ -145,47 +132,29 @@ impl HttpBackendClient {
         }
         self.endpoint(&self.nonce_path.replace("{bmc_mac}", bmc_mac))
     }
-
-    fn request(&self, method: reqwest::Method, endpoint: Url) -> reqwest::RequestBuilder {
-        self.client
-            .request(method, endpoint)
-            .header(reqwest::header::USER_AGENT, BACKEND_USER_AGENT)
-    }
 }
 
 #[async_trait::async_trait(?Send)]
 impl BackendClient for HttpBackendClient {
     fn jwt(&self) -> &str {
-        &self.jwt
+        self.jwt.expose_secret()
     }
 
     fn set_jwt(&mut self, jwt: String) {
-        self.jwt = jwt;
+        self.jwt = jwt.into();
     }
 
     async fn get_nonce(&mut self, bmc_mac: &str) -> Result<NonceResponse, Box<dyn Error>> {
-        if self.jwt.is_empty() {
+        if self.jwt.expose_secret().is_empty() {
             return Err("backend jwt cannot be empty".into());
         }
         let endpoint = self.nonce_endpoint(bmc_mac)?;
         tracing::debug!(%endpoint, bmc_mac, method = "POST", "requesting attestation nonce");
-        let response = self
-            .request(reqwest::Method::POST, endpoint)
-            .bearer_auth(&self.jwt)
+        let response = backend_request(&self.client, reqwest::Method::POST, &endpoint)
+            .bearer_auth(self.jwt.expose_secret())
             .send()
             .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let server = response_header(&response, reqwest::header::SERVER.as_str());
-            let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::with_metadata(
-                status.as_u16(),
-                body,
-                server,
-                request_id,
-            )));
-        }
+        let response = ensure_success(response).await?;
         let response = response.json::<NonceResponse>().await?;
         tracing::debug!(
             nonce_refresh_timestamp = response.nonce_refresh_timestamp.as_deref(),
@@ -196,8 +165,8 @@ impl BackendClient for HttpBackendClient {
             return Err("nonce response missing nonce".into());
         }
         if let Some(jwt) = &response.jwt_assertion
-            && !jwt.is_empty()
-            && jwt != &self.jwt
+            && !jwt.expose_secret().is_empty()
+            && jwt.expose_secret() != self.jwt.expose_secret()
         {
             self.jwt = jwt.clone();
         }
@@ -205,7 +174,7 @@ impl BackendClient for HttpBackendClient {
     }
 
     async fn submit_batch(&self, batch: &BatchAttestation) -> Result<(), Box<dyn Error>> {
-        if self.jwt.is_empty() {
+        if self.jwt.expose_secret().is_empty() {
             return Err("backend jwt cannot be empty".into());
         }
         let endpoint = self.endpoint(&self.attestation_path)?;
@@ -229,102 +198,32 @@ impl BackendClient for HttpBackendClient {
             evidence_count,
             "attestation request prepared"
         );
-        let response = self
-            .request(reqwest::Method::POST, endpoint)
-            .bearer_auth(&self.jwt)
+        let response = backend_request(&self.client, reqwest::Method::POST, &endpoint)
+            .bearer_auth(self.jwt.expose_secret())
             .json(&request)
             .send()
             .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let server = response_header(&response, reqwest::header::SERVER.as_str());
-            let request_id = response_header(&response, "x-request-id");
-            let body = response.text().await.unwrap_or_default();
-            return Err(Box::new(BackendHttpError::with_metadata(
-                status.as_u16(),
-                body,
-                server,
-                request_id,
-            )));
-        }
+        ensure_success(response).await?;
         Ok(())
     }
 }
-
-fn response_header(response: &reqwest::Response, name: &str) -> Option<String> {
-    response
-        .headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-}
-
-/// A non-success HTTP response from the attestation backend, preserving the
-/// status code so callers can distinguish JWT rejections and re-enroll.
-#[derive(Debug)]
-pub struct BackendHttpError {
-    status: u16,
-    server: Option<String>,
-    request_id: Option<String>,
-    body: String,
-}
-
-impl BackendHttpError {
-    pub fn new(status: u16, body: impl Into<String>) -> Self {
-        Self::with_metadata(status, body, None, None)
-    }
-
-    fn with_metadata(
-        status: u16,
-        body: impl Into<String>,
-        server: Option<String>,
-        request_id: Option<String>,
-    ) -> Self {
-        let body = body.into();
-        let body = body
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect();
-        Self {
-            status,
-            server,
-            request_id,
-            body,
-        }
-    }
-
-    pub fn status(&self) -> u16 {
-        self.status
-    }
-}
-
-impl fmt::Display for BackendHttpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "backend request failed http_status={}", self.status)?;
-        if let Some(server) = &self.server {
-            write!(f, " server={server:?}")?;
-        }
-        if let Some(request_id) = &self.request_id {
-            write!(f, " request_id={request_id:?}")?;
-        }
-        if !self.body.trim().is_empty() {
-            write!(f, " response_body={:?}", self.body)?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for BackendHttpError {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonce_response_debug_redacts_rotated_jwt() {
+        let response: NonceResponse = serde_json::from_str(
+            r#"{"nonce":"example-nonce","jwtAssertion":"example-private-jwt"}"#,
+        )
+        .unwrap();
+        assert!(!format!("{response:?}").contains("example-private-jwt"));
+        assert_eq!(
+            response.jwt_assertion.unwrap().expose_secret(),
+            "example-private-jwt"
+        );
+    }
 
     #[test]
     fn backend_http_client_sets_user_agent() {
@@ -336,19 +235,19 @@ mod tests {
             Duration::from_secs(1),
         )
         .expect("client");
-        let request = client
-            .request(
-                reqwest::Method::POST,
-                "https://backend.example.com/v1/oob/attestations"
-                    .parse()
-                    .expect("endpoint"),
-            )
-            .build()
-            .expect("request");
+        let request = backend_request(
+            &client.client,
+            reqwest::Method::POST,
+            &"https://backend.example.com/v1/oob/attestations"
+                .parse()
+                .expect("endpoint"),
+        )
+        .build()
+        .expect("request");
 
         assert_eq!(
             request.headers()[reqwest::header::USER_AGENT],
-            BACKEND_USER_AGENT
+            bmc_backend::BACKEND_USER_AGENT
         );
     }
 
@@ -408,23 +307,5 @@ mod tests {
             error.to_string(),
             "legacy nonce path template `{node_uuid}` is no longer supported; replace it with `{bmc_mac}`"
         );
-    }
-
-    #[test]
-    fn backend_error_includes_full_body_and_response_metadata() {
-        let body = "first line\nsecond line".to_string();
-        let error = BackendHttpError::with_metadata(
-            403,
-            body.clone(),
-            Some("awselb/2.0".to_string()),
-            Some("request-123".to_string()),
-        );
-        let message = error.to_string();
-
-        assert!(message.contains("http_status=403"));
-        assert!(message.contains("server=\"awselb/2.0\""));
-        assert!(message.contains("request_id=\"request-123\""));
-        assert!(message.contains("response_body=\"first line second line\""));
-        assert!(!message.contains('\n'));
     }
 }

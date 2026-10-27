@@ -129,10 +129,14 @@ async fn accept_request(listener: &TcpListener) -> (TcpStream, String) {
 }
 
 async fn reply(stream: &mut TcpStream, body: &str) {
+    reply_status(stream, 200, body).await;
+}
+
+async fn reply_status(stream: &mut TcpStream, status: u16, body: &str) {
     stream
         .write_all(
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             )
             .as_bytes(),
@@ -190,5 +194,82 @@ async fn sigterm_finishes_in_flight_inventory_upload_before_exiting() {
             .is_err()
     );
     reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    runtime.expect_clean_exit().await;
+}
+
+#[tokio::test]
+async fn shared_transport_recovers_jwt_and_accepts_inventory_without_uuid() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"first-jwt"}"#).await;
+    let (mut inventory, first_request) = accept_request(&backend).await;
+    assert!(first_request.starts_with("PUT /v1/agent/oob_nodes "));
+    assert!(
+        first_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer first-jwt")
+    );
+    reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
+
+    let (mut enrollment, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/enroll "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer example-token")
+    );
+    reply(&mut enrollment, r#"{"jwtAssertion":"second-jwt"}"#).await;
+    let (mut inventory, request) = accept_request(&backend).await;
+    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer second-jwt")
+    );
+    // Every retry must carry the timestamp belonging to its refreshed session.
+    let enrolled_at = |request: &str| {
+        request
+            .split_once("\"enrolledAt\":\"")
+            .unwrap()
+            .1
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert_ne!(enrolled_at(&first_request), enrolled_at(&request));
+    reply(
+        &mut inventory,
+        r#"{"results":[{"status":"OK","computeZone":"example-zone"}]}"#,
+    )
+    .await;
+
+    let (mut nonce, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/oob_nodes/02:00:00:00:00:01/nonce "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer second-jwt")
+    );
+    reply(&mut nonce, r#"{"nonce":"example-nonce","jwtAssertion":"rotated-jwt","nonceRefreshTimestamp":"2026-01-01T00:00:00Z"}"#).await;
+    let (mut upload, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer rotated-jwt")
+    );
+    assert!(request.contains("02:00:00:00:00:01"));
+    reply(
+        &mut upload,
+        r#"{"results":[{"bmcMac":"02:00:00:00:00:01","status":"OK"}]}"#,
+    )
+    .await;
+    runtime.signal("-TERM").await;
     runtime.expect_clean_exit().await;
 }

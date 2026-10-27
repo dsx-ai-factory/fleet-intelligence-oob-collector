@@ -216,6 +216,12 @@ backend support before rolling out collectors that use the `collector` envelope.
 
 ## Proxy and TLS
 
+Use an absolute API origin, such as `https://api.example.com`, for
+`FLEETINT_BACKEND_URL` or `--backend-url`, without a `/v1/agent` endpoint suffix.
+Backend URLs cannot contain embedded credentials, query parameters, or fragments.
+Supply the bootstrap token through `FLEETINT_AGENT_TOKEN`; authentication is
+independent of the URL.
+
 Enable `proxy` with a cluster-reachable URL without credentials.
 `bmcCollector.redfish.insecureTls` disables BMC certificate verification and
 permits interception. It does not affect backend TLS or NICo; the pinned NICo

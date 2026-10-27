@@ -8,6 +8,7 @@ models and backend transport.
 | Component | Responsibility |
 | --- | --- |
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
+| `bmc-backend` | Backend URL validation, HTTP policy, enrollment transport, typed HTTP errors, and redacted credential text |
 | `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
 | `bmc-inventory` | Redfish inventory collection, mapping, and output |
 | `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
@@ -57,6 +58,33 @@ concurrent nonce and evidence collection completes, attestation results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
 whole-collection authentication retry remain deterministic.
+
+Inventory acknowledgements contain per-item status and optional placement,
+without a node UUID. Runtime upload summaries count accepted and failed
+observations directly. UUID fields in inventory resources remain part of the
+collected model and are independent of upload acknowledgement handling.
+
+### Backend transport and credential handling
+
+Enrollment, inventory uploads, nonce requests, and attestation uploads use the
+shared `bmc-backend` transport helpers. The session owns enrollment credentials,
+the current JWT, and its enrollment HTTP client; re-enrollment reuses that
+client. Each sink retains its payload mapping and response semantics.
+Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error
+message containing `401` does not trigger re-enrollment.
+
+Request timeouts and the 10-second maximum connect timeout retain their
+existing behavior. Enrollment and inventory retain the default redirect policy;
+nonce and attestation uploads do not follow redirects. URL path modes are
+explicit: runtime enrollment/inventory paths extend the configured base path,
+while attestation's configured paths replace it. Deployments should use an API
+origin as their backend base URL so all flows address the same API root.
+
+Passwords, bootstrap tokens, stored JWTs, and rotated JWT responses use shared
+credential text with redacted `Debug` output. CLI help displays the bootstrap
+token environment-variable name without its value. Credential access is explicit
+at request construction; the wrapper does not implement general serialization
+or display and does not promise memory zeroization.
 
 ## Collection lifecycle
 

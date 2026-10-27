@@ -20,6 +20,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+use bmc_backend::SecretString;
 use bmc_inventory::config::{self, NicoConfigOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
@@ -95,8 +96,8 @@ struct RuntimeArgs {
     #[arg(long, env = "FLEETINT_BACKEND_URL")]
     backend_url: Option<String>,
 
-    #[arg(long, env = "FLEETINT_AGENT_TOKEN")]
-    agent_token: Option<String>,
+    #[arg(long, env = "FLEETINT_AGENT_TOKEN", hide_env_values = true)]
+    agent_token: Option<SecretString>,
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]
     interval_seconds: u64,
@@ -207,4 +208,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_debug_redacts_explicit_agent_token() {
+        let cli = Cli::try_parse_from([
+            "bmc-collector",
+            "run",
+            "--agent-token",
+            "example-private-token",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(debug.contains("REDACTED"));
+        assert!(!debug.contains("example-private-token"));
+    }
 }

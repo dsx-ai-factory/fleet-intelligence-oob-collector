@@ -23,13 +23,16 @@
 
 use std::error::Error;
 
+use bmc_backend::is_auth_failure;
 use bmc_dispatch::Dispatcher;
 use futures::stream::{self, StreamExt};
 
 use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
 use crate::models::{BatchAttestation, NodeAttestation};
-use crate::sink::{BackendClient, BackendHttpError, HttpBackendClient};
+#[cfg(test)]
+use crate::sink::BackendHttpError;
+use crate::sink::{BackendClient, HttpBackendClient};
 use crate::source::{MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339};
 
 /// Result of running the attestation pipeline over a batch of targets.
@@ -39,14 +42,6 @@ pub struct CollectionOutcome {
     /// A rotated agent token, if the backend issued one on a nonce response, so the
     /// caller can refresh its session and authenticate the upload with it.
     pub refreshed_jwt: Option<String>,
-}
-
-/// Whether a backend error is a JWT rejection, signalling that the agent must
-/// re-enroll rather than record per-target failures with a dead token. A generic
-/// 403 may come from an ingress or WAF and is not sufficient evidence by itself.
-fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
-    err.downcast_ref::<BackendHttpError>()
-        .is_some_and(|err| err.status() == 401)
 }
 
 /// Collect attestation evidence for every target concurrently.
@@ -149,7 +144,8 @@ pub async fn collect(
                 let refreshed_jwt = nonce
                     .jwt_assertion
                     .clone()
-                    .filter(|token| !token.is_empty());
+                    .filter(|token| !token.expose_secret().is_empty())
+                    .map(|token| token.expose_secret().to_string());
                 let record = source
                     .collect(
                         target,
@@ -226,7 +222,7 @@ mod tests {
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: "secret".into(),
         };
 
         let outcome = collect(

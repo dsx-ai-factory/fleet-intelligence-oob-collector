@@ -364,7 +364,7 @@ impl RedfishAttestationSource {
             .execute(async {
                 self.client
                     .get(url)
-                    .basic_auth(&target.username, Some(&target.password))
+                    .basic_auth(&target.username, Some(target.password.expose_secret()))
                     .send()
                     .await?
                     .error_for_status()?
@@ -387,7 +387,7 @@ impl RedfishAttestationSource {
             .execute(async {
                 self.client
                     .post(url)
-                    .basic_auth(&target.username, Some(&target.password))
+                    .basic_auth(&target.username, Some(target.password.expose_secret()))
                     .json(body)
                     .send()
                     .await?
@@ -700,7 +700,7 @@ mod tests {
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: "secret".into(),
         };
         let base_url = Url::parse("https://192.0.2.1").expect("base URL");
         let started_at = std::time::Instant::now();
