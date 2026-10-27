@@ -75,6 +75,7 @@ impl Runtime {
             )
             .env("FLEETINT_AGENT_TOKEN", "example-token")
             .env("NO_PROXY", "*")
+            .env("NO_COLOR", "1")
             .env("RUST_LOG", "info")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
