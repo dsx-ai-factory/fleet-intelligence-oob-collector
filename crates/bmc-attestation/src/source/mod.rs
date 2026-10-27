@@ -123,28 +123,36 @@ impl BmcSession<'_> {
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T, Box<dyn Error>> {
         loop {
+            let credentials = bmc_dispatch::BmcCredentials::new(
+                self.target.username.clone(),
+                self.target.password.clone(),
+            );
             let result = self
                 .gate
-                .execute(async {
-                    request()
-                        .basic_auth(&self.target.username, Some(&self.target.password))
-                        .send()
-                        .await?
-                        .error_for_status()?
-                        .json::<T>()
-                        .await
-                })
+                .execute_classified(
+                    &credentials,
+                    async {
+                        request()
+                            .basic_auth(&self.target.username, Some(&self.target.password))
+                            .send()
+                            .await?
+                            .error_for_status()?
+                            .json::<T>()
+                            .await
+                    },
+                    is_credential_rejection,
+                )
                 .await;
             match result {
                 Ok(value) => return Ok(value),
                 Err(bmc_dispatch::DispatchError::Transport(err))
-                    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED)
-                        && !self.credentials_reloaded => {}
+                    if is_credential_rejection(&err) && !self.credentials_reloaded => {}
                 Err(err) => return Err(err.into()),
             }
             self.credentials_reloaded = true;
             // Only credentials can change here. Retry this request with the same
             // nonce, retaining measurements already collected for other components.
+            // Unchanged credentials stay rejected, so the retry fails locally.
             let (username, password) = (self.reload_credentials)(&self.target)
                 .map_err(|_| "failed to reload BMC credentials")?;
             self.target.username = username;
@@ -396,6 +404,11 @@ impl RedfishAttestationSource {
             .request_json(|| self.client.post(url.clone()).json(body))
             .await
     }
+}
+
+/// Only a 401 rejects the credentials; a 403 forbids one resource.
+fn is_credential_rejection(error: &reqwest::Error) -> bool {
+    error.status() == Some(reqwest::StatusCode::UNAUTHORIZED)
 }
 
 #[derive(Debug, Deserialize)]
@@ -804,9 +817,15 @@ mod tests {
     async fn auth_retry_is_bounded_and_credential_reload_errors_are_safe() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::AsyncWriteExt;
-        for (status, reload_fails, requests, reloads) in
-            [(401, false, 2, 1), (403, false, 1, 0), (401, true, 1, 1)]
-        {
+        // `reloaded` is the reloaded credentials, or `None` when reloading fails.
+        // Reloaded credentials equal to the rejected ones are not sent again,
+        // and a 401 stops inventory from sending the rejected credentials.
+        for (status, reloaded, requests, reloads) in [
+            (401, Some(("rotated", "new")), 2, 1),
+            (401, Some(("user", "old")), 1, 1),
+            (403, Some(("rotated", "new")), 1, 0),
+            (401, None, 1, 1),
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move {
@@ -830,11 +849,9 @@ mod tests {
             let count = AtomicUsize::new(0);
             let reload = |_: &crate::config::Target| {
                 count.fetch_add(1, Ordering::Relaxed);
-                if reload_fails {
-                    Err("private-credential-detail".into())
-                } else {
-                    Ok(("rotated".into(), "new".into()))
-                }
+                reloaded
+                    .map(|(username, password)| (username.into(), password.into()))
+                    .ok_or_else(|| "private-credential-detail".into())
             };
             let mut session = BmcSession {
                 target: crate::config::Target {
@@ -863,6 +880,23 @@ mod tests {
                 .unwrap_err();
             assert!(!error.to_string().contains("private-credential-detail"));
             assert_eq!(count.load(Ordering::Relaxed), reloads);
+            let inventory = dispatcher
+                .inventory_gate("bmc-1")
+                .unwrap()
+                .execute_classified(
+                    &bmc_dispatch::BmcCredentials::new("user".into(), "old".into()),
+                    async { Ok::<_, Infallible>(()) },
+                    |_| false,
+                )
+                .await;
+            assert_eq!(
+                matches!(
+                    inventory,
+                    Err(bmc_dispatch::DispatchError::CredentialsRejected)
+                ),
+                status == 401,
+                "{status}"
+            );
             tokio::time::timeout(Duration::from_secs(3), server)
                 .await
                 .unwrap()

@@ -21,14 +21,16 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
+use std::hash::BuildHasher;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use http::HeaderMap;
+/// Credentials whose rejection [`RequestGate::execute_classified`] records.
+pub use nv_redfish::bmc_http::BmcCredentials;
 use nv_redfish::bmc_http::{
-    BmcCredentials, CacheableError, HttpClient, MultipartUpdateRequest, RejectedUriReferenceError,
-    RequestError,
+    CacheableError, HttpClient, MultipartUpdateRequest, RejectedUriReferenceError, RequestError,
 };
 use nv_redfish::core::{
     BmcError, BmcErrorClass, BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse,
@@ -190,18 +192,14 @@ impl Dispatcher {
         let gates = pending_gates
             .into_iter()
             .map(|(id, (inventory, attestation))| {
-                let make_gate = |queue| RequestGate {
-                    queue,
-                    capacity: endpoint_config.queue_capacity,
-                    lifecycle: Arc::clone(&lifecycle),
-                };
-                (
-                    id,
-                    EndpointGates {
-                        inventory: make_gate(inventory),
-                        attestation: make_gate(attestation),
-                    },
-                )
+                let gates = EndpointGates::new(
+                    &id,
+                    inventory,
+                    attestation,
+                    endpoint_config.queue_capacity,
+                    &lifecycle,
+                );
+                (id, gates)
             })
             .collect();
 
@@ -296,27 +294,108 @@ impl Dispatcher {
             registry.gates.remove(&id);
         }
         for (id, child_id, inventory, attestation) in changes {
-            let make_gate = |queue| RequestGate {
-                queue,
-                capacity: self.endpoint_config.queue_capacity,
-                lifecycle: Arc::clone(&self.lifecycle),
-            };
-            registry.child_ids.insert(id.clone(), child_id);
-            registry.gates.insert(
-                id,
-                EndpointGates {
-                    inventory: make_gate(inventory),
-                    attestation: make_gate(attestation),
-                },
+            let gates = EndpointGates::new(
+                &id,
+                inventory,
+                attestation,
+                self.endpoint_config.queue_capacity,
+                &self.lifecycle,
             );
+            registry.child_ids.insert(id.clone(), child_id);
+            registry.gates.insert(id, gates);
         }
         Ok(())
+    }
+
+    /// Let every endpoint try its credentials again.
+    ///
+    /// Call this once at the start of each collection cycle. Credentials are
+    /// reloaded per cycle, so each cycle costs a BMC with rejected credentials
+    /// at most one failed login per in-flight slot.
+    pub fn clear_credential_rejections(&self) {
+        let Ok(registry) = self.registry.lock() else {
+            return;
+        };
+        for gates in registry.gates.values() {
+            gates.credentials.clear();
+        }
     }
 }
 
 struct EndpointGates {
     inventory: RequestGate,
     attestation: RequestGate,
+    credentials: Arc<CredentialLatch>,
+}
+
+impl EndpointGates {
+    fn new(
+        endpoint_id: &str,
+        inventory: Queue,
+        attestation: Queue,
+        capacity: usize,
+        lifecycle: &Arc<DispatcherLifecycle>,
+    ) -> Self {
+        let credentials = Arc::new(CredentialLatch {
+            endpoint_id: endpoint_id.to_string(),
+            hasher: std::hash::RandomState::new(),
+            rejected: Mutex::new(HashSet::new()),
+        });
+        let make_gate = |queue| RequestGate {
+            queue,
+            capacity,
+            lifecycle: Arc::clone(lifecycle),
+            credentials: Arc::clone(&credentials),
+        };
+        Self {
+            inventory: make_gate(inventory),
+            attestation: make_gate(attestation),
+            credentials,
+        }
+    }
+}
+
+/// Records that a BMC rejected the collector's credentials.
+///
+/// Every request with rejected credentials is a failed login, and BMCs lock the
+/// account after a few of them, which also locks out other clients sharing it.
+/// Once set, requests to that BMC with the rejected credentials fail locally
+/// until the next cycle; requests with reloaded credentials still try them.
+/// All workflow gates of one endpoint share the latch.
+struct CredentialLatch {
+    endpoint_id: String,
+    hasher: std::hash::RandomState,
+    /// Fingerprints of rejected credentials, never the credentials themselves.
+    rejected: Mutex<HashSet<u64>>,
+}
+
+impl CredentialLatch {
+    fn rejects(&self, credentials: &BmcCredentials) -> bool {
+        let fingerprint = self.hasher.hash_one(credentials);
+        self.rejected
+            .lock()
+            .map_or(true, |rejected| rejected.contains(&fingerprint))
+    }
+
+    fn reject(&self, credentials: &BmcCredentials) {
+        let fingerprint = self.hasher.hash_one(credentials);
+        if self
+            .rejected
+            .lock()
+            .is_ok_and(|mut rejected| rejected.insert(fingerprint))
+        {
+            tracing::warn!(
+                endpoint = %self.endpoint_id,
+                "BMC rejected credentials; skipping its remaining requests with them until the next cycle"
+            );
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut rejected) = self.rejected.lock() {
+            rejected.clear();
+        }
+    }
 }
 
 /// Cloneable admission handle for one BMC workflow queue.
@@ -325,15 +404,49 @@ pub struct RequestGate {
     queue: Queue,
     capacity: usize,
     lifecycle: Arc<DispatcherLifecycle>,
+    credentials: Arc<CredentialLatch>,
 }
 
 impl RequestGate {
     /// Admit an operation, hold its concurrency slot until completion, and
     /// return the operation's original typed result.
+    ///
+    /// The credential latch does not apply: use [`Self::execute_classified`]
+    /// for operations that authenticate.
     pub async fn execute<T, E>(
         &self,
         operation: impl Future<Output = Result<T, E>>,
     ) -> Result<T, DispatchError<E>> {
+        self.admit(operation, None, |_| false).await
+    }
+
+    /// [`Self::execute`] for an operation that authenticates with
+    /// `credentials`. When `rejects_credentials` classifies its error as a
+    /// credential rejection, later requests to this endpoint with the same
+    /// credentials fail locally until the next cycle.
+    ///
+    /// Classify only a 401: a 403 forbids one resource, not the credentials.
+    pub async fn execute_classified<T, E>(
+        &self,
+        credentials: &BmcCredentials,
+        operation: impl Future<Output = Result<T, E>>,
+        rejects_credentials: impl FnOnce(&E) -> bool,
+    ) -> Result<T, DispatchError<E>> {
+        self.admit(operation, Some(credentials), rejects_credentials)
+            .await
+    }
+
+    async fn admit<T, E>(
+        &self,
+        operation: impl Future<Output = Result<T, E>>,
+        credentials: Option<&BmcCredentials>,
+        rejects_credentials: impl FnOnce(&E) -> bool,
+    ) -> Result<T, DispatchError<E>> {
+        let rejected =
+            || credentials.is_some_and(|credentials| self.credentials.rejects(credentials));
+        if rejected() {
+            return Err(DispatchError::CredentialsRejected);
+        }
         let (started_tx, started_rx) = oneshot::channel();
         let (completed_tx, completed_rx) = oneshot::channel::<()>();
         let work: Work = Box::pin(async move {
@@ -354,10 +467,25 @@ impl RequestGate {
         let _ = self.lifecycle.handle.with_root_mut::<Root, _>(|_| ());
 
         started_rx.await.map_err(|_| DispatchError::Unavailable)?;
-        let result = operation.await.map_err(DispatchError::Transport);
+        // A request queued before another one was rejected must not reach the
+        // BMC; dropping `completed_tx` releases its slot.
+        if rejected() {
+            return Err(DispatchError::CredentialsRejected);
+        }
+        let result = operation.await;
+        if let (Err(error), Some(credentials)) = (&result, credentials)
+            && rejects_credentials(error)
+        {
+            self.credentials.reject(credentials);
+        }
         let _ = completed_tx.send(());
-        result
+        result.map_err(DispatchError::Transport)
     }
+}
+
+/// Whether an nv-redfish transport error is a credential rejection.
+fn is_credential_rejection<E: BmcError>(error: &E) -> bool {
+    error.error_class() == BmcErrorClass::HttpResponse { status: 401 }
 }
 
 fn build_endpoint(config: EndpointConfig) -> (Endpoint, Queue, Queue) {
@@ -393,6 +521,9 @@ pub enum DispatchError<E> {
     Unavailable,
     /// The MVP adapter does not support this streaming operation.
     Unsupported,
+    /// The BMC rejected the credentials earlier in this cycle, so the request
+    /// was not sent.
+    CredentialsRejected,
     /// The underlying HTTP client returned an error.
     Transport(E),
 }
@@ -403,6 +534,8 @@ impl<E: fmt::Display> fmt::Display for DispatchError<E> {
             Self::QueueFull => formatter.write_str("BMC dispatcher queue is full"),
             Self::Unavailable => formatter.write_str("BMC dispatcher is unavailable"),
             Self::Unsupported => formatter.write_str("BMC dispatcher does not support SSE streams"),
+            Self::CredentialsRejected => formatter
+                .write_str("BMC rejected credentials earlier in this cycle; request was not sent"),
             Self::Transport(error) => error.fmt(formatter),
         }
     }
@@ -412,7 +545,9 @@ impl<E: StdError + 'static> StdError for DispatchError<E> {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Transport(error) => Some(error),
-            Self::QueueFull | Self::Unavailable | Self::Unsupported => None,
+            Self::QueueFull | Self::Unavailable | Self::Unsupported | Self::CredentialsRejected => {
+                None
+            }
         }
     }
 }
@@ -425,6 +560,9 @@ impl<E: BmcError + 'static> BmcError for DispatchError<E> {
             // `Other` would let callers treat it as skippable resource data.
             Self::QueueFull | Self::Unavailable => BmcErrorClass::Transport,
             Self::Unsupported => BmcErrorClass::Other,
+            // Classify like the 401 that set the latch, so callers treat it as
+            // an authentication failure rather than missing resource data.
+            Self::CredentialsRejected => BmcErrorClass::HttpResponse { status: 401 },
         }
     }
 }
@@ -464,6 +602,20 @@ impl<C> DispatchingHttpClient<C> {
     }
 }
 
+impl<C: HttpClient> DispatchingHttpClient<C> {
+    /// A 401 to a request carrying `credentials` sets the endpoint's
+    /// credential latch for them.
+    async fn dispatch<T>(
+        &self,
+        credentials: Option<&BmcCredentials>,
+        request: impl Future<Output = Result<T, C::Error>>,
+    ) -> Result<T, DispatchError<C::Error>> {
+        self.gate
+            .admit(request, credentials, is_credential_rejection)
+            .await
+    }
+}
+
 impl<C: HttpClient> HttpClient for DispatchingHttpClient<C>
 where
     C::Error: Send + Sync + 'static,
@@ -480,9 +632,11 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(self.inner.get(url, credentials, etag, custom_headers))
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner.get(url, credentials, etag, custom_headers),
+        )
+        .await
     }
 
     async fn poll<T>(
@@ -494,9 +648,11 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(self.inner.poll(url, credentials, custom_headers))
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner.poll(url, credentials, custom_headers),
+        )
+        .await
     }
 
     async fn post<B, T>(
@@ -510,9 +666,11 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(self.inner.post(url, body, credentials, custom_headers))
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner.post(url, body, credentials, custom_headers),
+        )
+        .await
     }
 
     async fn post_session<B, T>(
@@ -525,8 +683,7 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(self.inner.post_session(url, body, custom_headers))
+        self.dispatch(None, self.inner.post_session(url, body, custom_headers))
             .await
     }
 
@@ -542,12 +699,12 @@ where
         T: DeserializeOwned + Send + Sync,
         V: Serialize + Send + Sync,
     {
-        self.gate
-            .execute(
-                self.inner
-                    .post_multipart_update(url, request, credentials, custom_headers),
-            )
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner
+                .post_multipart_update(url, request, credentials, custom_headers),
+        )
+        .await
     }
 
     async fn patch<B, T>(
@@ -562,12 +719,12 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(
-                self.inner
-                    .patch(url, etag, body, credentials, custom_headers),
-            )
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner
+                .patch(url, etag, body, credentials, custom_headers),
+        )
+        .await
     }
 
     async fn delete<T>(
@@ -579,9 +736,11 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
-        self.gate
-            .execute(self.inner.delete(url, credentials, custom_headers))
-            .await
+        self.dispatch(
+            Some(credentials),
+            self.inner.delete(url, credentials, custom_headers),
+        )
+        .await
     }
 
     async fn sse<T: Sized + for<'de> Deserialize<'de> + Send>(
@@ -630,6 +789,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use nv_redfish::bmc_http::BmcCredentials;
     use nv_redfish::core::{BmcError, BmcErrorClass};
 
     use super::{DispatchError, Dispatcher, DispatcherConfig};
@@ -662,6 +822,133 @@ mod tests {
         assert_eq!(Error::QueueFull.error_class(), BmcErrorClass::Transport);
         assert_eq!(Error::Unavailable.error_class(), BmcErrorClass::Transport);
         assert_eq!(Error::Unsupported.error_class(), BmcErrorClass::Other);
+        assert_eq!(
+            Error::CredentialsRejected.error_class(),
+            BmcErrorClass::HttpResponse { status: 401 },
+            "a skipped request reports the authentication failure that caused it"
+        );
+    }
+
+    #[derive(Debug)]
+    struct StatusResponse(u16);
+
+    impl std::fmt::Display for StatusResponse {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "HTTP {}", self.0)
+        }
+    }
+
+    impl std::error::Error for StatusResponse {}
+
+    impl BmcError for StatusResponse {
+        fn error_class(&self) -> BmcErrorClass {
+            BmcErrorClass::HttpResponse { status: self.0 }
+        }
+    }
+
+    #[test]
+    fn only_unauthorized_rejects_credentials() {
+        for (status, rejects) in [(401, true), (403, false), (500, false)] {
+            assert_eq!(
+                super::is_credential_rejection(&StatusResponse(status)),
+                rejects,
+                "HTTP {status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_rejection_stops_requests_with_those_credentials_until_cleared() {
+        let old = BmcCredentials::new("user".into(), "old".into());
+        let new = BmcCredentials::new("user".into(), "new".into());
+        let dispatcher = Dispatcher::start(config(), ["bmc-1".to_string(), "bmc-2".to_string()])
+            .expect("dispatcher");
+        let inventory = dispatcher.inventory_gate("bmc-1").expect("inventory gate");
+        let attestation = dispatcher
+            .attestation_gate("bmc-1")
+            .expect("attestation gate");
+        let sent = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let rejected_gate = inventory.clone();
+        let rejected = tokio::spawn(async move {
+            rejected_gate
+                .execute_classified(
+                    &BmcCredentials::new("user".into(), "old".into()),
+                    async move {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.await;
+                        Err::<(), _>(StatusResponse(401))
+                    },
+                    super::is_credential_rejection,
+                )
+                .await
+        });
+        started_rx.await.expect("rejected request started");
+
+        // Queued behind the 401 on the other workflow, before the latch is set.
+        let queued_sent = Arc::clone(&sent);
+        let queued_gate = attestation.clone();
+        let queued_credentials = old.clone();
+        let queued = tokio::spawn(async move {
+            queued_gate
+                .execute_classified(
+                    &queued_credentials,
+                    async move {
+                        queued_sent.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, Infallible>(())
+                    },
+                    |_| false,
+                )
+                .await
+        });
+        for _ in 0..100 {
+            if attestation.queue.lock().expect("queue").len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(attestation.queue.lock().expect("queue").len(), 1);
+
+        let _ = release_tx.send(());
+        assert!(matches!(
+            rejected.await.expect("task"),
+            Err(DispatchError::Transport(StatusResponse(401)))
+        ));
+        assert!(matches!(
+            queued.await.expect("task"),
+            Err(DispatchError::CredentialsRejected)
+        ));
+        let send = |credentials| {
+            inventory.execute_classified(
+                credentials,
+                async {
+                    sent.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, Infallible>(())
+                },
+                |_| false,
+            )
+        };
+        assert!(matches!(
+            send(&old).await,
+            Err(DispatchError::CredentialsRejected)
+        ));
+        assert_eq!(sent.load(Ordering::SeqCst), 0, "no request reached bmc-1");
+        send(&new).await.expect("reloaded credentials are tried");
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+
+        dispatcher
+            .inventory_gate("bmc-2")
+            .expect("other endpoint")
+            .execute(async { Ok::<_, Infallible>(()) })
+            .await
+            .expect("other endpoints are unaffected");
+
+        dispatcher.clear_credential_rejections();
+        send(&old)
+            .await
+            .expect("the next cycle tries the credentials again");
     }
 
     fn config() -> DispatcherConfig {

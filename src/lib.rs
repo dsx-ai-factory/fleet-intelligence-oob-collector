@@ -301,6 +301,8 @@ async fn run_collection_cycle(
         credentials_file,
     } = target_config;
     dispatcher.sync_endpoints(targets.iter().map(|target| target.mac.to_string()))?;
+    // Each cycle reloads credentials, so give every BMC one fresh attempt.
+    dispatcher.clear_credential_rejections();
     let attestation_targets = build_attestation_targets(&targets);
     match collect_and_upload_inventory(
         options.inventory.clone(),
