@@ -482,10 +482,7 @@ async fn nonce_errors_skip_uploads_and_targets_are_retried_next_cycle() {
             Runtime::start_with_targets(backend.local_addr().unwrap().port(), bmc_port, 1, 6, 6);
         let (mut enrollment, _) = accept_request(&backend).await;
         reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
-        let inventory_ok = format!(
-            r#"{{"results":[{}]}}"#,
-            vec![r#"{"status":"OK"}"#; 6].join(",")
-        );
+        let inventory_ok = format!(r#"{{"results":[{}]}}"#, [r#"{"status":"OK"}"#; 6].join(","));
         let (mut inventory, _) = accept_request(&backend).await;
         reply(&mut inventory, &inventory_ok).await;
         for _ in 0..6 {
@@ -590,4 +587,94 @@ async fn nonce_unauthorized_reenrolls_before_retrying() {
     assert!(request.starts_with("POST /v1/agent/enroll "));
     reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
     finish_attestation(&backend, &mut runtime).await;
+}
+
+#[tokio::test]
+async fn shared_transport_recovers_jwt_and_accepts_inventory_without_uuid() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"first-jwt"}"#).await;
+    let (mut inventory, first_request) = accept_request(&backend).await;
+    assert!(first_request.starts_with("PUT /v1/agent/oob_nodes "));
+    assert!(
+        first_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer first-jwt")
+    );
+    reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
+
+    let (mut enrollment, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/enroll "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer example-token")
+    );
+    reply(&mut enrollment, r#"{"jwtAssertion":"second-jwt"}"#).await;
+    let (mut inventory, request) = accept_request(&backend).await;
+    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer second-jwt")
+    );
+    // Every retry must carry the timestamp belonging to its refreshed session.
+    let enrolled_at = |request: &str| {
+        request
+            .split_once("\"enrolledAt\":\"")
+            .unwrap()
+            .1
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert_ne!(enrolled_at(&first_request), enrolled_at(&request));
+    reply(
+        &mut inventory,
+        r#"{"results":[{"status":"OK","computeZone":"example-zone"}]}"#,
+    )
+    .await;
+
+    let (mut nonce, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/oob_nodes/02:00:00:00:00:01/nonce "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer second-jwt")
+    );
+    reply(&mut nonce, r#"{"nonce":"example-nonce","jwtAssertion":"rotated-jwt","nonceRefreshTimestamp":"2026-01-01T00:00:00Z"}"#).await;
+    let (mut upload, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer rotated-jwt")
+    );
+    assert!(request.contains("02:00:00:00:00:01"));
+    reply(
+        &mut upload,
+        r#"{"results":[{"bmcMac":"02:00:00:00:00:01","status":"OK"}]}"#,
+    )
+    .await;
+    runtime.signal("-TERM").await;
+    runtime.expect_clean_exit().await;
+}
+
+#[test]
+fn runtime_help_shows_token_environment_name_without_its_value() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
+        .args(["run", "--help"])
+        .env("FLEETINT_AGENT_TOKEN", "example-private-token")
+        .output()
+        .expect("CLI help");
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("FLEETINT_AGENT_TOKEN"));
+    assert!(!help.contains("example-private-token"));
 }

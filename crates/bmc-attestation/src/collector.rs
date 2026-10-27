@@ -23,6 +23,7 @@
 
 use std::error::Error;
 
+use backend_client::is_auth_failure;
 use bmc_dispatch::Dispatcher;
 use bmc_error::SanitizedErrorMessage;
 use futures::stream::{self, StreamExt};
@@ -30,7 +31,9 @@ use futures::stream::{self, StreamExt};
 use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
 use crate::models::{BatchAttestation, NodeAttestation};
-use crate::sink::{BackendClient, BackendHttpError, HttpBackendClient};
+#[cfg(test)]
+use crate::sink::BackendHttpError;
+use crate::sink::{BackendClient, HttpBackendClient};
 use crate::source::{
     CredentialReloader, MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339,
 };
@@ -44,14 +47,6 @@ pub struct CollectionOutcome {
     /// A rotated agent token, if the backend issued one on a nonce response, so the
     /// caller can refresh its session and authenticate the upload with it.
     pub refreshed_jwt: Option<String>,
-}
-
-/// Whether a backend error is a JWT rejection, signalling that the agent must
-/// re-enroll rather than record per-target failures with a dead token. A generic
-/// 403 may come from an ingress or WAF and is not sufficient evidence by itself.
-fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
-    err.downcast_ref::<BackendHttpError>()
-        .is_some_and(|err| err.status() == 401)
 }
 
 /// Collect attestation evidence for every target concurrently.
@@ -209,7 +204,7 @@ mod tests {
             address: "192.0.2.1".to_string(),
             credentials_profile: Some("bmc".to_string()),
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: "secret".into(),
         };
 
         let outcome = collect(

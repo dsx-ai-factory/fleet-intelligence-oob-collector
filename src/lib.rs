@@ -33,7 +33,7 @@ use bmc_attestation::sink::{
 };
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
-use bmc_inventory::models::{InventoryUuid, NodeInventory};
+use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
     BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
     InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
@@ -315,13 +315,13 @@ async fn run_collection_cycle(
     {
         Ok(outcome) if outcome.failed_uploads > 0 => tracing::warn!(
             elapsed_seconds = started_at.elapsed().as_secs_f64(),
-            resolved_node_count = outcome.nodes.len(),
+            accepted_upload_count = outcome.accepted_uploads,
             failed_upload_count = outcome.failed_uploads,
             "inventory backend sync completed with failed node exports"
         ),
         Ok(outcome) => tracing::info!(
             elapsed_seconds = started_at.elapsed().as_secs_f64(),
-            resolved_node_count = outcome.nodes.len(),
+            accepted_upload_count = outcome.accepted_uploads,
             "inventory backend sync completed"
         ),
         Err(err) => tracing::error!(
@@ -658,7 +658,7 @@ async fn collect_and_upload_inventory(
         forward_inventory(collections, tx, shutdown).await
     });
 
-    let mut inventory_vec = Vec::new();
+    let mut accepted_uploads = 0;
     let mut summary = InventoryCollectionSummary::default();
     let mut failed_uploads = 0;
     loop {
@@ -698,14 +698,14 @@ async fn collect_and_upload_inventory(
                 if !failures.is_empty() {
                     tracing::warn!(
                         exportable_count,
-                        resolved_node_count = accepted.len(),
+                        accepted_upload_count = accepted,
                         failed_count = failures.len(),
                         "inventory mini-batch export completed with failed nodes"
                     );
                 } else {
                     tracing::info!(exportable_count, "inventory mini-batch export completed");
                 }
-                inventory_vec.extend(accepted);
+                accepted_uploads += accepted;
             }
             Err(err) => {
                 failed_uploads += exportable_count;
@@ -742,7 +742,7 @@ async fn collect_and_upload_inventory(
         );
     }
     Ok(InventorySyncOutcome {
-        nodes: inventory_vec,
+        accepted_uploads,
         failed_uploads,
     })
 }
@@ -773,7 +773,7 @@ async fn forward_inventory(
 }
 
 struct InventorySyncOutcome {
-    nodes: Vec<ResolvedNode>,
+    accepted_uploads: usize,
     failed_uploads: usize,
 }
 
@@ -907,27 +907,17 @@ async fn upload_inventory_batch(
     Ok((inventories, result))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct ResolvedNode {
-    mac: String,
-    node_uuid: String,
-}
-
 fn partition_uploaded_inventory<'a>(
     inventories: Vec<NodeInventory>,
     outcomes: impl IntoIterator<Item = BackendNodeOutcome<'a>>,
-) -> (Vec<ResolvedNode>, Vec<InventoryUploadFailure>) {
-    let mut resolved = Vec::new();
+) -> (usize, Vec<InventoryUploadFailure>) {
+    let mut accepted = 0;
     let mut failures = Vec::new();
     let mut outcomes = outcomes.into_iter();
     for inventory in inventories {
         let mac = inventory.source.mac;
         match outcomes.next().unwrap_or(BackendNodeOutcome::Missing) {
-            BackendNodeOutcome::Succeeded { node_uuid } => {
-                if let Some(node) = resolved_node(mac, node_uuid) {
-                    resolved.push(node);
-                }
-            }
+            BackendNodeOutcome::Succeeded => accepted += 1,
             BackendNodeOutcome::Rejected { status, message } => {
                 failures.push(InventoryUploadFailure::Rejected {
                     mac,
@@ -940,12 +930,7 @@ fn partition_uploaded_inventory<'a>(
             }
         }
     }
-    (resolved, failures)
-}
-
-fn resolved_node(mac: String, node_uuid: Option<&str>) -> Option<ResolvedNode> {
-    let node_uuid = InventoryUuid::parse(node_uuid?)?.to_string();
-    Some(ResolvedNode { mac, node_uuid })
+    (accepted, failures)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1066,23 +1051,15 @@ mod tests {
     }
 
     #[test]
-    fn inventory_resolution_counts_only_valid_backend_uuids() {
-        let mac = "00:11:22:33:44:55".to_string();
-        assert_eq!(resolved_node(mac.clone(), None), None);
-        assert_eq!(resolved_node(mac.clone(), Some("not-a-uuid")), None);
-        assert_eq!(resolved_node(mac.clone(), Some("")), None);
-        assert_eq!(
-            resolved_node(mac.clone(), Some("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")),
-            Some(ResolvedNode {
-                mac,
-                node_uuid: "9aee71e4-6e80-11ee-a8ac-74d4dd550187".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn upload_results_map_to_mac_by_position_and_use_backend_identity() {
+    fn upload_results_count_acceptance_and_map_failures_to_mac_by_position() {
         let first = inventory("10.0.0.1");
+        let mut partial = inventory("10.0.0.5");
+        partial.source.mac = "00:11:22:33:44:65".to_string();
+        partial.domain_errors.push(DomainError {
+            domain: "firmware".to_string(),
+            resource: None,
+            message: "unavailable".into(),
+        });
         let mut failed_collection = inventory("10.0.0.2");
         failed_collection.source.mac = "00:11:22:33:44:66".to_string();
         failed_collection.target_error = Some("unavailable".into());
@@ -1090,27 +1067,19 @@ mod tests {
         rejected.source.mac = "00:11:22:33:44:77".to_string();
         let mut missing = inventory("10.0.0.4");
         missing.source.mac = "00:11:22:33:44:88".to_string();
-        let uuid = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
-        let (nodes, failures) = partition_uploaded_inventory(
-            vec![first, failed_collection, rejected, missing],
+        let (accepted, failures) = partition_uploaded_inventory(
+            vec![first, partial, failed_collection, rejected, missing],
             [
-                BackendNodeOutcome::Succeeded {
-                    node_uuid: Some(uuid),
-                },
-                BackendNodeOutcome::Succeeded { node_uuid: None },
+                BackendNodeOutcome::Succeeded,
+                BackendNodeOutcome::Succeeded,
+                BackendNodeOutcome::Succeeded,
                 BackendNodeOutcome::Rejected {
                     status: "CONFLICT",
                     message: Some("ambiguous identity"),
                 },
             ],
         );
-        assert_eq!(
-            nodes,
-            vec![ResolvedNode {
-                mac: "00:11:22:33:44:55".to_string(),
-                node_uuid: uuid.to_string(),
-            }]
-        );
+        assert_eq!(accepted, 3);
         assert_eq!(
             failures,
             vec![
@@ -1263,7 +1232,7 @@ mod tests {
                 latency_probe: false,
             },
             backend_url: Some("https://private.example.com".to_string()),
-            agent_token: Some("must-not-be-reported".to_string()),
+            agent_token: Some("must-not-be-reported".into()),
             interval_seconds: 0,
             log_level: "info".to_string(),
         }

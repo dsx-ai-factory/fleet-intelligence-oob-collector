@@ -42,3 +42,8 @@ including partial rejection, malformed responses, and typed JWT rejection.
 Attestation source unit tests use localhost HTTP fixtures to verify one BMC
 credential reload and retry, unchanged measurement nonces, rejection of repeated
 unauthorized requests, and safe reload errors. Public collection requires HTTPS.
+
+The runtime suite also covers shared-transport JWT recovery, refreshed inventory
+timestamps, and token environment help. Unit tests in
+`crates/backend-client/src/lib.rs` cover URL validation, endpoint paths,
+enrollment parsing, and typed HTTP errors.

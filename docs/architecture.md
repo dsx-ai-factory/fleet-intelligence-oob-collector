@@ -8,6 +8,7 @@ models and backend transport.
 | Component | Responsibility |
 | --- | --- |
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
+| `backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
 | `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
 | `bmc-inventory` | Redfish inventory collection, mapping, and output |
 | `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
@@ -54,8 +55,7 @@ at most twice that concurrency. Backend item results are matched to submitted
 observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
 runs for configured BMC targets after the inventory phase, even if that phase
 fails. The backend requires an active OOB source registered through inventory,
-including sources registered in an earlier cycle; a resolved node UUID is not
-required. Backend verification also uses inventory-derived model and firmware
+including sources registered in an earlier cycle. Backend verification also uses inventory-derived model and firmware
 metadata. After concurrent nonce and evidence collection completes, results are
 uploaded only for targets that obtained a nonce. A nonce request error skips
 that target's evidence collection and upload until the next cycle; backend
@@ -71,6 +71,25 @@ that target unconfirmed; an unreadable response leaves the mini-batch unconfirme
 Unexpected response rows are reported separately. Other mini-batches still run
 unless shutdown is requested or re-enrollment fails. Accepted items are not
 retried because another item fails.
+
+### Backend transport and credential handling
+
+Enrollment, inventory uploads, nonce requests, and attestation uploads use the
+shared `backend-client` transport helpers. The session owns enrollment credentials,
+the current JWT, and its enrollment HTTP client; re-enrollment reuses that
+client. Each sink retains its payload mapping and response semantics.
+Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error
+message containing `401` does not trigger re-enrollment.
+
+Request timeouts and the 10-second maximum connect timeout retain their
+existing behavior. Enrollment and inventory retain the default redirect policy;
+nonce and attestation uploads do not follow redirects. URL path modes are
+explicit: runtime enrollment/inventory paths extend the configured base path,
+while attestation's configured paths replace it. Deployments should use an API
+origin as their backend base URL so all flows address the same API root.
+
+CLI help displays the bootstrap token environment-variable name without its
+value.
 
 ## Collection lifecycle
 
