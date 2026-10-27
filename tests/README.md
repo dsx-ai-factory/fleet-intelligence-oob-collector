@@ -30,7 +30,9 @@ in-flight backend upload. It also checks that inventory and attestation share
 one target snapshot, that unresolved inventory does not gate attestation, and
 that inventory-phase errors do not skip attestation attempts. Mixed and
 malformed upload responses retain per-target counts and allow later mini-batches
-to run, including after backend token renewal.
+to run, including after backend token renewal. Nonce failures skip the affected
+targets without uploading failed records or empty batches; skipped targets are
+attempted again next cycle. Nonce HTTP 401 still triggers re-enrollment.
 It never contacts real BMCs or customer backends.
 
 `crates/bmc-attestation/src/sink/backend_tests.rs` covers per-MAC response

@@ -57,6 +57,10 @@ fails. The backend requires an active OOB source registered through inventory,
 including sources registered in an earlier cycle; a resolved node UUID is not
 required. Backend verification also uses inventory-derived model and firmware
 metadata. After concurrent nonce and evidence collection completes, results are
+uploaded only for targets that obtained a nonce. A nonce request error skips
+that target's evidence collection and upload until the next cycle; backend
+`401 Unauthorized` responses still trigger one re-enrollment and retry. Skipped
+targets are logged and counted separately. Results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
 whole-collection authentication retry remain deterministic. Upload responses

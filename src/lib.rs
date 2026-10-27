@@ -358,7 +358,15 @@ async fn run_collection_cycle(
             rejected_count = uploads.rejected,
             unconfirmed_count = uploads.unconfirmed,
             unexpected_result_count = uploads.unexpected_results,
+            skipped_count = uploads.skipped,
             "attestation backend sync completed with upload failures"
+        );
+    } else if uploads.skipped > 0 {
+        tracing::warn!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            skipped_count = uploads.skipped,
+            "attestation backend sync completed with skipped targets"
         );
     } else {
         tracing::info!(
@@ -423,14 +431,15 @@ async fn collect_and_upload_attestation(
         Err(err) => return Err(err),
     };
     let summary = summarize_attestation_collection(&outcome.batch);
-    if summary.failed > 0 || summary.component_errors > 0 {
+    if summary.failed > 0 || summary.component_errors > 0 || outcome.skipped_targets > 0 {
         tracing::warn!(
-            node_count = summary.total,
+            node_count = summary.total + outcome.skipped_targets,
             successful_count = summary.successful,
             failed_count = summary.failed,
+            skipped_count = outcome.skipped_targets,
             evidence_count = summary.evidences,
             component_error_count = summary.component_errors,
-            "attestation collection completed with failures"
+            "attestation collection completed with failed or skipped targets"
         );
     } else {
         tracing::info!(
@@ -448,7 +457,7 @@ async fn collect_and_upload_attestation(
         session.set_jwt(token);
     }
 
-    upload_attestation_batches(
+    let mut uploads = upload_attestation_batches(
         endpoints,
         session,
         &outcome.batch,
@@ -456,7 +465,9 @@ async fn collect_and_upload_attestation(
         attestation_settings.concurrency,
         &shutdown,
     )
-    .await
+    .await?;
+    uploads.skipped = outcome.skipped_targets;
+    Ok(uploads)
 }
 
 async fn upload_attestation_batches(
@@ -542,6 +553,7 @@ struct AttestationUploadSummary {
     rejected: usize,
     unconfirmed: usize,
     unexpected_results: usize,
+    skipped: usize,
 }
 
 fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {

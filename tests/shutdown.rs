@@ -470,3 +470,124 @@ async fn partial_uploads_report_each_target_and_continue_later_batches() {
         }
     }
 }
+
+#[tokio::test]
+async fn nonce_errors_skip_uploads_and_targets_are_retried_next_cycle() {
+    for all_skipped in [false, true] {
+        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bmc_port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        let mut runtime =
+            Runtime::start_with_targets(backend.local_addr().unwrap().port(), bmc_port, 1, 6, 6);
+        let (mut enrollment, _) = accept_request(&backend).await;
+        reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+        let inventory_ok = format!(
+            r#"{{"results":[{}]}}"#,
+            vec![r#"{"status":"OK"}"#; 6].join(",")
+        );
+        let (mut inventory, _) = accept_request(&backend).await;
+        reply(&mut inventory, &inventory_ok).await;
+        for _ in 0..6 {
+            let (mut nonce, request) = accept_request(&backend).await;
+            assert!(request.contains("/nonce "));
+            let (status, body) = if request.contains(":01/nonce") && !all_skipped {
+                (
+                    200,
+                    r#"{"nonce":"example-nonce","jwtAssertion":"rotated-jwt"}"#,
+                )
+            } else if request.contains(":03/nonce") {
+                (403, r#"{"error":"forbidden"}"#)
+            } else if request.contains(":04/nonce") {
+                (503, r#"{"error":"unavailable"}"#)
+            } else if request.contains(":05/nonce") {
+                (200, "not JSON")
+            } else if request.contains(":06/nonce") {
+                (200, r#"{"nonce":""}"#)
+            } else {
+                (404, r#"{"error":"not registered"}"#)
+            };
+            reply_status(&mut nonce, status, body).await;
+        }
+        if !all_skipped {
+            let (mut upload, request) = accept_request(&backend).await;
+            assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+            assert!(request.contains("02:00:00:00:00:01"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer rotated-jwt")
+            );
+            for index in 2..=6 {
+                assert!(!request.contains(&format!("02:00:00:00:00:{index:02X}")));
+            }
+            reply(
+                &mut upload,
+                r#"{"results":[{"bmcMac":"02:00:00:00:00:01","status":"OK"}]}"#,
+            )
+            .await;
+        }
+        // An all-skipped collection must not send even an empty attestation batch.
+        let (mut inventory, request) = accept_request(&backend).await;
+        assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+        reply(&mut inventory, &inventory_ok).await;
+        for _ in 0..6 {
+            let (mut nonce, request) = accept_request(&backend).await;
+            assert!(request.contains("/nonce "));
+            reply(&mut nonce, r#"{"nonce":"next-cycle-nonce"}"#).await;
+        }
+        let (mut upload, request) = accept_request(&backend).await;
+        assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+        for index in 1..=6 {
+            assert!(request.contains(&format!("02:00:00:00:00:{index:02X}")));
+        }
+        let results = (1..=6)
+            .map(|index| format!(r#"{{"bmcMac":"02:00:00:00:00:{index:02X}","status":"OK"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        reply(&mut upload, &format!(r#"{{"results":[{results}]}}"#)).await;
+        runtime.signal("-TERM").await;
+        runtime.expect_clean_exit().await;
+        let mut logs = String::new();
+        runtime
+            .child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut logs)
+            .await
+            .unwrap();
+        let summary = logs
+            .lines()
+            .find(|line| line.contains("attestation backend sync completed with skipped targets"))
+            .expect(&logs);
+        assert!(
+            summary.contains(if all_skipped {
+                "skipped_count=6"
+            } else {
+                "skipped_count=5"
+            }),
+            "{summary}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn nonce_unauthorized_reenrolls_before_retrying() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    let (mut inventory, _) = accept_request(&backend).await;
+    reply(&mut inventory, r#"{"results":[{"status":"OK"}]}"#).await;
+    let (mut nonce, request) = accept_request(&backend).await;
+    assert!(request.contains("/nonce "));
+    reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+    let (mut reenrollment, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/enroll "));
+    reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
+    finish_attestation(&backend, &mut runtime).await;
+}
