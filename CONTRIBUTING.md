@@ -31,6 +31,15 @@ Report bugs and request features through [GitHub Issues](https://github.com/dsx-
 
 ## Development Setup
 
+Install Git, [Rustup](https://rustup.rs/), and a C linker for the host platform (for example, the toolchain provided by `build-essential` on Debian or Ubuntu).
+
+Clone the repository:
+
+```bash
+git clone https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector.git
+cd fleet-intelligence-oob-collector
+```
+
 From the repository root, activate and inspect the pinned Rust toolchain (rustup installs it if needed):
 
 ```bash

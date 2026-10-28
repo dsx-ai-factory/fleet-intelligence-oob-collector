@@ -31,42 +31,9 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 
 ## Getting started
 
-For Kubernetes deployment, follow [Installation](docs/installation.md) to configure targets, provision credentials, and install the Helm chart.
-
-To build from source and collect inventory locally, use the steps below.
-
-### Prerequisites
-
-- Git
-- [Rustup](https://rustup.rs/), which installs the toolchain pinned in `rust-toolchain.toml`
-- A C linker for the host platform (for example, the toolchain provided by `build-essential` on Debian or Ubuntu)
-
-Clone the repository, build the collector, and inspect its commands:
-
-```bash
-git clone https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector.git
-cd fleet-intelligence-oob-collector
-cargo run --locked -- --help
-```
-
-The final command prints the available `inventory`, `run`, and `render-nico-config` commands without requiring access to a BMC or Fleet Intelligence backend.
-
-Collecting inventory requires a reachable Redfish BMC and its credentials. Copy the example configuration, replace the example target and credential paths, and run a local collection:
-
-```bash
-umask 077
-cp config.example.toml config.toml
-cp credentials.example.json credentials.json
-chmod 600 config.toml credentials.json
-```
-
-Before running inventory, edit `config.toml` with your BMC targets and set `credentials.file = "credentials.json"`. Edit `credentials.json` with your BMC credentials and matching profiles or MAC overrides. The relative credential path resolves beside `config.toml`. Keep both files private and outside commits. Then collect inventory:
-
-```bash
-cargo run --locked -- inventory
-```
-
-See [Configuration](docs/configuration.md) for the complete configuration contract and [Installation](docs/installation.md) for the supported Helm deployment.
+- Follow [Installation](docs/installation.md) to deploy the Helm chart and verify collection.
+- See [Configuration](docs/configuration.md) for targets, credentials, CLI options, and Helm values.
+- See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
 
 ## Documentation
 
