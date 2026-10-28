@@ -95,7 +95,7 @@ struct RuntimeArgs {
     #[arg(long, env = "FLEETINT_BACKEND_URL")]
     backend_url: Option<String>,
 
-    #[arg(long, env = "FLEETINT_AGENT_TOKEN")]
+    #[arg(long, env = "FLEETINT_AGENT_TOKEN", hide_env_values = true)]
     agent_token: Option<String>,
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]

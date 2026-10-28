@@ -28,9 +28,11 @@ the Redfish ComputerSystem resource.
 ## Backend Integration
 
 All observations, including collection failures, are sent to the backend.
-Batch results correspond to submitted observations by position. The backend
-resolves node identity and returns `nodeUUID` for resolved observations.
-Attestation runs only for accepted observations with a valid returned node UUID.
+Upload failures are reported per target, and collection errors are reported
+separately from upload outcomes.
+
+Attestation identifies configured BMCs by MAC. It requires an active OOB source
+registered through inventory, which can come from an earlier cycle.
 
 ## Partial Collection
 

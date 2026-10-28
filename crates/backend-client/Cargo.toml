@@ -1,0 +1,18 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "backend-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bmc-error.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

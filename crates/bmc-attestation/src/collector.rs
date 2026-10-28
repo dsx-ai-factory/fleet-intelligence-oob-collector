@@ -23,48 +23,45 @@
 
 use std::error::Error;
 
+use backend_client::is_auth_failure;
 use bmc_dispatch::Dispatcher;
+use bmc_error::SanitizedErrorMessage;
 use futures::stream::{self, StreamExt};
 
 use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
 use crate::models::{BatchAttestation, NodeAttestation};
-use crate::sink::{BackendClient, BackendHttpError, HttpBackendClient};
-use crate::source::{MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339};
+#[cfg(test)]
+use crate::sink::BackendHttpError;
+use crate::sink::{BackendClient, HttpBackendClient};
+use crate::source::{
+    CredentialReloader, MeasurementRequest, NonceData, RedfishAttestationSource, now_rfc3339,
+};
 
 /// Result of running the attestation pipeline over a batch of targets.
 pub struct CollectionOutcome {
-    /// The batch ready to upload (failures are captured as failed node records).
+    /// The batch ready to upload, excluding targets whose nonce request failed.
     pub batch: BatchAttestation,
+    /// Targets skipped because their nonce request failed.
+    pub skipped_targets: usize,
     /// A rotated agent token, if the backend issued one on a nonce response, so the
     /// caller can refresh its session and authenticate the upload with it.
     pub refreshed_jwt: Option<String>,
 }
 
-/// Whether a backend error is a JWT rejection, signalling that the agent must
-/// re-enroll rather than record per-target failures with a dead token. A generic
-/// 403 may come from an ingress or WAF and is not sufficient evidence by itself.
-fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
-    err.downcast_ref::<BackendHttpError>()
-        .is_some_and(|err| err.status() == 401)
-}
-
 /// Collect attestation evidence for every target concurrently.
 ///
-/// Per target: build a backend client from `jwt`, request a nonce, collect signed
-/// measurements over Redfish, and map them. A non-auth target-level failure
-/// (client/nonce error) becomes a failed `NodeAttestation` rather than aborting the
-/// batch. A backend auth failure (HTTP 401) is propagated as a batch-level
+/// Per target: clone the backend client, request a nonce, collect signed
+/// measurements over Redfish, and map them. Nonce errors skip that target's
+/// evidence collection and upload. A backend auth failure (HTTP 401) is propagated as a batch-level
 /// error instead, so the caller can re-enroll and retry the whole batch with a
 /// fresh token rather than uploading failures collected under a rejected JWT.
 pub async fn collect(
     targets: &[Target],
     settings: &AttestationConfig,
-    backend_url: &str,
-    nonce_path: &str,
-    attestation_path: &str,
-    jwt: &str,
+    backend: &HttpBackendClient,
     dispatcher: &Dispatcher,
+    reload_credentials: &CredentialReloader<'_>,
 ) -> Result<CollectionOutcome, Box<dyn Error>> {
     let source = RedfishAttestationSource::new(
         settings.port,
@@ -78,55 +75,30 @@ pub async fn collect(
         measurement_indices: settings.measurement_indices.clone(),
     };
     let concurrency = settings.concurrency.max(1);
-    let timeout = settings.redfish_timeout;
     // Each per-target nonce client starts from the current token; any rotation the
     // backend returns is captured below for the caller to apply.
-    let base_jwt = jwt.to_string();
 
-    type TargetOutcome = Result<(NodeAttestation, Option<String>), Box<dyn Error>>;
+    type TargetOutcome = Result<(Option<NodeAttestation>, Option<String>), Box<dyn Error>>;
 
     let collected: Vec<TargetOutcome> = stream::iter(targets)
         .map(|target| {
             let source = source.clone();
             let measurement = measurement.clone();
-            let backend_url = backend_url.to_string();
-            let nonce_path = nonce_path.to_string();
-            let attestation_path = attestation_path.to_string();
-            let jwt = base_jwt.clone();
+            let mut client = backend.clone();
             let target = target.clone();
             let bmc_mac = target.bmc_mac.clone();
             let gate = dispatcher.attestation_gate(&target.name);
             async move {
                 let Some(gate) = gate else {
                     return Ok((
-                        NodeAttestation::failed(
+                        Some(NodeAttestation::failed(
                             bmc_mac,
                             target.name,
                             target.address,
                             "no dispatcher endpoint configured for attestation",
-                        ),
+                        )),
                         None,
                     ));
-                };
-                let mut client = match HttpBackendClient::new(
-                    &backend_url,
-                    &nonce_path,
-                    &attestation_path,
-                    jwt,
-                    timeout,
-                ) {
-                    Ok(client) => client,
-                    Err(err) => {
-                        return Ok((
-                            NodeAttestation::failed(
-                                bmc_mac,
-                                target.name,
-                                target.address,
-                                format!("backend client: {err}"),
-                            ),
-                            None,
-                        ));
-                    }
                 };
                 let nonce = match client.get_nonce(&bmc_mac).await {
                     Ok(response) => response,
@@ -134,15 +106,12 @@ pub async fn collect(
                     // the caller can re-enroll and retry with a fresh token.
                     Err(err) if is_auth_failure(err.as_ref()) => return Err(err),
                     Err(err) => {
-                        return Ok((
-                            NodeAttestation::failed(
-                                bmc_mac,
-                                target.name,
-                                target.address,
-                                format!("nonce request: {err}"),
-                            ),
-                            None,
-                        ));
+                        tracing::warn!(
+                            %bmc_mac,
+                            error = %SanitizedErrorMessage::new(err.to_string()),
+                            "nonce request failed; skipping attestation for target"
+                        );
+                        return Ok((None, None));
                     }
                 };
                 // The backend may rotate the agent token on a nonce response.
@@ -159,9 +128,10 @@ pub async fn collect(
                         },
                         measurement,
                         gate,
+                        reload_credentials,
                     )
                     .await;
-                Ok((mapper.map(record), refreshed_jwt))
+                Ok((Some(mapper.map(record)), refreshed_jwt))
             }
         })
         .buffered(concurrency)
@@ -170,16 +140,22 @@ pub async fn collect(
 
     let mut attestations = Vec::with_capacity(collected.len());
     let mut refreshed_jwt = None;
+    let mut skipped_targets = 0;
     for outcome in collected {
         let (record, refreshed) = outcome?;
         if refreshed.is_some() {
             refreshed_jwt = refreshed;
         }
-        attestations.push(record);
+        if let Some(record) = record {
+            attestations.push(record);
+        } else {
+            skipped_targets += 1;
+        }
     }
 
     Ok(CollectionOutcome {
         batch: BatchAttestation::new(now_rfc3339(), attestations),
+        skipped_targets,
         refreshed_jwt,
     })
 }
@@ -187,6 +163,7 @@ pub async fn collect(
 #[cfg(test)]
 mod tests {
     use bmc_dispatch::DispatcherConfig;
+    use std::time::Duration;
 
     use super::*;
 
@@ -225,18 +202,24 @@ mod tests {
             name: "bmc-1".to_string(),
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
+            credentials_profile: Some("bmc".to_string()),
             username: "user".to_string(),
-            password: "secret".to_string(),
+            password: "secret".into(),
         };
 
         let outcome = collect(
             &[target],
             &AttestationConfig::default(),
-            "https://backend.invalid",
-            "/nonce/{bmc_mac}",
-            "/attestation",
-            "token",
+            &HttpBackendClient::new(
+                "https://backend.invalid",
+                "/nonce/{bmc_mac}",
+                "/attestation",
+                "token",
+                Duration::from_secs(1),
+            )
+            .unwrap(),
             &dispatcher,
+            &|_| panic!("missing gate"),
         )
         .await
         .expect("missing gate becomes a target failure");

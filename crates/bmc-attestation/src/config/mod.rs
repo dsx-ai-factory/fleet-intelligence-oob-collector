@@ -38,6 +38,7 @@ pub struct Target {
     pub name: String,
     pub bmc_mac: String,
     pub address: String,
+    pub credentials_profile: Option<String>,
     pub username: String,
     pub password: String,
 }

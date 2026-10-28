@@ -33,8 +33,9 @@ OOB collector ──────────────► inventory and attest
 The OOB collector enrolls with Fleet Intelligence and collects inventory from
 configured BMCs concurrently. Completed node inventories enter a bounded
 delivery queue and are uploaded in small batches, without waiting for every BMC
-to finish. Attestation then runs for successfully exported nodes with resolved
-identities and uploads results in batches bounded by the target concurrency.
+to finish. Attestation uses configured BMC MACs and uploads results in batches
+bounded by the target concurrency. The backend requires an active OOB source
+registered through inventory.
 NICo uses the same BMC configuration to emit hardware metrics and logs through
 the gateway. Partial inventory failures are preserved in the output so
 unavailable Redfish domains do not erase otherwise valid data.

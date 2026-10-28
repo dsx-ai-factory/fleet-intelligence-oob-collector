@@ -19,6 +19,7 @@ mod backend;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +27,13 @@ use std::time::Duration;
 use bmc_attestation::collector;
 use bmc_attestation::config as attestation_config;
 use bmc_attestation::models::BatchAttestation;
-use bmc_attestation::sink::BackendSink as AttestationBackendSink;
+use bmc_attestation::sink::{
+    BackendSink as AttestationBackendSink, BatchUploadOutcome,
+    HttpBackendClient as AttestationBackendClient, TargetUploadOutcome,
+};
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
 use bmc_inventory::config;
-use bmc_inventory::models::{InventoryUuid, NodeInventory};
+use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
     BackendBatchOutcome, BackendNodeOutcome, BackendSink as InventoryBackendSink, CollectorConfig,
     InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
@@ -213,15 +217,18 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
 }
 
 async fn run_runtime_until_shutdown(
-    options: RuntimeOptions,
+    mut options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let configured_targets = config::load_targets(&options.inventory.config)?;
-    let dispatcher = Arc::new(start_dispatcher(&options.inventory, &configured_targets)?);
-    let backend_url = required_backend_option(options.backend_url, "backend URL")?;
+    let target_config = config::load_config(&options.inventory.config)?;
+    let dispatcher = Arc::new(start_dispatcher(
+        &options.inventory,
+        &target_config.targets,
+    )?);
+    let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
-    let agent_token = required_backend_option(options.agent_token, "agent token")?;
+    let agent_token = required_backend_option(options.agent_token.take(), "agent token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
     let mut session = tokio::select! {
@@ -231,90 +238,38 @@ async fn run_runtime_until_shutdown(
     };
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
-    let attestation_settings = {
-        let mut s = attestation_config::defaults::attestation_config();
-        s.insecure_tls = options.inventory.insecure_tls;
-        s.concurrency = options.inventory.target_concurrency;
-        s.redfish_timeout = std::time::Duration::from_secs(options.inventory.timeout_seconds);
-        s
-    };
-
+    // Reuse startup validation as the first cycle's snapshot. Later cycles reload
+    // once, before dispatcher synchronization or either collection phase.
+    let mut initial_config = Some(target_config);
     loop {
         if shutdown.is_requested() {
             return Ok(());
         }
-        let started_at = std::time::Instant::now();
-
-        // Phase 1: Collect and upload inventory
-        match collect_and_upload_inventory(
-            options.inventory.clone(),
-            collector_config.clone(),
-            endpoints.oob_nodes_endpoint.clone(),
-            &mut session,
-            Arc::clone(&dispatcher),
-            shutdown.clone(),
-        )
-        .await
-        {
-            Ok(outcome) => {
-                if shutdown.is_requested() {
-                    return Ok(());
-                }
-                if outcome.failed_uploads > 0 {
-                    tracing::warn!(
-                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                        resolved_node_count = outcome.nodes.len(),
-                        failed_upload_count = outcome.failed_uploads,
-                        "inventory backend sync completed with failed node exports"
-                    );
-                } else {
-                    tracing::info!(
-                        elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                        resolved_node_count = outcome.nodes.len(),
-                        "inventory backend sync completed"
-                    );
-                }
-                // Phase 2: Attest configured BMCs by MAC. Inventory node identity
-                // resolution is independent from the attestation API.
-                match build_attestation_targets(&options.inventory) {
-                    Err(err) => tracing::error!(
-                        error = %err,
-                        "failed to load targets for attestation; skipping attestation"
-                    ),
-                    Ok(attestation_targets) if attestation_targets.is_empty() => {
-                        tracing::warn!("no configured BMCs; skipping attestation");
-                    }
-                    Ok(attestation_targets) => {
-                        match collect_and_upload_attestation(
-                            &attestation_targets,
-                            &attestation_settings,
-                            &endpoints,
-                            &mut session,
-                            dispatcher.as_ref(),
-                            shutdown.clone(),
-                        )
-                        .await
-                        {
-                            Ok(()) => tracing::info!(
-                                elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                                node_count = attestation_targets.len(),
-                                "attestation backend sync completed"
-                            ),
-                            Err(err) => tracing::error!(
-                                elapsed_seconds = started_at.elapsed().as_secs_f64(),
-                                error = %err,
-                                "attestation backend sync failed"
-                            ),
-                        }
-                    }
-                }
-            }
-            Err(err) => tracing::error!(
-                elapsed_seconds = started_at.elapsed().as_secs_f64(),
+        let cycle = async {
+            let target_config = match initial_config.take() {
+                Some(config) => config,
+                None => config::load_config(&options.inventory.config)?,
+            };
+            run_collection_cycle(
+                &options,
+                &collector_config,
+                &endpoints,
+                &mut session,
+                Arc::clone(&dispatcher),
+                target_config,
+                shutdown.clone(),
+            )
+            .await
+        };
+        if let Err(err) = cycle.await {
+            tracing::error!(
                 next_attempt_seconds = interval.as_secs(),
                 error = %err,
-                "inventory backend sync failed"
-            ),
+                "collection cycle failed"
+            );
+        }
+        if shutdown.is_requested() {
+            return Ok(());
         }
 
         tracing::info!(
@@ -328,37 +283,138 @@ async fn run_runtime_until_shutdown(
     }
 }
 
-fn build_attestation_targets(
-    options: &InventoryOptions,
-) -> Result<Vec<attestation_config::Target>, Box<dyn Error>> {
-    let targets = config::load_targets(&options.config)?;
+/// A cycle shares one target snapshot; a BMC 401 can refresh credentials in place.
+/// Inventory runs first to enroll new sources, but its failure must not prevent
+/// attesting sources already enrolled by MAC in an earlier cycle.
+async fn run_collection_cycle(
+    options: &RuntimeOptions,
+    collector_config: &CollectorConfig,
+    endpoints: &BackendEndpoints,
+    session: &mut BackendSession,
+    dispatcher: Arc<Dispatcher>,
+    target_config: config::CollectorConfig,
+    shutdown: Shutdown,
+) -> Result<(), Box<dyn Error>> {
+    let started_at = std::time::Instant::now();
+    let config::CollectorConfig {
+        targets,
+        credentials_file,
+    } = target_config;
+    dispatcher.sync_endpoints(targets.iter().map(|target| target.mac.to_string()))?;
+    let attestation_targets = build_attestation_targets(&targets);
+    match collect_and_upload_inventory(
+        options.inventory.clone(),
+        collector_config.clone(),
+        endpoints.oob_nodes_endpoint.clone(),
+        session,
+        Arc::clone(&dispatcher),
+        targets,
+        shutdown.clone(),
+    )
+    .await
+    {
+        Ok(outcome) if outcome.failed_uploads > 0 => tracing::warn!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_upload_count = outcome.accepted_uploads,
+            failed_upload_count = outcome.failed_uploads,
+            "inventory backend sync completed with failed node exports"
+        ),
+        Ok(outcome) => tracing::info!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_upload_count = outcome.accepted_uploads,
+            "inventory backend sync completed"
+        ),
+        Err(err) => tracing::error!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            error = %err,
+            "inventory backend sync failed; attempting attestation for configured sources"
+        ),
+    }
+    if shutdown.is_requested() {
+        return Ok(());
+    }
 
-    Ok(targets
-        .into_iter()
+    let mut settings = attestation_config::defaults::attestation_config();
+    settings.insecure_tls = options.inventory.insecure_tls;
+    settings.concurrency = options.inventory.target_concurrency;
+    settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
+    let uploads = collect_and_upload_attestation(
+        &attestation_targets,
+        &credentials_file,
+        &settings,
+        endpoints,
+        session,
+        dispatcher.as_ref(),
+        shutdown.clone(),
+    )
+    .await?;
+    if shutdown.is_requested() {
+        return Ok(());
+    }
+    if uploads.rejected > 0 || uploads.unconfirmed > 0 || uploads.unexpected_results > 0 {
+        tracing::warn!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            rejected_count = uploads.rejected,
+            unconfirmed_count = uploads.unconfirmed,
+            unexpected_result_count = uploads.unexpected_results,
+            skipped_count = uploads.skipped,
+            "attestation backend sync completed with upload failures"
+        );
+    } else if uploads.skipped > 0 {
+        tracing::warn!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            skipped_count = uploads.skipped,
+            "attestation backend sync completed with skipped targets"
+        );
+    } else {
+        tracing::info!(
+            elapsed_seconds = started_at.elapsed().as_secs_f64(),
+            accepted_count = uploads.accepted,
+            "attestation backend sync completed"
+        );
+    }
+    Ok(())
+}
+
+fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_config::Target> {
+    targets
+        .iter()
         .map(|target| attestation_config::Target {
             name: target.mac.to_string(),
             bmc_mac: target.mac.to_string(),
-            address: target.address,
-            username: target.username,
-            password: target.password,
+            address: target.address.clone(),
+            credentials_profile: target.credentials_profile.clone(),
+            username: target.username.clone(),
+            password: target.password.clone(),
         })
-        .collect())
+        .collect()
 }
 
 async fn collect_and_upload_attestation(
     targets: &[attestation_config::Target],
+    credentials_file: &Path,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
     mut shutdown: Shutdown,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<AttestationUploadSummary, Box<dyn Error>> {
     let collect = |jwt: String| async move {
-        collect_attestation(targets, attestation_settings, endpoints, &jwt, dispatcher).await
+        collect_attestation(
+            targets,
+            credentials_file,
+            attestation_settings,
+            endpoints,
+            &jwt,
+            dispatcher,
+        )
+        .await
     };
     let result = tokio::select! {
         biased;
-        () = shutdown.wait() => return Ok(()),
+        () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
         result = collect(session.jwt().to_string()) => result,
     };
     let outcome = match result {
@@ -368,21 +424,22 @@ async fn collect_and_upload_attestation(
             session.reenroll().await?;
             tokio::select! {
                 biased;
-                () = shutdown.wait() => return Ok(()),
+                () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
                 result = collect(session.jwt().to_string()) => result?,
             }
         }
         Err(err) => return Err(err),
     };
     let summary = summarize_attestation_collection(&outcome.batch);
-    if summary.failed > 0 || summary.component_errors > 0 {
+    if summary.failed > 0 || summary.component_errors > 0 || outcome.skipped_targets > 0 {
         tracing::warn!(
-            node_count = summary.total,
+            node_count = summary.total + outcome.skipped_targets,
             successful_count = summary.successful,
             failed_count = summary.failed,
+            skipped_count = outcome.skipped_targets,
             evidence_count = summary.evidences,
             component_error_count = summary.component_errors,
-            "attestation collection completed with failures"
+            "attestation collection completed with failed or skipped targets"
         );
     } else {
         tracing::info!(
@@ -400,7 +457,7 @@ async fn collect_and_upload_attestation(
         session.set_jwt(token);
     }
 
-    upload_attestation_batches(
+    let mut uploads = upload_attestation_batches(
         endpoints,
         session,
         &outcome.batch,
@@ -408,7 +465,9 @@ async fn collect_and_upload_attestation(
         attestation_settings.concurrency,
         &shutdown,
     )
-    .await
+    .await?;
+    uploads.skipped = outcome.skipped_targets;
+    Ok(uploads)
 }
 
 async fn upload_attestation_batches(
@@ -418,10 +477,10 @@ async fn upload_attestation_batches(
     timeout: Duration,
     batch_size: usize,
     shutdown: &Shutdown,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<AttestationUploadSummary, Box<dyn Error>> {
     let batches = split_attestation_batch(batch, batch_size);
     let batch_count = batches.len();
-    let mut failures = Vec::new();
+    let mut summary = AttestationUploadSummary::default();
 
     for (index, batch) in batches.into_iter().enumerate() {
         if shutdown.is_requested() {
@@ -443,13 +502,37 @@ async fn upload_attestation_batches(
         }
 
         match result {
-            Ok(()) => tracing::info!(
-                batch_index = index + 1,
-                batch_count,
-                node_count,
-                "attestation mini-batch export completed"
-            ),
+            Ok(outcome) => {
+                summary.unexpected_results += outcome.unexpected_results;
+                if outcome.unexpected_results > 0 {
+                    tracing::warn!(
+                        batch_index = index + 1,
+                        unexpected_result_count = outcome.unexpected_results,
+                        "attestation response contains unrecognized results"
+                    );
+                }
+                for (bmc_mac, outcome) in outcome.targets {
+                    match outcome {
+                        TargetUploadOutcome::Accepted => {
+                            summary.accepted += 1;
+                            tracing::info!(%bmc_mac, "attestation target export accepted");
+                        }
+                        TargetUploadOutcome::Rejected(status) => {
+                            summary.rejected += 1;
+                            tracing::warn!(%bmc_mac, %status, "attestation target export rejected");
+                        }
+                        TargetUploadOutcome::Missing | TargetUploadOutcome::Duplicate => {
+                            summary.unconfirmed += 1;
+                            tracing::warn!(%bmc_mac, reason = ?outcome, "attestation target export unconfirmed");
+                        }
+                    }
+                }
+            }
             Err(err) => {
+                summary.unconfirmed += node_count;
+                for bmc_mac in batch.results_by_bmc_mac.keys() {
+                    tracing::warn!(%bmc_mac, error = %err, "attestation target export unconfirmed");
+                }
                 tracing::error!(
                     batch_index = index + 1,
                     batch_count,
@@ -457,21 +540,20 @@ async fn upload_attestation_batches(
                     error = %err,
                     "attestation mini-batch export failed"
                 );
-                failures.push(err.to_string());
             }
         }
     }
 
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} attestation mini-batch export(s) failed; first error: {}",
-            failures.len(),
-            failures[0]
-        )
-        .into())
-    }
+    Ok(summary)
+}
+
+#[derive(Default)]
+struct AttestationUploadSummary {
+    accepted: usize,
+    rejected: usize,
+    unconfirmed: usize,
+    unexpected_results: usize,
+    skipped: usize,
 }
 
 fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<BatchAttestation> {
@@ -489,19 +571,31 @@ fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<B
 
 async fn collect_attestation(
     targets: &[attestation_config::Target],
+    credentials_file: &Path,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     jwt: &str,
     dispatcher: &Dispatcher,
 ) -> Result<collector::CollectionOutcome, Box<dyn Error>> {
-    collector::collect(
-        targets,
-        attestation_settings,
+    let backend = AttestationBackendClient::new(
         &endpoints.base_url,
         &endpoints.nonce_path,
         &endpoints.attestation_path,
         jwt,
+        attestation_settings.redfish_timeout,
+    )?;
+    collector::collect(
+        targets,
+        attestation_settings,
+        &backend,
         dispatcher,
+        &|target| {
+            config::load_target_credentials(
+                credentials_file,
+                &target.bmc_mac,
+                target.credentials_profile.as_deref(),
+            )
+        },
     )
     .await
 }
@@ -511,7 +605,7 @@ async fn upload_attestation(
     jwt: &str,
     batch: &BatchAttestation,
     timeout: std::time::Duration,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BatchUploadOutcome, Box<dyn Error>> {
     let sink = AttestationBackendSink::new(
         &endpoints.base_url,
         &endpoints.nonce_path,
@@ -541,15 +635,9 @@ async fn collect_and_upload_inventory(
     endpoint: String,
     session: &mut BackendSession,
     dispatcher: Arc<Dispatcher>,
+    targets: Vec<config::Target>,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
-    let target_config = config::load_config(&options.config)?;
-    dispatcher.sync_endpoints(
-        target_config
-            .targets
-            .iter()
-            .map(|target| target.mac.to_string()),
-    )?;
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
@@ -563,14 +651,14 @@ async fn collect_and_upload_inventory(
     producer.spawn(async move {
         let collections = inventory_collections(
             &source,
-            target_config.targets,
+            targets,
             target_concurrency,
             CollectionOrder::Completion,
         );
         forward_inventory(collections, tx, shutdown).await
     });
 
-    let mut inventory_vec = Vec::new();
+    let mut accepted_uploads = 0;
     let mut summary = InventoryCollectionSummary::default();
     let mut failed_uploads = 0;
     loop {
@@ -610,14 +698,14 @@ async fn collect_and_upload_inventory(
                 if !failures.is_empty() {
                     tracing::warn!(
                         exportable_count,
-                        resolved_node_count = accepted.len(),
+                        accepted_upload_count = accepted,
                         failed_count = failures.len(),
                         "inventory mini-batch export completed with failed nodes"
                     );
                 } else {
                     tracing::info!(exportable_count, "inventory mini-batch export completed");
                 }
-                inventory_vec.extend(accepted);
+                accepted_uploads += accepted;
             }
             Err(err) => {
                 failed_uploads += exportable_count;
@@ -654,7 +742,7 @@ async fn collect_and_upload_inventory(
         );
     }
     Ok(InventorySyncOutcome {
-        nodes: inventory_vec,
+        accepted_uploads,
         failed_uploads,
     })
 }
@@ -685,7 +773,7 @@ async fn forward_inventory(
 }
 
 struct InventorySyncOutcome {
-    nodes: Vec<ResolvedNode>,
+    accepted_uploads: usize,
     failed_uploads: usize,
 }
 
@@ -819,27 +907,17 @@ async fn upload_inventory_batch(
     Ok((inventories, result))
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct ResolvedNode {
-    mac: String,
-    node_uuid: String,
-}
-
 fn partition_uploaded_inventory<'a>(
     inventories: Vec<NodeInventory>,
     outcomes: impl IntoIterator<Item = BackendNodeOutcome<'a>>,
-) -> (Vec<ResolvedNode>, Vec<InventoryUploadFailure>) {
-    let mut resolved = Vec::new();
+) -> (usize, Vec<InventoryUploadFailure>) {
+    let mut accepted = 0;
     let mut failures = Vec::new();
     let mut outcomes = outcomes.into_iter();
     for inventory in inventories {
         let mac = inventory.source.mac;
         match outcomes.next().unwrap_or(BackendNodeOutcome::Missing) {
-            BackendNodeOutcome::Succeeded { node_uuid } => {
-                if let Some(node) = resolved_node(mac, node_uuid) {
-                    resolved.push(node);
-                }
-            }
+            BackendNodeOutcome::Succeeded => accepted += 1,
             BackendNodeOutcome::Rejected { status, message } => {
                 failures.push(InventoryUploadFailure::Rejected {
                     mac,
@@ -852,12 +930,7 @@ fn partition_uploaded_inventory<'a>(
             }
         }
     }
-    (resolved, failures)
-}
-
-fn resolved_node(mac: String, node_uuid: Option<&str>) -> Option<ResolvedNode> {
-    let node_uuid = InventoryUuid::parse(node_uuid?)?.to_string();
-    Some(ResolvedNode { mac, node_uuid })
+    (accepted, failures)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -978,23 +1051,15 @@ mod tests {
     }
 
     #[test]
-    fn attestation_identity_comes_only_from_valid_backend_uuid() {
-        let mac = "00:11:22:33:44:55".to_string();
-        assert_eq!(resolved_node(mac.clone(), None), None);
-        assert_eq!(resolved_node(mac.clone(), Some("not-a-uuid")), None);
-        assert_eq!(resolved_node(mac.clone(), Some("")), None);
-        assert_eq!(
-            resolved_node(mac.clone(), Some("9AEE71E4-6E80-11EE-A8AC-74D4DD550187")),
-            Some(ResolvedNode {
-                mac,
-                node_uuid: "9aee71e4-6e80-11ee-a8ac-74d4dd550187".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn upload_results_map_to_mac_by_position_and_use_backend_identity() {
+    fn upload_results_count_acceptance_and_map_failures_to_mac_by_position() {
         let first = inventory("10.0.0.1");
+        let mut partial = inventory("10.0.0.5");
+        partial.source.mac = "00:11:22:33:44:65".to_string();
+        partial.domain_errors.push(DomainError {
+            domain: "firmware".to_string(),
+            resource: None,
+            message: "unavailable".into(),
+        });
         let mut failed_collection = inventory("10.0.0.2");
         failed_collection.source.mac = "00:11:22:33:44:66".to_string();
         failed_collection.target_error = Some("unavailable".into());
@@ -1002,27 +1067,19 @@ mod tests {
         rejected.source.mac = "00:11:22:33:44:77".to_string();
         let mut missing = inventory("10.0.0.4");
         missing.source.mac = "00:11:22:33:44:88".to_string();
-        let uuid = "9aee71e4-6e80-11ee-a8ac-74d4dd550187";
-        let (nodes, failures) = partition_uploaded_inventory(
-            vec![first, failed_collection, rejected, missing],
+        let (accepted, failures) = partition_uploaded_inventory(
+            vec![first, partial, failed_collection, rejected, missing],
             [
-                BackendNodeOutcome::Succeeded {
-                    node_uuid: Some(uuid),
-                },
-                BackendNodeOutcome::Succeeded { node_uuid: None },
+                BackendNodeOutcome::Succeeded,
+                BackendNodeOutcome::Succeeded,
+                BackendNodeOutcome::Succeeded,
                 BackendNodeOutcome::Rejected {
                     status: "CONFLICT",
                     message: Some("ambiguous identity"),
                 },
             ],
         );
-        assert_eq!(
-            nodes,
-            vec![ResolvedNode {
-                mac: "00:11:22:33:44:55".to_string(),
-                node_uuid: uuid.to_string(),
-            }]
-        );
+        assert_eq!(accepted, 3);
         assert_eq!(
             failures,
             vec![
@@ -1113,24 +1170,6 @@ mod tests {
     }
 
     #[test]
-    fn build_attestation_targets_surfaces_config_errors() {
-        let options = InventoryOptions {
-            config: "/definitely/missing/oob-config.toml".to_string(),
-            insecure_tls: false,
-            detail: false,
-            format: InventoryFormat::Json,
-            target_concurrency: 1,
-            bmc_max_in_flight: 1,
-            bmc_requests_per_second: 1,
-            bmc_burst: 1,
-            timeout_seconds: 1,
-            latency_probe: false,
-        };
-
-        assert!(build_attestation_targets(&options).is_err());
-    }
-
-    #[test]
     fn build_attestation_targets_uses_configured_bmc_mac() {
         let mut config_path = std::env::temp_dir();
         config_path.push(format!(
@@ -1162,26 +1201,20 @@ mod tests {
             ),
         )
         .expect("write config");
-        let options = InventoryOptions {
-            config: config_path.to_string_lossy().into_owned(),
-            insecure_tls: false,
-            detail: false,
-            format: InventoryFormat::Json,
-            target_concurrency: 1,
-            bmc_max_in_flight: 1,
-            bmc_requests_per_second: 1,
-            bmc_burst: 1,
-            timeout_seconds: 1,
-            latency_probe: false,
-        };
-
-        let targets = build_attestation_targets(&options).expect("attestation targets");
-        std::fs::remove_file(config_path).expect("remove config");
+        let snapshot = config::load_targets(config_path.to_str().expect("UTF-8 config path"))
+            .expect("target snapshot");
+        // The phase conversion must not read files that may have rotated.
+        std::fs::remove_file(&config_path).expect("remove config before conversion");
+        let targets = build_attestation_targets(&snapshot);
         std::fs::remove_file(credentials_path).expect("remove credentials");
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "00:11:22:33:44:55");
         assert_eq!(targets[0].bmc_mac, "00:11:22:33:44:55");
+        assert_eq!(targets[0].address, "10.0.0.1");
+        assert_eq!(targets[0].credentials_profile.as_deref(), Some("bmc"));
+        assert_eq!(targets[0].username, "admin");
+        assert_eq!(targets[0].password, "secret");
     }
 
     fn reporting_options() -> RuntimeOptions {
@@ -1199,7 +1232,7 @@ mod tests {
                 latency_probe: false,
             },
             backend_url: Some("https://private.example.com".to_string()),
-            agent_token: Some("must-not-be-reported".to_string()),
+            agent_token: Some("must-not-be-reported".into()),
             interval_seconds: 0,
             log_level: "info".to_string(),
         }
