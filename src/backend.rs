@@ -23,13 +23,12 @@
 //! cross-cutting session state.
 
 use std::error::Error;
+use std::time::Duration;
 
+pub use backend_client::is_auth_failure;
+use backend_client::{BackendUrl, DEFAULT_BACKEND_TIMEOUT_SECONDS, http_client_builder};
 use bmc_attestation::config as attestation_config;
-use bmc_attestation::sink::BackendHttpError as AttestationHttpError;
 use bmc_attestation::source::now_rfc3339;
-use bmc_inventory::sink::{
-    BackendHttpError as InventoryHttpError, HttpBackendClient as InventoryHttpBackendClient,
-};
 
 /// Resolved backend endpoints derived from a single API base URL.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,9 +54,10 @@ impl BackendEndpoints {
             );
         }
 
+        let base = BackendUrl::parse(&base_url)?;
         Ok(Self {
-            enroll_endpoint: format!("{base_url}/v1/agent/enroll"),
-            oob_nodes_endpoint: format!("{base_url}/v1/agent/oob_nodes"),
+            enroll_endpoint: base.append_endpoint("v1/agent/enroll").to_string(),
+            oob_nodes_endpoint: base.append_endpoint("v1/agent/oob_nodes").to_string(),
             nonce_path: attestation_config::defaults::DEFAULT_BACKEND_NONCE_PATH.to_string(),
             attestation_path: attestation_config::defaults::DEFAULT_BACKEND_ATTESTATION_PATH
                 .to_string(),
@@ -83,6 +83,7 @@ pub struct BackendSession {
     enroll_endpoint: String,
     jwt: String,
     enrolled_at: String,
+    client: reqwest::Client,
 }
 
 impl BackendSession {
@@ -91,17 +92,24 @@ impl BackendSession {
         enroll_endpoint: String,
         agent_token: String,
     ) -> Result<Self, Box<dyn Error>> {
-        let Enrollment { jwt, enrolled_at } = enroll_once(&enroll_endpoint, &agent_token).await?;
+        let client = http_client_builder(
+            Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
+            reqwest::redirect::Policy::default(),
+        )?
+        .build()?;
+        let Enrollment { jwt, enrolled_at } =
+            enroll_once(&client, &enroll_endpoint, agent_token.as_str()).await?;
         Ok(Self {
             agent_token,
             enroll_endpoint,
             jwt,
             enrolled_at,
+            client,
         })
     }
 
     pub fn jwt(&self) -> &str {
-        &self.jwt
+        self.jwt.as_str()
     }
 
     pub fn enrolled_at(&self) -> &str {
@@ -117,8 +125,12 @@ impl BackendSession {
     /// Re-enroll with the bootstrap token, refreshing both the JWT and the
     /// enrollment timestamp.
     pub async fn reenroll(&mut self) -> Result<(), Box<dyn Error>> {
-        let Enrollment { jwt, enrolled_at } =
-            enroll_once(&self.enroll_endpoint, &self.agent_token).await?;
+        let Enrollment { jwt, enrolled_at } = enroll_once(
+            &self.client,
+            &self.enroll_endpoint,
+            self.agent_token.as_str(),
+        )
+        .await?;
         self.jwt = jwt;
         self.enrolled_at = enrolled_at;
         Ok(())
@@ -131,27 +143,16 @@ struct Enrollment {
 }
 
 async fn enroll_once(
+    client: &reqwest::Client,
     enroll_endpoint: &str,
     agent_token: &str,
 ) -> Result<Enrollment, Box<dyn Error>> {
-    let jwt = InventoryHttpBackendClient::enroll(enroll_endpoint, agent_token).await?;
+    let endpoint = BackendUrl::parse(enroll_endpoint)?;
+    let jwt = backend_client::enroll(client, endpoint.as_url(), agent_token).await?;
     Ok(Enrollment {
         jwt,
         enrolled_at: now_rfc3339(),
     })
-}
-
-/// Whether a backend error represents a JWT rejection from either the inventory
-/// or attestation upload path. A generic 403 may be emitted by an ingress or WAF
-/// and must not be treated as proof that the JWT is invalid.
-pub fn is_auth_failure(err: &(dyn Error + 'static)) -> bool {
-    if let Some(err) = err.downcast_ref::<InventoryHttpError>() {
-        return err.status() == 401;
-    }
-    if let Some(err) = err.downcast_ref::<AttestationHttpError>() {
-        return err.status() == 401;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -202,22 +203,11 @@ mod tests {
 
     #[test]
     fn required_backend_option_rejects_blank_values() {
-        assert!(required_backend_option(None, "backend URL").is_err());
+        assert!(required_backend_option(None::<String>, "backend URL").is_err());
         assert!(required_backend_option(Some("   ".to_string()), "agent token").is_err());
         assert_eq!(
             required_backend_option(Some("value".to_string()), "backend URL").expect("value"),
             "value"
         );
-    }
-
-    #[test]
-    fn is_auth_failure_only_treats_unauthorized_as_jwt_rejection() {
-        let unauthorized: Box<dyn Error> = Box::new(InventoryHttpError::new(401, "expired token"));
-        let forbidden: Box<dyn Error> = Box::new(AttestationHttpError::new(403, "invalid token"));
-        let server_error: Box<dyn Error> = Box::new(InventoryHttpError::new(500, "backend failed"));
-
-        assert!(is_auth_failure(unauthorized.as_ref()));
-        assert!(!is_auth_failure(forbidden.as_ref()));
-        assert!(!is_auth_failure(server_error.as_ref()));
     }
 }

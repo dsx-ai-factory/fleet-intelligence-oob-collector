@@ -8,6 +8,7 @@ models and backend transport.
 | Component | Responsibility |
 | --- | --- |
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
+| `backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
 | `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
 | `bmc-inventory` | Redfish inventory collection, mapping, and output |
 | `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
@@ -52,11 +53,43 @@ end of the collection cycle. The current worker flushes when the batch reaches
 the configured target concurrency or after 30 seconds, and the channel holds
 at most twice that concurrency. Backend item results are matched to submitted
 observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
-runs for configured BMC targets after inventory synchronization. After
-concurrent nonce and evidence collection completes, attestation results are
+runs for configured BMC targets after the inventory phase, even if that phase
+fails. The backend requires an active OOB source registered through inventory,
+including sources registered in an earlier cycle. Backend verification also uses inventory-derived model and firmware
+metadata. After concurrent nonce and evidence collection completes, results are
+uploaded only for targets that obtained a nonce. A nonce request error skips
+that target's evidence collection and upload until the next cycle; backend
+`401 Unauthorized` responses still trigger one re-enrollment and retry. Skipped
+targets are logged and counted separately. Results are
 uploaded in mini-batches bounded by the same target concurrency. Attestation
 retains its collection barrier so nonce-driven JWT rotation and
-whole-collection authentication retry remain deterministic.
+whole-collection authentication retry remain deterministic. Upload responses
+are matched by BMC MAC, independently of response order, letter case, or
+separator format. Each target is reported
+as accepted, rejected, or unconfirmed. Missing or duplicate results leave only
+that target unconfirmed; an unreadable response leaves the mini-batch unconfirmed.
+Unexpected response rows are reported separately. Other mini-batches still run
+unless shutdown is requested or re-enrollment fails. Accepted items are not
+retried because another item fails.
+
+### Backend transport and credential handling
+
+Enrollment, inventory uploads, nonce requests, and attestation uploads use the
+shared `backend-client` transport helpers. The session owns enrollment credentials,
+the current JWT, and its enrollment HTTP client; re-enrollment reuses that
+client. Each sink retains its payload mapping and response semantics.
+Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error
+message containing `401` does not trigger re-enrollment.
+
+Request timeouts and the 10-second maximum connect timeout retain their
+existing behavior. Enrollment and inventory retain the default redirect policy;
+nonce and attestation uploads do not follow redirects. URL path modes are
+explicit: runtime enrollment/inventory paths extend the configured base path,
+while attestation's configured paths replace it. Deployments should use an API
+origin as their backend base URL so all flows address the same API root.
+
+CLI help displays the bootstrap token environment-variable name without its
+value.
 
 ## Collection lifecycle
 
@@ -71,9 +104,15 @@ causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by
 missing customer context; a trusted edge must inject that context before
 requests reach the agent API.
 
-The collector reloads the TOML and synchronizes the dispatcher's BMC endpoint
-set at the start of each cycle. Mounted target configuration and JSON
-credential updates are read on the next cycle.
+The collector loads one resolved target and credential snapshot per cycle and
+synchronizes the dispatcher's BMC endpoint set before starting collection.
+Inventory and attestation use that same snapshot. Startup validation supplies
+the first snapshot; subsequent cycles reload the TOML and JSON credential files.
+Target updates during a cycle take effect on the next cycle. During attestation,
+a BMC `401 Unauthorized` reloads credentials for that target and retries the
+failed request once, keeping the same nonce and previously collected evidence.
+Only one credential reload is allowed per target per attestation attempt. Invalid
+configuration skips the cycle without collecting against a stale target set.
 
 The runtime listens for SIGINT and SIGTERM throughout enrollment, collection,
 and sleep. Shutdown cancels Redfish collection and closes the inventory

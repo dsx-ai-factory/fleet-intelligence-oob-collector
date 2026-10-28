@@ -22,6 +22,7 @@ linked documents as the source of truth instead of duplicating their details.
 ## Project Structure
 
 - `src/`: CLI, runtime orchestration, enrollment, and backend session lifecycle.
+- `crates/backend-client/`: shared backend HTTP policy, enrollment transport, and typed errors.
 - `crates/bmc-dispatch/`: shared per-BMC admission, rate limiting, and fairness.
 - `crates/bmc-inventory/`: configuration, Redfish inventory, models, and sinks.
 - `crates/bmc-attestation/`: nonce, evidence collection, and attestation upload.

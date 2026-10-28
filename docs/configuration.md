@@ -44,8 +44,11 @@ matching ignores letter case. Unknown fields, invalid MACs, malformed JSON,
 unknown profiles, or unresolved usernames reject the configuration without
 including credential values in errors.
 
-The collector reads the file on each collection cycle. Replace the complete
-file atomically, including when rotating a Kubernetes Secret. NICo reloads the
+The collector reads the file on each collection cycle. During attestation, a BMC
+`401 Unauthorized` also triggers one credential reload and request retry per
+target, using its existing profile and MAC override. Target configuration stays
+fixed until the next cycle. Replace the complete file atomically, including
+when rotating a Kubernetes Secret. NICo reloads the
 same file through its cached reader and refreshes consumers after authentication
 failures. Use an absolute path for both processes; relative collector paths are
 resolved from the directory containing its TOML file.
@@ -215,6 +218,12 @@ observation, including observations with collection errors. Deploy the matching
 backend support before rolling out collectors that use the `collector` envelope.
 
 ## Proxy and TLS
+
+Use an absolute API origin, such as `https://api.example.com`, for
+`FLEETINT_BACKEND_URL` or `--backend-url`, without a `/v1/agent` endpoint suffix.
+Backend URLs cannot contain embedded credentials, query parameters, or fragments.
+Supply the bootstrap token through `FLEETINT_AGENT_TOKEN`; authentication is
+independent of the URL.
 
 Enable `proxy` with a cluster-reachable URL without credentials.
 `bmcCollector.redfish.insecureTls` disables BMC certificate verification and
