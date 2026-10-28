@@ -7,7 +7,7 @@ This file applies to the entire repository. Keep changes focused and use the lin
 - Start with [README.md](README.md) for the project purpose and user-facing documentation map.
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch names, commit and pull request conventions, DCO sign-off, and the issue-first workflow.
 - Read the [implementation notes](CONTRIBUTING.md#implementation-notes) before changing runtime orchestration, collection flow, identity, batching, or backend behavior.
-- Read [docs/configuration.md](docs/configuration.md) before changing TOML, environment variables, CLI defaults, Helm values, or credential handling.
+- Read [docs/configuration.md](docs/configuration.md) before changing Helm values or credential handling, and the [CLI reference](CONTRIBUTING.md#cli-reference) before changing TOML, environment variables, or CLI defaults.
 - Read [crates/bmc-inventory/README.md](crates/bmc-inventory/README.md) before changing inventory identity, partial-failure behavior, or backend write semantics.
 - Use [tests/README.md](tests/README.md) for test placement and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

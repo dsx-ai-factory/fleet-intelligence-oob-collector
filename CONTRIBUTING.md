@@ -94,6 +94,74 @@ cargo run --locked -- run \
 
 The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of the process arguments.
 
+### Collector TOML
+
+In Kubernetes, the Helm chart generates this file from `inventory` values. When running from source, you write it yourself. It has the same fields as the [Helm targets](docs/configuration.md#targets), in snake_case, and follows the same rules for MACs, labels, placement, and credentials:
+
+```toml
+compute_zone = "us-west-dc1"
+node_group = "gb200-training"
+labels = { site = "dc1" }
+
+[credentials]
+file = "credentials.json"
+
+[[targets]]
+kind = "compute"
+name = "node-01"
+ip = "192.0.2.10"
+port = 443
+mac = "00:11:22:33:44:55"
+credentials_profile = "bmc"
+labels = { rack = "rack-12" }
+```
+
+| TOML field | Helm value |
+| --- | --- |
+| `compute_zone`, `node_group`, `labels` | `inventory.computeZone`, `inventory.nodeGroup`, `inventory.labels` |
+| `credentials.file` | Set by the chart to the mounted Secret. A relative path is resolved from the directory containing the TOML file. |
+| `targets[].ip` | `inventory.targets[].address` |
+| `targets[].credentials_profile` | `inventory.targets[].credentialsProfile` |
+| `targets[].compute_zone`, `targets[].node_group` | `inventory.targets[].computeZone`, `inventory.targets[].nodeGroup` |
+| `targets[].kind`, `name`, `port`, `mac`, `labels` | Same names under `inventory.targets[]` |
+
+Unlike Helm, the TOML file accepts a MAC with mixed separators. The collector reports MACs as uppercase with colons and doesn't rewrite the file.
+
+### CLI reference
+
+The executable is `bmc-collector`. Add `--help` to any command to list its options.
+
+| Command | What it does |
+| --- | --- |
+| `inventory` | Collects once and prints a table. Add `--format json` for JSON or `--detail` for more columns. |
+| `run` | Enrolls with Fleet Intelligence, then collects and uploads inventory and attestation on a schedule. |
+| `render-nico-config --output nico.toml` | Generates NICo configuration that references the credentials file without copying passwords. The Helm chart runs it in NICo's init container. |
+
+`inventory` and `run` share these options. The matching Helm values are in [collection settings](docs/configuration.md#collection-settings).
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--config` | `config.toml` | Path to the collector TOML file. |
+| `--target-concurrency` | `64` | Number of BMCs collected at the same time. |
+| `--bmc-max-in-flight` | `4` | Maximum simultaneous Redfish requests to one BMC. |
+| `--bmc-requests-per-second` | `10` | Maximum request rate to one BMC. |
+| `--bmc-burst` | `10` | Requests allowed in a short burst above that rate. Helm sets it equal to the request rate. |
+| `--timeout-seconds` | `30` | Redfish request timeout. |
+| `--insecure-tls` | Off | Skip BMC certificate verification. |
+| `--disable-latency-probe` | Off | Skip network latency measurements. Also set by `FLEETINT_DISABLE_LATENCY_PROBE`. |
+
+`run` also uses:
+
+| Setting | Description |
+| --- | --- |
+| `FLEETINT_BACKEND_URL` or `--backend-url` | Fleet Intelligence API base address, without a path. |
+| `FLEETINT_AGENT_TOKEN` or `--agent-token` | Bootstrap token. Prefer the environment variable. |
+| `--interval-seconds` | Wait time after a cycle ends before the next starts. Defaults to `86400`; `0` is treated as one second. |
+
+`RUST_LOG` sets the log level and defaults to `info`.
+
+`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), and `--metrics-prefix` (default `fleetint`). These options only configure NICo; they don't start a gateway.
+
 Do not commit real BMC credentials, customer data, private backend URLs, or raw hardware dumps. The repository ignores the documented local configuration and environment files by default.
 
 See the [README](README.md) for installation, configuration, and architecture guides.

@@ -32,7 +32,7 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 ## Getting started
 
 - Follow [Installation](docs/installation.md) to deploy the Helm chart and verify collection.
-- See [Configuration](docs/configuration.md) for targets, credentials, CLI options, and Helm values.
+- See [Configuration](docs/configuration.md) for targets, credentials, and other Helm values.
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
 
 ## Documentation
@@ -40,7 +40,7 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 Read the [collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) and the broader [Fleet Intelligence documentation](https://docs.nvidia.com/fleet-intel). The guides are also available in this repository:
 
 - [Installation](docs/installation.md): Kubernetes setup, verification, and removal.
-- [Configuration](docs/configuration.md): CLI commands, targets, and Helm values.
+- [Configuration](docs/configuration.md): Helm values for targets, credentials, telemetry, and collection.
 - [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
 - [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
 

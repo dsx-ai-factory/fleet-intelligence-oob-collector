@@ -44,4 +44,4 @@ Every workload accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerat
 
 Helm checks value types, label key syntax, MAC uniqueness, and component combinations when you install. The collector checks the remaining rules, such as reserved label names, label counts, and value lengths, when it loads the configuration, including in NICo's init container.
 
-After you change values, run `helm upgrade`. See [rotation and ownership](../../../docs/credentials.md#rotation-and-ownership) for what restarts automatically and what doesn't, and [values.yaml](values.yaml) and the [configuration reference](../../../docs/configuration.md#helm-values) for every setting.
+After you change values, run `helm upgrade`. See [rotation and ownership](../../../docs/credentials.md#rotation-and-ownership) for what restarts automatically and what doesn't, and [values.yaml](values.yaml) and the [configuration reference](../../../docs/configuration.md) for every setting.

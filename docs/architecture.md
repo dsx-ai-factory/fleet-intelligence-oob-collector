@@ -33,10 +33,10 @@ Each machine is identified by its BMC MAC address, from configuration through in
 When the collector starts, it exchanges its bootstrap token for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
 
 1. **Reload configuration.** The collector re-reads the target list and credentials file, so edits take effect at the next cycle. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
-2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `--target-concurrency`, after 30 seconds, or when inventory collection ends.
+2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `bmcCollector.targetConcurrency`, after 30 seconds, or when inventory collection ends.
 3. **Measure latency.** After reading each BMC, the collector measures how long a TCP connection to it takes and includes the result in that node's inventory. See [network latency measurement](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#network-latency-measurement).
 4. **Collect attestation.** For each BMC, the collector asks Fleet Intelligence for a one-time nonce, collects signed GPU evidence from the BMC, and uploads it. This step runs even if some inventory failed. Fleet Intelligence verifies the evidence against the model and firmware details from inventory, so a machine's inventory must have been uploaded at least once.
-5. **Wait.** The collector waits for `--interval-seconds` (24 hours by default), then starts the next cycle.
+5. **Wait.** The collector waits for `bmcCollector.intervalSeconds` (24 hours by default), then starts the next cycle.
 
 On `SIGINT` or `SIGTERM`, the collector stops collecting, uploads the inventory it has already finished, completes uploads that are in progress, and exits. It doesn't start new attestation uploads.
 
@@ -57,11 +57,11 @@ The collector protects BMCs from overload. By default, it reads 64 BMCs at a tim
 
 Inventory and attestation share these limits. The scheduler takes turns between BMCs and between inventory and attestation, so one slow BMC or one busy workflow can't hold up the others. NICo schedules its own requests separately, and these limits don't cover it.
 
-See [CLI commands](configuration.md#cli-commands) and [Helm values](configuration.md#helm-values) to change the limits.
+See [collection settings](configuration.md#collection-settings) to change the limits.
 
 ## Security
 
-**Credentials.** Passwords live only in the credentials file. The collector's TOML, the Helm values, and NICo's generated configuration refer to the file by path and never copy passwords into it. With Helm, the file is mounted from a Kubernetes Secret.
+**Credentials.** Passwords live only in the credentials file. The Helm values and the collector and NICo configuration generated from them refer to the file by path and never copy passwords into it. With Helm, the file is mounted from a Kubernetes Secret.
 
 **Kubernetes workloads.** All workloads run as non-root, with read-only root filesystems, no Linux capabilities, and no Kubernetes API token. The collector and NICo restart with `Recreate`, so two copies never collect at the same time; the gateway can be scaled out and uses rolling updates. A NetworkPolicy allows traffic to the gateway's OTLP ports (4317 and 4318) only from pods in the same release and namespace, if your cluster's network plugin enforces NetworkPolicies.
 

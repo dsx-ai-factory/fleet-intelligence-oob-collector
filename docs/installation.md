@@ -47,7 +47,7 @@ kubectl create secret generic fleet-intelligence-bmc-credentials \
 
 ### Save your values file
 
-Save your targets and the Secret names in a values file, for example `/path/to/collector-values.yaml`. List one entry under `targets` for each BMC; [Configuration](configuration.md#helm-values) describes every field.
+Save your targets and the Secret names in a values file, for example `/path/to/collector-values.yaml`. List one entry under `targets` for each BMC; [Configuration](configuration.md#targets) describes every field.
 
 ```yaml
 inventory:
@@ -89,7 +89,7 @@ helm upgrade --install fleet-intelligence-oob-collector \
 
 For a deployment using private registry mirrors, configure `imagePullSecrets` and authenticate Helm to the chart registry as required by your organization.
 
-Collector and NICo image tags default to the chart version. See [Configuration](configuration.md#helm-values) for supported overrides.
+Collector and NICo image tags default to the chart version. See [workload settings](configuration.md#workload-settings) for supported overrides.
 
 ## Verify
 
