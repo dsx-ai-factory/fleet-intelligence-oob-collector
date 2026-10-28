@@ -60,6 +60,36 @@ class PublicationLinksTest(unittest.TestCase):
         self.assertEqual(content, links.load_stager().fix_mdx(content, "v1.0.0"))
         self.assertFalse(links.markdown_links(content))
 
+    def test_nested_fences_preserve_examples_and_check_links_afterward(self):
+        """Shorter, mismatched, or suffixed fences must not expose example links."""
+        for opener, inner, closer in [
+            ("````markdown", "```", "````"),
+            ("~~~markdown", "```", "~~~"),
+            ("```markdown", "~~~", "```"),
+            ("~~~markdown", "~~", "~~~"),
+            ("````markdown", "````not-a-closer", "````"),
+            ("```markdown", None, "`````"),
+            ("   ````markdown", "   ```", "   ````"),
+            ("~~~markdown", "~~~not-a-closer", "~~~~ \t"),
+        ]:
+            example = f"{opener}\n[Example](docs/example.md)\n"
+            if inner is not None:
+                example += f"{inner}\n[Still example](docs/still-example.md)\n"
+            example += closer
+            content = example + "\n[Outside](docs/configuration.md)"
+            with self.subTest(opener=opener, inner=inner, closer=closer):
+                self.assertEqual(
+                    example + "\n[Outside](configuration.md)",
+                    links.load_stager().fix_mdx(content, "v1.0.0"),
+                )
+                self.assertEqual(["docs/configuration.md"], links.markdown_links(content))
+
+    def test_unclosed_fence_preserves_remaining_content(self):
+        """An unclosed fence keeps all remaining lines inside the example."""
+        content = "~~~~markdown\n[Example](docs/example.md)\n~~~\n[Example](README.md)"
+        self.assertFalse(links.markdown_links(content))
+        self.assertEqual(content, links.load_stager().fix_mdx(content, "v1.0.0"))
+
 
 if __name__ == "__main__":
     unittest.main()

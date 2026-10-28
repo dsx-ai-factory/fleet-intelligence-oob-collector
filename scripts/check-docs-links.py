@@ -15,6 +15,7 @@ REPO_URL = "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector"
 
 
 def load_stager():
+    """Load the release stager and its shared Markdown fence handling."""
     spec = importlib.util.spec_from_file_location(
         "docs_stager", ROOT / "scripts/docs-fetch-versions.py"
     )
@@ -24,15 +25,18 @@ def load_stager():
 
 
 def markdown_links(content):
-    # Ignore examples inside fences; validate inline and reference-style links.
-    content = re.sub(r"^\s*```[^\n]*\n.*?^\s*```[^\n]*$", "", content,
-                     flags=re.MULTILINE | re.DOTALL)
+    """Extract inline and reference-style links outside fenced code examples."""
+    content = "\n".join(
+        "" if in_code_block else line
+        for line, in_code_block in load_stager().markdown_lines(content)
+    )
     return re.findall(r"\]\(([^\s)]+)(?:\s+\"[^\"]*\")?\)", content) + re.findall(
         r"^\s*\[[^\]]+\]:\s*(\S+)", content, flags=re.MULTILINE
     )
 
 
 def check_page(content, source, pages, root=ROOT, ref="main"):
+    """Return errors for missing files, unpublished pages, refs, and headings."""
     errors = []
     prefix = f"{REPO_URL}/blob/"
     for target in markdown_links(content):
@@ -66,6 +70,7 @@ def check_page(content, source, pages, root=ROOT, ref="main"):
 
 
 def main():
+    """Validate published source pages and their release-staged equivalents."""
     # The HEAD navigation is the publication boundary, not the repository tree.
     nav = (ROOT / "fern/docs.yml").read_text()
     paths = re.findall(r"^\s+path:\s+([^\s]+\.md)\s*$", nav, re.MULTILINE)
