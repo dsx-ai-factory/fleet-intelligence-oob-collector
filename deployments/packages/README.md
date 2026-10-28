@@ -18,11 +18,11 @@ Install the nFPM version pinned in `nfpm.version` using an
 Confirm that `nfpm --version` matches the pinned version before building.
 
 Install Rust through rustup, Go, Git, a C/C++ compiler, Clang, CMake,
-`pkg-config`, musl tools, and protobuf tools. On Ubuntu/Debian,
+`pkg-config`, binutils (`readelf`), musl tools, and protobuf tools. On Ubuntu/Debian,
 the native development packages are:
 
 ```bash
-sudo apt-get install build-essential clang cmake pkg-config musl-tools \
+sudo apt-get install build-essential clang cmake pkg-config binutils musl-tools \
   protobuf-compiler libprotobuf-dev
 ```
 
@@ -81,8 +81,9 @@ set a real BMC address and MAC before starting services. An empty target list
 is rejected by the collector. See
 [configuration](../../docs/configuration.md). Set backend/proxy settings in
 `/etc/fleetint-oob/service.conf`, including `FLEETINT_AGENT_TOKEN`. This file is
-installed root-owned with mode `0600`. Both services read it directly through
-systemd `EnvironmentFile`; no shell wrappers are used.
+installed root-owned with mode `0600`. The collector and gateway read it through
+systemd `EnvironmentFile`. NICo does not load `service.conf`; proxy and logging
+variables in that file apply to the collector and gateway only.
 
 Set each target's `credentials_profile` to a profile in the shared JSON file,
 or provide a per-MAC override. A placeholder example is installed at
@@ -99,6 +100,9 @@ in the JSON file.
 Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the
 backend. Environment files do not expand references to other variables.
 The host needs access to the BMCs and backend, but no local GPU.
+`FLEETINT_BACKEND_URL` is the collector API origin; `BACKEND_ENDPOINT` is the
+gateway telemetry base URL (including `/api/v1/health`), and `ENROLL_ENDPOINT`
+is its enrollment URL (including `/api/v1/health/enroll`).
 
 ```bash
 sudo systemctl enable --now fleetint-oob.target

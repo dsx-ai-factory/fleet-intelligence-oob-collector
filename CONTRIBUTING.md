@@ -131,7 +131,7 @@ Use the same format for commit subjects and pull request titles:
 - Allowed types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`, `revert`.
 - Scope is optional and lowercase, for example `cli`, `inventory`, or `deps`.
 - Write a concise, imperative description, for example `fix(inventory): handle missing chassis`.
-- For breaking changes, add `!` after the type/scope, for example `feat(cli)!: remove deprecated flag`, and explain the impact and migration in the PR body.
+- For breaking changes, add `!` after the type/scope, for example `feat(cli)!: require a target file`, and explain the impact and required operator actions in the PR body.
 - Sign off every commit with `git commit -s`, using your real name and a valid email address, to comply with the DCO.
 - Name branches `<type>/<short-dash-separated-name>`, for example `fix/missing-chassis` or `docs/configuration-guide`. Use one of the allowed types above.
 - Target `main` unless maintainers specify a release branch.
@@ -154,7 +154,7 @@ titles when a PR is opened, edited, or updated. Maintainers should require this
 check in branch protection and configure squash merging to use the PR title as
 the final commit subject. Local commit-format hooks are optional; individual
 commit messages do not become target-branch subjects when squash merging.
-Contributors must still sign off every commit, and maintainers must preserve
+Contributors must sign off every commit, and maintainers must preserve
 those sign-offs in the final squash commit.
 
 ## Release Process

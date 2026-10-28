@@ -54,6 +54,8 @@ To build from source and collect inventory locally, use the steps below.
 - Git
 - [Rustup](https://rustup.rs/), which installs the toolchain pinned in
   `rust-toolchain.toml`
+- A C linker for the host platform (for example, the toolchain provided by
+  `build-essential` on Debian or Ubuntu)
 
 Clone the repository, build the collector, and inspect its commands:
 

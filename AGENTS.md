@@ -40,8 +40,8 @@ command, configuration field, data model, deployment behavior, or output
 contract changes.
 
 Ask before adding or upgrading dependencies; changing public JSON or backend
-API contracts; changing node identity or `domainErrors` semantics; removing
-legacy configuration support; changing CLI or Helm defaults; or altering
+API contracts; changing node identity or `domainErrors` semantics; changing
+supported configuration formats; changing CLI or Helm defaults; or altering
 release permissions and publication behavior.
 
 ## Out of Scope
@@ -71,6 +71,13 @@ release permissions and publication behavior.
   Redfish-derived errors and references.
 - Keep dependency versions in the workspace tables in `Cargo.toml`; update
   `Cargo.lock` with Cargo rather than editing it manually.
+
+## Documentation Style
+
+Describe the supported implementation in the present tense. Keep the README,
+public guides, examples, and component references aligned with source, CLI
+defaults, chart templates, and packaging assets. Omit historical behavior
+comparisons and version-transition narratives.
 
 ## Coding and Test Conventions
 

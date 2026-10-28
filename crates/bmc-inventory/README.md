@@ -32,7 +32,8 @@ Upload failures are reported per target, and collection errors are reported
 separately from upload outcomes.
 
 Attestation identifies configured BMCs by MAC. It requires an active OOB source
-registered through inventory, which can come from an earlier cycle.
+registered through inventory. Attestation is attempted after the inventory
+phase for every configured BMC, independently of its inventory upload result.
 
 ## Partial Collection
 
@@ -70,13 +71,16 @@ A `targetError` records collection failure without updating stored inventory.
 ## Network Latency Measurement
 
 `latency[]` reports TCP connection time to the BMC's Redfish port. Successful
-measurements include `minUs` and `medianUs`; use the minimum to compare latency
-with less transient queuing noise. The probe excludes TLS, HTTP, and BMC
+measurements include `minUs` and `medianUs`. Each probe round makes five
+attempts with 100 milliseconds between attempts and a two-second timeout per
+attempt; at least three must succeed to report latency values. Use the minimum
+to compare latency with less transient queuing noise. The probe excludes TLS, HTTP, and BMC
 application processing.
 
 Measurement status is `ok`, `unavailable`, `intercepted`, or `disabled`. A
-once-per-run check detects local TCP interception and skips target probes when
-present. Disable probing with `--disable-latency-probe` or
+check at the start of each local inventory command or runtime inventory phase
+detects local TCP interception and skips target probes when present. Disable
+probing with `--disable-latency-probe` or
 `bmcCollector.latencyProbe.enabled: false`.
 
 Targets with `targetError` are not probed. Probe failures do not populate
@@ -84,8 +88,10 @@ Targets with `targetError` are not probed. Probe failures do not populate
 
 ## Output Conventions
 
-- JSON uses schema `inventory.v1alpha1` and camelCase field names. Optional
-  Redfish fields remain optional, and enum values use their Redfish spelling.
+- Local JSON output is an array of observations using schema `inventory.v1alpha1`
+  and camelCase field names. Backend batches wrap observations with the collector
+  metadata described in [Configuration](../../docs/configuration.md#reported-collector-behavior).
+  Optional Redfish fields remain optional, and enum values use their Redfish spelling.
 - Chassis location, processor summaries, and memory summaries retain their nested
   structure. Table output presents selected values without changing the model.
 - Resource references use `odataId`. Standard relationships appear in `links`

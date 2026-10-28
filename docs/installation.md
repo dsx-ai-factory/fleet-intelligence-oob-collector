@@ -111,7 +111,7 @@ printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
   --password-stdin
 ```
 
-This login lets Helm pull the chart. The `ghcr-pull-secret` instead lets
+This login lets Helm pull the chart. The `ghcr-pull-secret` lets
 Kubernetes nodes pull the deployed images.
 
 Choose a published chart version from the repository
@@ -172,8 +172,11 @@ For gateway export failures, also check backend reachability and TLS trust.
 
 The collector reloads its mounted TOML and JSON credentials each collection
 cycle. NICo reloads the JSON file without restarting. Run `helm upgrade` after
-changing targets or non-secret configuration; checksum annotations roll both
-deployments automatically.
+changing values. Changes to rendered target TOML roll the collector and NICo;
+changes to rendered gateway configuration roll the gateway. Environment, image,
+and other pod-template changes roll the affected workloads. Bootstrap token
+value changes require an explicit restart of the collector and enabled gateway;
+see [credential rotation](credentials.md#rotation-and-ownership).
 
 ## Disconnect an individual machine
 
@@ -200,10 +203,9 @@ machine.
      --namespace fleet-intelligence --timeout=10m
    ```
 
-Skip the NICo command when it is disabled. Confirm the release ConfigMap no
-longer contains the machine's BMC MAC and check the [collector logs](#verify)
-for failures affecting remaining targets. Data already in transit can still
-arrive after the rollout. Keep the shared credential Secret; remove an unused
+Skip the NICo command when it is disabled. Confirm the release ConfigMap omits
+the machine's BMC MAC and check the [collector logs](#verify) for failures
+affecting remaining targets. Data in transit can arrive after the rollout. Keep the shared credential Secret; remove an unused
 per-MAC override from its JSON file only when no other workload needs it.
 
 ## Uninstall the OOB Collector
@@ -227,7 +229,7 @@ if they differ, and disable any automation that would reinstall the release.
      -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
-3. Delete credential Secrets that are no longer used:
+3. Delete unused credential Secrets:
 
    ```bash
    kubectl delete secret fleet-intelligence-oob-collector-agent-token \

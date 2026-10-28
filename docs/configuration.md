@@ -39,10 +39,11 @@ The JSON file uses NICo's `profiles` and per-MAC `overrides` schema; see
 [credentials.example.json](../credentials.example.json). Each field resolves from
 the MAC override, then the explicitly selected `credentials_profile`. There is
 no implicit default profile. Omitted or null fields inherit; an empty string is
-an explicit value. A username must be present; passwords may be omitted. MAC
-matching ignores letter case. Unknown fields, invalid MACs, malformed JSON,
-unknown profiles, or unresolved usernames reject the configuration without
-including credential values in errors.
+an explicit value. A username field must resolve; passwords default to an empty
+string when omitted from both sources. MAC matching normalizes letter case
+and separator format, and equivalent override keys are rejected as duplicates.
+Unknown fields, invalid MACs, malformed JSON, unknown profiles, or unresolved
+usernames reject the configuration without including credential values in errors.
 
 The collector reads the file on each collection cycle. During attestation, a BMC
 `401 Unauthorized` also triggers one credential reload and request retry per
@@ -53,8 +54,9 @@ same file through its cached reader and refreshes consumers after authentication
 failures. Use an absolute path for both processes; relative collector paths are
 resolved from the directory containing its TOML file.
 
-Define each target with `[[targets]]`. Its optional `kind` is one of `unknown`,
-`compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
+At least one `[[targets]]` entry is required. Unknown TOML fields are rejected.
+Each target's optional `kind` is one of `unknown`, `compute`, `nvswitch`, or
+`power_shelf`, and defaults to `unknown` when omitted.
 
 ## CLI commands
 
@@ -85,7 +87,8 @@ For `run`, set `FLEETINT_BACKEND_URL` to the backend API origin and
 are also accepted; prefer the token environment variable to keep it out of
 process arguments. `--interval-seconds` defaults to `86400` and sets the delay
 after a cycle finishes. `RUST_LOG` configures collector logging and defaults to
-`info`.
+`info`. A zero CLI collection interval is treated as one second; Helm requires
+a positive interval.
 
 The renderer accepts `--otlp-endpoint` (default `http://localhost:4317`),
 `--metrics-endpoint` (default `0.0.0.0:9009`), and `--metrics-prefix` (default
@@ -114,9 +117,11 @@ Every target requires an explicit BMC MAC. The collector does not derive identit
 from the IP address. The normalized MAC is used consistently in configuration, inventory, and NICo
 telemetry; equivalent spellings are rejected as duplicate targets.
 
-Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. The collector reserves capacity
-for labels derived from `name`, `compute_zone`, and `node_group`, plus
-`oob="true"`. Values for labels and these fields are limited to 1,024 bytes.
+Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. Each target supports at most
+32 labels in total, including `oob="true"` and labels derived from `name`,
+`compute_zone`, and `node_group` when present. Values for labels and these
+fields are limited to 1,024 bytes. Names and placement values are trimmed and
+must not be blank when supplied.
 NICo identity fields and all four derived label names are reserved.
 
 ### Fleet Intelligence placement fields
@@ -186,9 +191,12 @@ endpoints without NICo machine, switch, or power-shelf descriptors.
 
 ## Helm values
 
-Both services use `inventory.targets`; addresses are IP literals with optional
-ports. Target placement and labels override shared defaults. All target kinds
-render as generic static Redfish endpoints through the Rust renderer.
+Both services use `inventory.targets`. Each target's `address` is an IPv4 or
+IPv6 literal without a scheme or port; set its optional `port` separately.
+Target placement and labels override shared defaults. Helm uses `computeZone`,
+`nodeGroup`, and `credentialsProfile` for the TOML fields `compute_zone`,
+`node_group`, and `credentials_profile`. All target kinds render as generic
+static Redfish endpoints through the Rust renderer.
 
 | Setting | Purpose |
 | --- | --- |
@@ -196,7 +204,7 @@ render as generic static Redfish endpoints through the Rust renderer.
 | `credentials` | Shared BMC JSON Secret reference. |
 | `backend` | Fleet Intelligence URL and bootstrap token reference. |
 | `telemetry.endpoint` | External OTLP/gRPC destination; disable `otelGateway`. |
-| `proxy` | Shared proxy, enabled explicitly; URLs cannot contain credentials. |
+| `proxy` | Proxy environment variables for the Helm workloads, enabled explicitly; URLs cannot contain credentials. |
 | `bmcCollector.redfish` | Per-BMC request limits, timeout, and TLS verification. |
 | `bmcCollector.intervalSeconds` | Delay between collection cycles; defaults to `86400`. |
 | `bmcCollector.targetConcurrency` | Concurrent target workflows; defaults to `64`. |
@@ -210,8 +218,18 @@ Optional features use `enabled`; application Secret references use
 for defaults and [installation](installation.md#configure-targets-and-secrets)
 for an example.
 
-NICo uses the renderer defaults for sensor collection, SSE logs, GPU identity,
-CPER diagnostics, and alert details.
+The chart sets the collector's burst capacity to
+`bmcCollector.redfish.requestsPerSecond`; the CLI exposes burst capacity
+separately through `--bmc-burst`. These dispatcher limits apply to the
+collector's inventory and attestation requests. NICo runs its own collection
+requests independently.
+
+The renderer enables NICo's SSE log collection, GPU identity attributes,
+tracing and Prometheus sinks, and OTLP export with diagnostics and alert
+details. Its OTLP batches hold up to 512 records and flush every two seconds.
+SSE log collection requires a BMC EventService; the rendered configuration does
+not enable a polling fallback. These NICo settings are fixed by the renderer
+and are not Helm values.
 
 Provision the shared JSON Secret and `backend.agentToken` directly or through
 an external secrets operator. See [Credentials](credentials.md) for Vault and

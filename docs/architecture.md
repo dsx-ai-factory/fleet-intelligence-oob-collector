@@ -35,13 +35,14 @@ Inventory follows a source → model → sink pipeline. The Redfish source build
 the Fleet Intelligence inventory model directly, keeping vendor-specific
 Redfish structures inside the source.
 Inventory and attestation use the same dispatcher so their requests share
-per-BMC concurrency and rate limits.
+per-BMC concurrency and rate limits. NICo runs in a separate process with its
+own request scheduling; these dispatcher limits do not cover NICo traffic.
 
 After each target's Redfish collection, the source measures TCP connect time to
 the BMC to record collector-to-BMC network latency. The probe round uses one
-inventory dispatcher admission, and a once-per-run check against an unroutable
-address detects local TCP interception. Measurements are uploaded with each
-node's inventory; see the
+inventory dispatcher admission. A check against an unroutable address runs
+once per local inventory command or runtime inventory phase to detect local TCP
+interception. Measurements are uploaded with each node's inventory; see the
 [inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
 
 The required configured BMC MAC identifies observations and correlates targets
@@ -86,7 +87,9 @@ Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error
 message containing `401` does not trigger re-enrollment.
 
 Backend request timeouts default to 30 seconds, with a connect timeout capped
-at 10 seconds. Enrollment and inventory use the default redirect policy;
+at 10 seconds. Enrollment and inventory use a 30-second request timeout;
+nonce and attestation uploads use the collector's `--timeout-seconds` setting.
+Enrollment and inventory use the default redirect policy;
 nonce and attestation uploads do not follow redirects. URL path modes are
 explicit: runtime enrollment/inventory paths extend the configured base path,
 while attestation's configured paths replace it. Deployments should use an API
@@ -98,12 +101,12 @@ value.
 ## Collection lifecycle
 
 At startup, the collector exchanges its bootstrap token for a runtime JWT. It
-then runs one collection cycle immediately and repeats every 24 hours by
-default. Each cycle collects inventory concurrently while a bounded backend
-worker uploads completed nodes in mini-batches. It then collects attestation for
-configured BMCs by MAC, uploads bounded
-attestation mini-batches, and waits for the configured interval. A backend `401 Unauthorized`
-during an inventory upload, attestation nonce request, or attestation upload
+then runs one collection cycle immediately. After each cycle finishes, it waits
+24 hours by default before starting the next cycle. Each cycle collects
+inventory concurrently while a bounded backend worker uploads completed nodes
+in mini-batches. It then collects attestation for configured BMCs by MAC, uploads
+bounded attestation mini-batches, and waits for the configured interval. A
+backend `401 Unauthorized` during an inventory upload, attestation nonce request, or attestation upload
 causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by
 missing customer context; a trusted edge must inject that context before
 requests reach the agent API.
@@ -114,7 +117,7 @@ Inventory and attestation use that same snapshot. Startup validation supplies
 the first snapshot; subsequent cycles reload the TOML and JSON credential files.
 Target updates during a cycle take effect on the next cycle. During attestation,
 a BMC `401 Unauthorized` reloads credentials for that target and retries the
-failed request once, keeping the same nonce and previously collected evidence.
+failed request once, keeping the same nonce and collected evidence.
 Only one credential reload is allowed per target per attestation attempt. Invalid
 configuration skips the cycle without collecting against a stale target set.
 
@@ -154,8 +157,8 @@ the independently scalable gateway uses `RollingUpdate`.
 
 Workloads run as non-root, without service account tokens or Linux
 capabilities, and with read-only root filesystems. The default NetworkPolicy
-restricts gateway ingress to pods in the same Helm release when enforced by the
-cluster CNI.
+allows gateway OTLP ingress on ports 4317 and 4318 from pods with the same
+release label in the same namespace, when enforced by the cluster CNI.
 
 The experimental `fleetint-oob` host package runs the same three components as
 `fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd

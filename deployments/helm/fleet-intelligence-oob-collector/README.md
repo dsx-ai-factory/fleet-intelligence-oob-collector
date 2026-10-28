@@ -29,7 +29,8 @@ Provision these Secrets directly or synchronize them from Vault/OpenBao using
 the separately applied [examples](../examples/). Follow the
 [credentials guide](../../../docs/credentials.md) for setup.
 
-Targets require a unique MAC and an IP address. Kinds are `compute`, `nvswitch`,
+Targets require a unique MAC and an IP address in `address`; an optional
+`port` is a separate integer field. Kinds are `compute`, `nvswitch`,
 `power_shelf`, and `unknown` (default). Helm renders `collector.toml` from this
 inventory. The NICo init container runs `bmc-collector render-nico-config` against
 that file; all target kinds become generic static Redfish endpoints. The
@@ -43,16 +44,21 @@ image tags default to the chart version. Registry auth uses `imagePullSecrets`.
 
 The bundled gateway uses `backend.url` and `backend.agentToken`. For an external
 OTLP/gRPC destination, set `telemetry.endpoint` and disable `otelGateway`.
-Disable NICo and the gateway for inventory only, or the collector for health only.
+Disable NICo and the gateway for inventory and attestation only, or disable the
+collector for health telemetry only. NICo uses the collector image for its
+configuration init container even when `bmcCollector.enabled` is `false`. The
+gateway requires NICo to be enabled.
 
-After changing values, run `helm upgrade`; config changes roll the workloads.
-Credential file updates are reloaded without restarting NICo and on each
-collector cycle.
+After changing values, run `helm upgrade`. Target TOML changes roll the collector
+and NICo; gateway configuration changes roll the gateway. Pod-template changes
+roll the affected workloads. BMC credential file values are read on each
+collector cycle and reloaded by NICo without restarting. Bootstrap token value
+changes require restarting the enabled collector and gateway.
 
 See [values.yaml](values.yaml) for defaults and the
 [configuration reference](../../../docs/configuration.md#helm-values) for
 collection limits, telemetry destinations, and TLS behavior. Helm validates
-value types, label-key syntax,
-and workload combinations. The collector validates reserved label names,
+value types, label-key syntax, MAC uniqueness, and workload combinations. The
+collector validates reserved label names,
 counts, and value lengths when loading configuration, including in the NICo
 init container.
