@@ -1,36 +1,43 @@
 # Credentials
 
-The chart reads existing Kubernetes Secrets for BMC credentials and the Fleet Intelligence bootstrap token. Create them directly as shown in [Installation](installation.md#configure-targets-and-secrets), or synchronize them from Vault, OpenBao, or another secrets manager with your chosen operator. Apply provider resources separately from the collector chart.
+The Helm chart doesn't hold any secrets itself. It reads two Kubernetes Secrets that you create in advance:
 
-| Credential | Kubernetes Secret key | Workload input |
+| Secret contents | Key | Used by |
 | --- | --- | --- |
-| Shared BMC credentials JSON | `credentials.json` | `/run/secrets/bmc/credentials.json` in the collector, NICo init container, and NICo runtime |
-| Fleet Intelligence bootstrap token | `agent-token` | Collector `FLEETINT_AGENT_TOKEN` and bundled gateway `SAK_TOKEN` environment variables |
+| BMC credentials file (JSON) | `credentials.json` | The collector and NICo, mounted at `/run/secrets/bmc/credentials.json` |
+| Fleet Intelligence bootstrap token | `agent-token` | The collector (`FLEETINT_AGENT_TOKEN`) and the bundled gateway (`SAK_TOKEN`) |
 
-Credential values stay in the JSON file and token Secret. Helm values contain inventory and Secret references only. The collector and bundled gateway use the same bootstrap token, authorized for both enrollment flows.
+You can create these Secrets by hand, as shown in [Installation](installation.md#configure-targets-and-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
 
-There are three separate authentication steps:
+Three separate logins are involved, and it helps to keep them apart:
 
-- The secrets operator uses Kubernetes authentication to read Vault/OpenBao.
-- The collector and NICo use the shared JSON usernames and passwords to access BMCs.
-- The collector and gateway each exchange the Fleet Intelligence bootstrap token for their own runtime JWT. Obtain the bootstrap token from your Fleet Intelligence administrator; a Vault/OpenBao token cannot replace it.
+- **The secrets operator** signs in to Vault or OpenBao with its Kubernetes ServiceAccount. The collector and NICo never talk to Vault or OpenBao.
+- **The collector and NICo** sign in to BMCs with the usernames and passwords in the credentials file.
+- **The collector and gateway** each exchange the bootstrap token for their own Fleet Intelligence session. Get the bootstrap token from your Fleet Intelligence administrator, and make sure it is allowed to enroll both the collector and the gateway. A Vault or OpenBao token can't be used in its place.
 
-## Provider prerequisites
+## Before you start
 
-| Backend | Server setup | Operator setup |
+Pick one operator for each Secret. The examples pair Vault with the Vault Secrets Operator (VSO) and OpenBao with the External Secrets Operator (ESO):
+
+| Secrets manager | Server setup | Operator setup |
 | --- | --- | --- |
 | Vault | [Vault on Kubernetes](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/helm/run) | [Install Vault Secrets Operator](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/installation) |
 | OpenBao | [OpenBao on Kubernetes](https://openbao.org/docs/platform/k8s/helm/run/) | [Install External Secrets Operator](https://external-secrets.io/latest/introduction/getting-started/) |
 
-Use a reachable server with trusted TLS, KV v2 mounts, Kubernetes authentication, and the selected operator's CRDs installed. Choose one operator for each destination Secret.
+You need a server the cluster can reach over trusted TLS, KV version 2 mounts, Kubernetes authentication, and the operator's CRDs installed.
 
 ## 1. Store the credentials
 
-Prepare the complete BMC credentials JSON document using [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json). Its `profiles` contain shared credential fields, and its per-MAC `overrides` supply device-specific fields. Each field resolves from its MAC override, then the target's selected profile. This JSON document is separate from the collector TOML described in [Configuration](configuration.md), which selects a credential profile for each target and references the mounted JSON file.
+Prepare your BMC credentials file from [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json). [Configuration](configuration.md#bmc-credentials-file) explains its profiles and overrides.
 
-Store the whole JSON document as a **string** field named `credentials` in KV mount `bmc`, entry `collector`. The operator copies that string into the Kubernetes Secret key `credentials.json`; it does not build a separate file for each target or duplicate the credential-resolution logic.
+Store two entries:
 
-Store the shared Fleet Intelligence bootstrap token as a non-empty string field named `token` in KV mount `credentials`, entry `backend`. Use your provider's CLI or UI to populate both entries; keep their values out of example YAML and Helm values. With the provider CLI already authenticated and both KV v2 mounts enabled, load the files directly:
+| What | KV mount | Entry | Field |
+| --- | --- | --- | --- |
+| The whole credentials file, as one string | `bmc` | `collector` | `credentials` |
+| The bootstrap token | `credentials` | `backend` | `token` |
+
+With the provider CLI signed in and both mounts enabled, load them straight from files:
 
 ```bash
 SECRETS_CLI=vault # Use bao for OpenBao.
@@ -40,25 +47,21 @@ SECRETS_CLI=vault # Use bao for OpenBao.
   token=@/secure/path/to/agent-token
 ```
 
-The `credentials=@...` argument stores the file contents as one string field. Do not split `profiles` and `overrides` into separate KV fields or manually escape the JSON. See the [Vault](https://developer.hashicorp.com/vault/docs/commands/kv/put) and [OpenBao](https://openbao.org/docs/commands/kv/put/) CLI references.
+The `@` form stores each file's contents as a single string, which is what the sync templates expect. Store the whole credentials file in one field; the operator copies it into Kubernetes unchanged. See the [Vault](https://developer.hashicorp.com/vault/docs/commands/kv/put) and [OpenBao](https://openbao.org/docs/commands/kv/put/) CLI references.
 
-## 2. Authorize the operator's identity
+## 2. Let the operator read them
 
-Have your secrets administrator configure Kubernetes authentication, backend TokenReview access, and a role with a read-only policy. Follow [Vault Kubernetes auth](https://developer.hashicorp.com/vault/docs/auth/kubernetes) or [OpenBao Kubernetes auth](https://openbao.org/docs/auth/kubernetes/).
-
-The examples use these settings:
+Your secrets administrator sets up Kubernetes authentication (including TokenReview access) by following the [Vault Kubernetes auth](https://developer.hashicorp.com/vault/docs/auth/kubernetes) or [OpenBao Kubernetes auth](https://openbao.org/docs/auth/kubernetes/) guide. You then need a read-only policy and a role for the operator. The examples use these names:
 
 | Setting | Vault/VSO | OpenBao/ESO |
 | --- | --- | --- |
 | Auth mount | `kubernetes` | `kubernetes` |
-| Backend role | `oob-credentials-reader` | `oob-credentials-reader` |
-| Bound namespace | `fleet-intelligence` | `fleet-intelligence` |
-| Bound ServiceAccount | `vault-reader` | `openbao-reader` |
+| Role | `oob-credentials-reader` | `oob-credentials-reader` |
+| Namespace | `fleet-intelligence` | `fleet-intelligence` |
+| ServiceAccount | `vault-reader` | `openbao-reader` |
 | Token audience | `vault` | `vault` |
 
-Grant `read` on `bmc/data/collector` and `credentials/data/backend`. These KV v2 policy paths include `data/`; the sync resources' source paths do not. The collector and NICo do not authenticate to the secrets backend; the operator uses the bound ServiceAccount to obtain a backend token.
-
-After the administrator configures the Kubernetes auth mount and TokenReview access for your cluster, create the policy and role below. These commands use the Vault example's ServiceAccount; for OpenBao, set `SECRETS_CLI=bao` and `SECRETS_READER_SERVICE_ACCOUNT=openbao-reader`. Adapt the namespace and audience in both the role and manifests if you change them.
+Create the policy and role. For OpenBao, set `SECRETS_CLI=bao` and `SECRETS_READER_SERVICE_ACCOUNT=openbao-reader`. If you change the namespace or audience, change it here and in the manifests in the next steps.
 
 ```bash
 SECRETS_CLI=vault
@@ -81,7 +84,9 @@ EOF
   ttl=1h
 ```
 
-## 3. Configure the connection and authentication
+Policy paths include `data/` (for example `bmc/data/collector`), because that is how KV version 2 names them. The sync manifests in step 4 leave it out.
+
+## 3. Connect the operator to your server
 
 Create the namespace:
 
@@ -90,50 +95,48 @@ kubectl create namespace fleet-intelligence \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-For Vault/VSO, edit [auth.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/auth.yaml) with your server address and identity bindings. Set the `VaultConnection`'s `caCertSecretRef` when using a private CA, as described in the [VSO API reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/api-reference). Apply the edited file:
+**Vault/VSO:** edit [auth.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/auth.yaml) with your server address and identity settings. If your server uses a private CA, set `caCertSecretRef` on the `VaultConnection` (see the [VSO API reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/api-reference)). Then apply it:
 
 ```bash
 kubectl apply -f /path/to/auth.yaml
 kubectl get vaultconnection,vaultauth --namespace fleet-intelligence
 ```
 
-For OpenBao/ESO, edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA settings, and identity bindings. The `openbao-bmc` store selects mount `bmc`; `openbao-tokens` selects mount `credentials`. ESO uses its `vault` provider for OpenBao; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
+**OpenBao/ESO:** edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA, and identity settings. It defines two stores: `openbao-bmc` for the `bmc` mount and `openbao-tokens` for the `credentials` mount. ESO talks to OpenBao through its `vault` provider; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
 
 ```bash
 kubectl apply -f /path/to/secret-stores.yaml
 kubectl get secretstore --namespace fleet-intelligence
 ```
 
-## 4. Synchronize Kubernetes Secrets
+## 4. Sync the Secrets into Kubernetes
 
-Edit the sync resources for your provider:
+Edit the sync manifests for your operator. Set the namespace, auth or store reference, source paths, Secret names, and refresh interval.
 
-| Operator | BMC JSON | Bootstrap token | Resource |
+| Operator | Credentials file | Bootstrap token | Resource type |
 | --- | --- | --- | --- |
 | VSO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-secrets.yaml) | `VaultStaticSecret` |
-| ESO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/token-secrets.yaml) | `ExternalSecret` |
+| ESO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/token-secrets.yaml) | `ExternalSecret` (`external-secrets.io/v1`) |
 
-Set the namespace, auth/store reference, source paths, destination names, and refresh interval. Both providers produce these Secrets:
-
-| Destination Secret | Key | Source mount/entry/field |
-| --- | --- | --- |
-| `fleet-intelligence-bmc-credentials` | `credentials.json` | `bmc` / `collector` / `credentials` |
-| `fleet-intelligence-oob-collector-agent-token` | `agent-token` | `credentials` / `backend` / `token` |
-
-The BMC templates copy the JSON string unchanged, preserving password whitespace. The token templates trim leading and trailing whitespace, including newlines, and reject missing or blank tokens before writing the destination Secret. Helm consumes that Secret through `secretKeyRef`; it does not read or transform the token value.
-
-The collector validates the JSON credential schema when loading it. See [VSO transformations](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/secret-transformation) and [ESO templates](https://external-secrets.io/latest/guides/templating/) for template behavior. The ESO examples use `external-secrets.io/v1`.
-
-For VSO tokens, set `rolloutRestartTargets` to the collector and gateway Deployment names for your release. For inventory-only deployments, keep only the collector restart target.
+For VSO, also set `rolloutRestartTargets` in the token manifest to your release's collector and gateway Deployments, so they restart when the token changes. If you don't run the gateway, list only the collector.
 
 ```bash
 kubectl apply -f /path/to/bmc-secrets.yaml
 kubectl apply -f /path/to/token-secrets.yaml
 ```
 
-## 5. Verify synchronization
+Either operator produces the same two Secrets:
 
-Inspect status and events without decoding credential values:
+| Secret | Key | Copied from (mount / entry / field) |
+| --- | --- | --- |
+| `fleet-intelligence-bmc-credentials` | `credentials.json` | `bmc` / `collector` / `credentials` |
+| `fleet-intelligence-oob-collector-agent-token` | `agent-token` | `credentials` / `backend` / `token` |
+
+The credentials file is copied exactly, so passwords keep any leading or trailing spaces. The token is trimmed of surrounding whitespace and newlines, and a missing or blank token stops the sync instead of writing an empty Secret. To change this behavior, see [VSO transformations](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/secret-transformation) or [ESO templates](https://external-secrets.io/latest/guides/templating/).
+
+## 5. Check that the sync worked
+
+Check status and events. None of these commands print secret values.
 
 ```bash
 # Vault/VSO
@@ -154,7 +157,7 @@ kubectl wait --for=condition=Ready \
   --namespace fleet-intelligence --timeout=120s
 ```
 
-Wait for both required Secrets to synchronize successfully before installing the collector. In VSO, inspect both resources' status and events for successful synchronization. Check destination names and keys without printing their values:
+Then confirm each Secret has the right key:
 
 ```bash
 kubectl get secret fleet-intelligence-bmc-credentials \
@@ -163,11 +166,16 @@ kubectl get secret fleet-intelligence-bmc-credentials \
   -o go-template='{{range .items}}{{.metadata.name}}:{{range $key, $value := .data}} {{$key}}{{end}}{{"\n"}}{{end}}'
 ```
 
-Expect `credentials.json` in `fleet-intelligence-bmc-credentials` and `agent-token` in `fleet-intelligence-oob-collector-agent-token`. For provider authentication failures, check the role's ServiceAccount, namespace, and audience bindings. A provider `403` when reading KV after a successful login points to its policy paths and permissions.
+You should see `credentials.json` in `fleet-intelligence-bmc-credentials` and `agent-token` in `fleet-intelligence-oob-collector-agent-token`. Wait until both are present before installing the collector.
 
-## 6. Deploy the collector
+| Problem | What to check |
+| --- | --- |
+| The operator can't sign in | The role's ServiceAccount, namespace, and audience |
+| Sign-in works, but reading returns `403` | The policy paths and capabilities |
 
-Use these Helm references with either provider:
+## 6. Install the collector
+
+Point the chart at the synced Secrets. The same settings are in [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [token-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-values.yaml), and they work with either operator:
 
 ```yaml
 credentials:
@@ -179,23 +187,21 @@ backend:
     secretKey: agent-token
 ```
 
-The same references are provided in [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [token-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-values.yaml). Pass the edited files to the Helm command in [Installation](installation.md), alongside your `inventory.targets` and backend URL.
-
-Helm renders the collector TOML with the shared credentials path. NICo's init container runs `render-nico-config` to generate generic static endpoints that reference the same JSON file and each selected profile. Both runtimes read credential values from the mounted JSON file.
-
-Follow [Installation verification](installation.md#verify) to check NICo's init container, collector uploads, and gateway authentication. Secret synchronization alone does not prove BMC or Fleet Intelligence access.
+Install with these values and your targets, following [Installation](installation.md#install). A successful sync doesn't prove the credentials work, so finish with [the checks in Installation](installation.md#verify).
 
 ## Rotation and ownership
 
-Rotate the actual BMC password or bootstrap token through its issuing system, then update the corresponding backend entry. The secrets operator synchronizes the updated value into Kubernetes.
+To rotate a BMC password or the bootstrap token, change it at its source (the BMC, or your Fleet Intelligence administrator), then update the entry in your secrets manager or the Kubernetes Secret. The operator copies the new value into Kubernetes on its next refresh: `refreshAfter` for VSO, `refreshInterval` for ESO.
 
-| Change | Runtime behavior |
+What happens next depends on what changed:
+
+| Change | What you need to do |
 | --- | --- |
-| BMC JSON credentials | Collector reads the file each cycle and reloads once per target on an attestation BMC authentication failure; NICo reloads it at runtime. The generated NICo TOML references the shared JSON file. |
-| Shared bootstrap token | Restart the collector and bundled gateway so their environment variables use the updated Secret. |
-| Target inventory | Run `helm upgrade` with the edited values; checksums roll both collector and NICo, and the init container regenerates NICo TOML. |
+| BMC passwords in the credentials file | Nothing. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. If a BMC rejects a password during attestation, the collector reloads the file once and retries. |
+| Bootstrap token | Restart the collector and gateway, because they read the token only at startup. The VSO token example does this for you. With ESO or a hand-made Secret, restart them yourself (below). |
+| Targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 
-VSO polls at `refreshAfter`; its token example restarts both Deployments. ESO polls at `refreshInterval`; use your platform's restart controller or restart the enabled workloads after a bootstrap token update:
+Restart after a token change:
 
 ```bash
 kubectl rollout restart deployment/fleet-intelligence-oob-collector \
@@ -204,6 +210,6 @@ kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway
   --namespace fleet-intelligence
 ```
 
-Use your release's Deployment names and omit the gateway command when it is disabled. Bootstrap token rotation and Fleet Intelligence runtime JWT renewal are separate operations.
+Use your release's Deployment names, and skip the gateway if it's disabled. You don't need to do anything for the short-lived Fleet Intelligence sessions; the collector and gateway renew those themselves.
 
-The sync examples give the operator ownership of destination Secrets. Manage their retention and cleanup through the provider integration. Uninstalling the collector Helm release leaves these separately applied resources in place.
+The operator owns the Secrets it creates, so clean them up through the operator. Uninstalling the collector chart leaves the operator resources and Secrets in place.

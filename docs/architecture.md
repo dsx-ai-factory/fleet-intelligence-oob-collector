@@ -1,85 +1,70 @@
 # Architecture
 
-The repository separates Redfish collection from Fleet Intelligence data models and backend transport.
+This page explains what runs, what one collection cycle does, and how the collector keeps BMCs and credentials safe.
 
-## Components
+## What runs
 
-| Component | Responsibility |
+| Component | What it does |
 | --- | --- |
-| `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
-| `backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
-| `bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
-| `bmc-inventory` | Redfish inventory collection, mapping, and output |
-| `bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
-| [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) | BMC metrics and logs |
-| OpenTelemetry gateway | Authenticated telemetry export |
+| OOB collector | Collects hardware inventory and GPU attestation evidence from BMCs over Redfish and uploads them to Fleet Intelligence |
+| [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) | Collects BMC metrics and logs |
+| Telemetry gateway | Signs in to Fleet Intelligence and forwards NICo's metrics and logs |
 
-## Data flow
+The collector and NICo read the same target list and the same credentials file, so you configure each BMC once:
 
 ```text
-target config + projected credential files
-    ├─► OOB collector ──► inventory and attestation APIs
-    │       └─ shared dispatcher ──► BMC Redfish endpoints
+target list + credentials file
+    ├─► OOB collector ──► Fleet Intelligence inventory and attestation APIs
+    │       └─ request scheduler ──► BMC Redfish endpoints
     │
-    └─► NICo config init container ──► NICo hardware health
+    └─► NICo config generator ──► NICo hardware health
                                              │
                                       metrics and logs
                                              ▼
-                                      OTLP gateway
+                                      telemetry gateway
                                              ▼
-                                       telemetry API
+                                   Fleet Intelligence telemetry API
 ```
 
-Inventory follows a source → model → sink pipeline. The Redfish source builds the Fleet Intelligence inventory model directly, keeping vendor-specific Redfish structures inside the source. Inventory and attestation use the same dispatcher so their requests share per-BMC concurrency and rate limits. NICo runs in a separate process with its own request scheduling; these dispatcher limits do not cover NICo traffic.
+Each machine is identified by its BMC MAC address, from configuration through inventory, attestation, and telemetry.
 
-After each target's Redfish collection, the source measures TCP connect time to the BMC to record collector-to-BMC network latency. The probe round uses one inventory dispatcher admission. A check against an unroutable address runs once per local inventory command or runtime inventory phase to detect local TCP interception. Measurements are uploaded with each node's inventory; see the [inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#network-latency-measurement).
+## A collection cycle
 
-The required configured BMC MAC identifies observations and correlates targets across workflows. Inventory node identity resolution is independent from attestation. Attestation uses the normalized BMC MAC to request a nonce and key uploaded evidence.
+When the collector starts, it exchanges its bootstrap token for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
 
-Completed inventories flow through a bounded channel to a backend worker, which flushes batches when they reach the configured target concurrency, after 30 seconds, or at the end of the inventory phase. The channel holds at most twice the target concurrency. Backend item results are matched to submitted observations by position, so one rejected item does not hide accepted nodes in the same batch.
+1. **Reload configuration.** The collector re-reads the target list and credentials file, so edits take effect at the next cycle. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
+2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `--target-concurrency`, after 30 seconds, or when inventory collection ends.
+3. **Measure latency.** After reading each BMC, the collector measures how long a TCP connection to it takes and includes the result in that node's inventory. See [network latency measurement](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#network-latency-measurement).
+4. **Collect attestation.** For each BMC, the collector asks Fleet Intelligence for a one-time nonce, collects signed GPU evidence from the BMC, and uploads it. This step runs even if some inventory failed. Fleet Intelligence verifies the evidence against the model and firmware details from inventory, so a machine's inventory must have been uploaded at least once.
+5. **Wait.** The collector waits for `--interval-seconds` (24 hours by default), then starts the next cycle.
 
-Attestation runs for configured BMC targets after the inventory phase, even if that phase fails. Attestation needs the node's inventory to have been uploaded at least once. Model and firmware metadata from inventory are used to verify the attestation evidence.
+On `SIGINT` or `SIGTERM`, the collector stops collecting, uploads the inventory it has already finished, completes uploads that are in progress, and exits. It doesn't start new attestation uploads.
 
-A nonce request error skips that target's evidence collection and upload until the next cycle; a backend `401 Unauthorized` triggers one re-enrollment and retry. Skipped targets are logged and counted separately. Attestation finishes concurrent collection before uploading results for targets that obtained a nonce, keeping nonce-driven JWT rotation and whole-collection authentication retry deterministic. Upload batches are bounded by the target concurrency.
+## When things fail
 
-Upload responses are matched by BMC MAC, independently of response order, letter case, or separator format. Each target is reported as accepted, rejected, or unconfirmed. Missing or duplicate results leave only that target unconfirmed; an unreadable response leaves the mini-batch unconfirmed. Unexpected response rows are reported separately. Other mini-batches run unless shutdown is requested or re-enrollment fails. Accepted items are not retried because another item fails.
+The collector keeps whatever it could collect, and reports failures node by node.
 
-### Backend transport and credential handling
+- **Part of a BMC fails.** If one area, such as memory or firmware, can't be read, the rest of the node's inventory is still uploaded, and the failure is listed in `domainErrors`. Fleet Intelligence keeps its previously stored data for that area. See the [domain error contract](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#domain-error-contract).
+- **A whole BMC fails.** If the BMC can't be read at all, for example because its Redfish service is down, the node is uploaded with a `targetError` and no inventory.
+- **An upload is partly rejected.** The collector logs whether Fleet Intelligence accepted or rejected each node, or didn't confirm it either way. One bad node doesn't hold back the rest of its batch, and later batches still run unless the collector is shutting down or can't enroll again.
+- **A nonce request fails.** That BMC's attestation is skipped until the next cycle. Skipped BMCs are logged and counted.
+- **The Fleet Intelligence session expires.** If an upload or nonce request is rejected with `401 Unauthorized`, the collector enrolls again with the bootstrap token and retries once.
+- **A BMC password changes.** If a BMC rejects the login during attestation, the collector reloads the credentials file and retries once, using the same nonce and evidence.
 
-Enrollment, inventory uploads, nonce requests, and attestation uploads use the shared `backend-client` transport helpers. The session owns enrollment credentials, the current JWT, and its enrollment HTTP client; re-enrollment reuses that client. Each sink maps its payload and validates its response. Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error message containing `401` does not trigger re-enrollment.
+## Request limits
 
-Backend request timeouts default to 30 seconds, with a connect timeout capped at 10 seconds. Enrollment and inventory use a 30-second request timeout; nonce and attestation uploads use the collector's `--timeout-seconds` setting. Enrollment and inventory use the default redirect policy; nonce and attestation uploads do not follow redirects. URL path modes are explicit: runtime enrollment/inventory paths extend the configured base path, while attestation's configured paths replace it. Deployments should use an API origin as their backend base URL so all flows address the same API root.
+The collector protects BMCs from overload. By default, it reads 64 BMCs at a time, sends at most 4 simultaneous requests and 10 requests per second to any one BMC, and allows short bursts of up to 10 requests. At most 64 × 4 = 256 requests are in flight in total.
 
-CLI help displays the bootstrap token environment-variable name without its value.
+Inventory and attestation share these limits. The scheduler takes turns between BMCs and between inventory and attestation, so one slow BMC or one busy workflow can't hold up the others. NICo schedules its own requests separately, and these limits don't cover it.
 
-## Collection lifecycle
+See [CLI commands](configuration.md#cli-commands) and [Helm values](configuration.md#helm-values) to change the limits.
 
-At startup, the collector exchanges its bootstrap token for a runtime JWT. It then runs one collection cycle immediately. After each cycle finishes, it waits 24 hours by default before starting the next cycle. Each cycle collects inventory concurrently while a bounded backend worker uploads completed nodes in mini-batches. It then collects attestation for configured BMCs by MAC, uploads bounded attestation mini-batches, and waits for the configured interval. A backend `401 Unauthorized` during an inventory upload, attestation nonce request, or attestation upload causes one re-enrollment and retry.
+## Security
 
-The collector loads one resolved target and credential snapshot per cycle and synchronizes the dispatcher's BMC endpoint set before starting collection. Inventory and attestation use that same snapshot. Startup validation supplies the first snapshot; subsequent cycles reload the TOML and JSON credential files. Target updates during a cycle take effect on the next cycle. During attestation, a BMC `401 Unauthorized` reloads credentials for that target and retries the failed request once, keeping the same nonce and collected evidence. Only one credential reload is allowed per target per attestation attempt. Invalid configuration skips the cycle without collecting against a stale target set.
+**Credentials.** Passwords live only in the credentials file. The collector's TOML, the Helm values, and NICo's generated configuration refer to the file by path and never copy passwords into it. With Helm, the file is mounted from a Kubernetes Secret.
 
-The runtime listens for SIGINT and SIGTERM throughout enrollment, collection, and sleep. Shutdown cancels Redfish collection and closes the inventory producer, drains its bounded queue of completed observations, and finishes in-flight uploads. Attestation collection can be cancelled; shutdown does not start another attestation upload batch.
+**Kubernetes workloads.** All workloads run as non-root, with read-only root filesystems, no Linux capabilities, and no Kubernetes API token. The collector and NICo restart with `Recreate`, so two copies never collect at the same time; the gateway can be scaled out and uses rolling updates. A NetworkPolicy allows traffic to the gateway's OTLP ports (4317 and 4318) only from pods in the same release and namespace, if your cluster's network plugin enforces NetworkPolicies.
 
-Inventory preserves partial results. Recoverable domain failures are returned in `domainErrors`; failures that prevent meaningful target collection are returned in `targetError`. Detailed identity, mapping, and failure rules are in the [inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md).
+**URLs in BMC data.** BMCs sometimes include full URLs in their responses. Before inventory or attestation data leaves the collector, whether as an upload, JSON, or a table, the collector strips the host, credentials, and query string from Redfish resource links and from URLs inside error and status messages. Links that can't be parsed are replaced with `[URL_REDACTED]`. Inventory fields that are meant to hold addresses, hostnames, and MACs are kept, and attestation evidence and certificates are not changed. This removes URLs only; it doesn't detect other kinds of secrets in BMC text.
 
-## Request admission
-
-The default limits are 64 concurrent target workflows, four in-flight requests per BMC, 10 requests per second per BMC, and a burst capacity of 10. The global in-flight ceiling is the target concurrency multiplied by the per-BMC in-flight limit: `64 × 4 = 256` requests by default. The per-BMC rate and burst limits are applied separately.
-
-The dispatcher schedules BMCs round-robin, independently rate-limits each BMC, and fairly alternates inventory and attestation requests. This prevents a busy endpoint or workflow from monopolizing collection.
-
-## Deployment boundaries
-
-The collector and NICo config renderer share the password-free target configuration and projected credential files, avoiding duplicated credentials. Helm generates only the collector TOML from `inventory` values. ConfigMap checksum annotations roll both deployments when that inventory changes, and NICo's init container regenerates its TOML with `render-nico-config`. Generated NICo configuration is held in a pod-local `emptyDir` volume. The collector and NICo use `Recreate` deployments to avoid duplicate collection; the independently scalable gateway uses `RollingUpdate`.
-
-Workloads run as non-root, without service account tokens or Linux capabilities, and with read-only root filesystems. The default NetworkPolicy allows gateway OTLP ingress on ports 4317 and 4318 from pods with the same release label in the same namespace, when enforced by the cluster CNI.
-
-The experimental `fleetint-oob` host package runs the same three components as `fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's `ExecStartPre` renders NICo's private configuration under `/run` before the service starts. These prototype services run as root; the gateway listens only on loopback. Rust binaries are built statically with musl and the gateway with Go's CGO disabled; package builds verify no ELF interpreter or shared-library requirements remain. See the [host package prototype](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md) for installation, credentials, and validation limits.
-
-### Redfish URI sanitization
-
-The Redfish source removes URL authorities (including credentials) and queries from `@odata.id` references while building product inventory models. Absolute and scheme-relative references retain only their resource path and fragment; malformed or pathless URL references are replaced with `[URL_REDACTED]`. Relative resource paths remain relative, with query data removed.
-
-Inventory errors, condition messages, message arguments, resolutions, and attestation errors also sanitize embedded URLs, including scheme-relative URLs, before output models reach the backend, JSON, or table sinks. Intentional inventory addresses, hostnames, and MAC addresses remain available, while attestation evidence and certificates are not rewritten. This is URL sanitization, not general secret detection in arbitrary BMC-provided strings.
-
-Product-model URI and error fields use transparent sanitized string types with private inner values. All public construction paths therefore apply the same sanitization, including callers that construct models without using the Redfish source. Their serialized JSON representation remains a normal string.
+**Host package.** The experimental host package runs the same three components as systemd services: `fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway`, grouped under `fleetint-oob.target`. These services run as root, and the gateway listens only on loopback. All three binaries are statically linked. See the [host package guide](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).

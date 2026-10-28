@@ -6,7 +6,7 @@ This file applies to the entire repository. Keep changes focused and use the lin
 
 - Start with [README.md](README.md) for the project purpose and user-facing documentation map.
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch names, commit and pull request conventions, DCO sign-off, and the issue-first workflow.
-- Read [docs/architecture.md](docs/architecture.md) before changing runtime orchestration, collection flow, identity, batching, or backend behavior.
+- Read the [implementation notes](CONTRIBUTING.md#implementation-notes) before changing runtime orchestration, collection flow, identity, batching, or backend behavior.
 - Read [docs/configuration.md](docs/configuration.md) before changing TOML, environment variables, CLI defaults, Helm values, or credential handling.
 - Read [crates/bmc-inventory/README.md](crates/bmc-inventory/README.md) before changing inventory identity, partial-failure behavior, or backend write semantics.
 - Use [tests/README.md](tests/README.md) for test placement and [SECURITY.md](SECURITY.md) for vulnerability reporting.
@@ -48,6 +48,17 @@ Ask before adding or upgrading dependencies; changing public JSON or backend API
 ## Documentation Style
 
 Keep each prose paragraph on one source line and let the renderer wrap it. Preserve blank lines between paragraphs and the line structure of headings, lists, tables, and code blocks.
+
+The public guides under `docs/` and the README are for operators who install and run the collector. `CONTRIBUTING.md` is for contributors who change it. Write public guides for an operator, not a code reviewer:
+
+- Address the reader as "you" and lead with what they are trying to do, then what happens. Put edge cases last.
+- Turn clusters of rules into ordered steps, short lists, or "problem / what to check" tables.
+- Describe behavior the reader can observe. Keep internal mechanics (types, transport policy, matching algorithms) in the `CONTRIBUTING.md` implementation notes or in code comments.
+- Prefer instructions to negations. Keep a "does not" sentence only when it prevents a likely mistake.
+- Use plain words for internal terms such as sink, envelope, admission, or snapshot, or define them once.
+- Give the reason when a rule would otherwise seem arbitrary.
+- Document each behavior in one place and link to it. Credential reload and restart behavior lives in `docs/credentials.md#rotation-and-ownership`.
+- Keep exact defaults, field names, limits, and commands in tables and code blocks.
 
 Describe the supported implementation in the present tense. Keep the README, public guides, examples, and component references aligned with source, CLI defaults, chart templates, and packaging assets. Omit historical behavior comparisons and version-transition narratives.
 

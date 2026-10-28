@@ -98,6 +98,32 @@ Do not commit real BMC credentials, customer data, private backend URLs, or raw 
 
 See the [README](README.md) for installation, configuration, and architecture guides.
 
+## Implementation Notes
+
+These notes describe how the collector works internally. Read them before changing runtime orchestration, collection flow, identity, batching, or backend behavior. The public [Architecture](docs/architecture.md) guide describes the same behavior from an operator's point of view; keep both in sync.
+
+**Crates.**
+
+| Path | Responsibility |
+| --- | --- |
+| `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
+| `crates/backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
+| `crates/bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
+| `crates/bmc-inventory` | Redfish inventory collection, mapping, and output |
+| `crates/bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
+
+**Inventory pipeline.** Inventory flows source → model → sink. The Redfish source builds Fleet Intelligence models directly and keeps vendor-specific Redfish structures inside the source. Inventory node identity resolution is independent of attestation.
+
+**Configuration snapshot.** Each cycle loads one resolved target and credential snapshot and synchronizes the dispatcher's BMC endpoints before collecting; inventory and attestation share it. Startup validation supplies the first snapshot. During attestation, a target gets at most one credential reload per attempt.
+
+**Upload queue.** Completed inventories pass through a bounded channel holding at most twice the target concurrency. Inventory item results are matched to submissions by position. Attestation results are matched by normalized BMC MAC, regardless of response order or MAC formatting. A missing or duplicate result leaves only that target unconfirmed, and an unreadable response leaves its batch unconfirmed. Unexpected rows are reported separately, and accepted items are never retried because another item failed. Attestation finishes collection before uploading, which keeps nonce-driven JWT rotation and the authentication retry deterministic. Attestation upload batches are bounded by the target concurrency. A probe round uses one inventory dispatcher admission, and an interception check against an unroutable address runs once per inventory phase.
+
+**Backend transport.** Enrollment, inventory, nonce, and attestation requests share `backend-client`. The session owns the enrollment credentials, the current JWT, and the enrollment HTTP client, and re-enrollment reuses that client. Only a typed HTTP `401` counts as a JWT rejection; a `403`, or an error message that merely contains `401`, does not trigger re-enrollment. Backend requests default to a 30-second timeout with a connect timeout of at most 10 seconds; nonce and attestation requests use `--timeout-seconds`. Enrollment and inventory follow redirects; nonce and attestation requests don't. Enrollment and inventory paths extend the configured base path, while attestation paths replace it, so the backend URL should be an API origin. CLI help shows the token environment variable's name, never its value.
+
+**Sanitized types.** Product-model URI and error fields use transparent sanitized string types with private inner values, so every public construction path applies the same sanitization, including callers that build models without the Redfish source. They serialize as plain strings. Absolute and scheme-relative references keep only their path and fragment; relative paths stay relative with the query removed.
+
+**Helm rollout.** Helm generates only the collector TOML. ConfigMap checksum annotations restart the collector and NICo when targets change, and NICo's init container regenerates its configuration with `render-nico-config` into a pod-local `emptyDir` volume.
+
 ## Pull Requests
 
 When opening a pull request:
