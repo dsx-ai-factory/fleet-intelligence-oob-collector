@@ -15,28 +15,28 @@ file = "/run/secrets/bmc/credentials.json"
 kind = "compute"
 credentials_profile = "bmc"
 name = "node-01"
-ip = "10.0.0.10"
+ip = "192.0.2.10"
 port = 443
 mac = "00:11:22:33:44:55"
-labels = { site = "dev", environment = "development" }
+labels = { site = "dc1", rack = "rack-12" }
 
 [[targets]]
 kind = "nvswitch"
 credentials_profile = "switch"
 name = "switch-tray-01"
-ip = "10.0.0.11"
+ip = "192.0.2.11"
 mac = "02:00:0a:00:00:0b"
 
 [[targets]]
 kind = "power_shelf"
 credentials_profile = "bmc"
 name = "power-shelf-01"
-ip = "10.0.0.12"
+ip = "192.0.2.12"
 mac = "02:00:0a:00:00:0c"
 ```
 
 The JSON file uses NICo's `profiles` and per-MAC `overrides` schema; see
-[credentials.example.json](../credentials.example.json). Each field resolves from
+[credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json). Each field resolves from
 the MAC override, then the explicitly selected `credentials_profile`. There is
 no implicit default profile. Omitted or null fields inherit; an empty string is
 an explicit value. A username field must resolve; passwords default to an empty
@@ -65,9 +65,9 @@ The executable is `bmc-collector`; from a source checkout, use
 
 | Command | Purpose |
 | --- | --- |
-| `inventory --config .config` | Collect once and print a table; use `--format json` for JSON or `--detail` for detailed table output. |
-| `run --config .config` | Enroll and continuously upload inventory and attestation. Requires a backend URL and bootstrap token. |
-| `render-nico-config --config .config --output nico.toml` | Generate NICo TOML referencing the shared credentials JSON file. |
+| `inventory` | Collect once and print a table; use `--format json` for JSON or `--detail` for detailed table output. |
+| `run` | Enroll and continuously upload inventory and attestation. Requires a backend URL and bootstrap token. |
+| `render-nico-config --output nico.toml` | Generate NICo TOML referencing the shared credentials JSON file. |
 
 `inventory` and `run` share these options:
 
@@ -110,7 +110,7 @@ they do not start a gateway.
 | `targets[].node_group` | No | Per-target node-group override. |
 | `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
 | `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
-| `targets[].mac` | Yes | Stable BMC identity: Six-byte MAC in colon-separated, hyphen-separated, or unseparated hexadecimal form. Stored as bytes, formatted as uppercase colon-separated text, and unique in the file. The config file is not rewritten. |
+| `targets[].mac` | Yes | Stable BMC identity: six-byte MAC in colon-separated, hyphen-separated, or unseparated hexadecimal form. Stored as bytes, formatted as uppercase colon-separated text, and unique in the file. The config file is not rewritten. |
 | `targets[].labels` | No | Labels added to this target or overriding inherited top-level labels. |
 
 Every target requires an explicit BMC MAC. The collector does not derive identity
@@ -122,7 +122,11 @@ Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. Each target supports at most
 `compute_zone`, and `node_group` when present. Values for labels and these
 fields are limited to 1,024 bytes. Names and placement values are trimmed and
 must not be blank when supplied.
-NICo identity fields and all four derived label names are reserved.
+The derived labels `machine_name`, `compute_zone`, `node_group`, and `oob`
+are reserved. NICo also reserves endpoint, hardware identity, and resource
+labels, including `bmc_ip`, `endpoint_mac`, `gpu_uuid`, `machine_id`, and
+`system_uuid`. See the complete `RESERVED_NICO_LABELS` list in the
+[configuration implementation](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/src/config/targets.rs).
 
 ### Fleet Intelligence placement fields
 
@@ -147,20 +151,21 @@ placement differs:
 ```toml
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"
+
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 
 [[targets]]
 kind = "compute"
 name = "node-01"
-ip = "10.0.0.10"
+ip = "192.0.2.10"
 mac = "02:00:0a:00:00:0a"
 credentials_profile = "bmc"
 
 [[targets]]
 kind = "compute"
 name = "node-02"
-ip = "10.0.0.11"
+ip = "192.0.2.11"
 mac = "02:00:0a:00:00:0b"
 credentials_profile = "bmc"
 compute_zone = "us-west-dc2"
@@ -191,8 +196,8 @@ endpoints without NICo machine, switch, or power-shelf descriptors.
 
 ## Helm values
 
-Both services use `inventory.targets`. Each target's `address` is an IPv4 or
-IPv6 literal without a scheme or port; set its optional `port` separately.
+The collector and NICo use `inventory.targets`. Each target's `address` is an
+IPv4 or IPv6 literal without a scheme or port; set its optional `port` separately.
 Target placement and labels override shared defaults. Helm uses `computeZone`,
 `nodeGroup`, and `credentialsProfile` for the TOML fields `compute_zone`,
 `node_group`, and `credentials_profile`. All target kinds render as generic
@@ -214,7 +219,7 @@ static Redfish endpoints through the Rust renderer.
 
 All workloads share image, resource, scheduling, annotation, and logging fields.
 Optional features use `enabled`; application Secret references use
-`existingSecret` and `secretKey`. See [values.yaml](../deployments/helm/fleet-intelligence-oob-collector/values.yaml)
+`existingSecret` and `secretKey`. See [values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/values.yaml)
 for defaults and [installation](installation.md#configure-targets-and-secrets)
 for an example.
 
@@ -237,44 +242,10 @@ OpenBao setup and credential reload behavior.
 
 ## Reported collector behavior
 
-Every backend inventory batch includes `collector.version` and a typed
-`collector.config` shared by its observations. `runtime` reports the effective
-collection interval, concurrency, per-BMC limits, timeout, TLS and latency-probe
-settings, and logging filter (including the `info` fallback).
-
-Helm also passes the following reporting metadata to the collector:
-
-| Helm value | Reported field | Environment variable |
-| --- | --- | --- |
-| `proxy.enabled` | `runtime.proxyEnabled` | `FLEETINT_PROXY_ENABLED` |
-| `nicoHardwareHealth.enabled` | `nicoHealth.enabled` | `FLEETINT_NICO_ENABLED` |
-| `nicoHardwareHealth.logLevel` | `nicoHealth.logLevel` | `FLEETINT_NICO_LOG_LEVEL` |
-| NICo/gateway enablement | `nicoHealth.telemetryDestination` | `FLEETINT_NICO_TELEMETRY_DESTINATION` |
-| `otelGateway.enabled` | `otelGateway.enabled` | `FLEETINT_OTEL_GATEWAY_ENABLED` |
-| `otelGateway.logLevel` | `otelGateway.logLevel` | `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` |
-
-The telemetry destination is `disabled` when NICo is disabled, `bundledGateway`
-when both services are enabled, and `external` when NICo uses `telemetry.endpoint`.
-These values describe configured behavior, not service health. Gateway disablement
-does not mean telemetry export is disabled. Proxy reporting describes Helm's
-proxy setting; it does not inspect inherited proxy environment variables.
-
-For non-Helm installations, unset reporting variables omit their corresponding
-fields; an unset service enablement flag omits that service object. Explicit
-`false` remains false. Boolean variables accept only lowercase `true` and `false`.
-NICo log levels accept `trace`, `debug`, `info`, `warn`, `error`, and `off`;
-gateway log levels accept `debug`, `info`, `warn`, and `error`. Reporting a
-service's log level or telemetry destination requires its enablement flag.
-Invalid or incomplete metadata stops `run` before enrollment without echoing
-invalid values. These variables report settings; they do not configure the
-separate NICo or gateway process. Restart the collector to refresh metadata.
-
-The report excludes credentials, secret references, backend/proxy/telemetry
-URLs, hardware target lists (already represented by inventory observations),
-and deployment settings such as images, resources, replicas, scheduling, and
-annotations. The backend stores the behavior configuration with each OOB
-observation, including observations with collection errors. The backend must
-support the `collector` envelope.
+The collector reports its version and effective settings with each inventory
+batch, including the collection interval, request limits, and enabled telemetry
+components. Reports exclude secrets, credential references, and URLs. These
+settings describe configuration, not service health.
 
 ## Proxy and TLS
 

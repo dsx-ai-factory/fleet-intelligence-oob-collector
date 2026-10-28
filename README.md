@@ -35,8 +35,8 @@ OOB collector ──────────────► inventory and attest
 The OOB collector enrolls with Fleet Intelligence and uploads inventory from
 configured BMCs in batches. It preserves successfully collected data when an
 individual Redfish domain fails. GPU attestation uses backend-issued nonces
-and configured BMC MACs; the backend requires an active OOB source registered
-through inventory. NICo reads the shared target configuration and BMC
+and configured BMC MACs. Attestation needs the node's inventory to have been
+uploaded at least once. NICo reads the shared target configuration and BMC
 credentials to export metrics and logs through the gateway.
 
 See [Architecture](docs/architecture.md) for collection, authentication, and
@@ -75,19 +75,19 @@ paths, and run a local collection:
 
 ```bash
 umask 077
-cp config.example.toml .config
+cp config.example.toml config.toml
 cp credentials.example.json credentials.json
-chmod 600 .config credentials.json
+chmod 600 config.toml credentials.json
 ```
 
-Before running inventory, edit `.config` with your BMC targets and set
+Before running inventory, edit `config.toml` with your BMC targets and set
 `credentials.file = "credentials.json"`. Edit `credentials.json` with your
 BMC credentials and matching profiles or MAC overrides. The relative credential
-path resolves beside `.config`. Keep both files private and outside commits.
+path resolves beside `config.toml`. Keep both files private and outside commits.
 Then collect inventory:
 
 ```bash
-cargo run --locked -- inventory --config .config
+cargo run --locked -- inventory
 ```
 
 See [Configuration](docs/configuration.md) for the complete configuration
@@ -105,20 +105,20 @@ The guides are also available in this repository:
 - [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
 - [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
 
-Component references cover [inventory collection](crates/bmc-inventory/README.md),
-the [Helm chart](deployments/helm/fleet-intelligence-oob-collector/README.md),
-and the experimental [host package](deployments/packages/README.md).
+Component references cover [inventory collection](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md),
+the [Helm chart](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
+and the experimental [host package](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+See [CONTRIBUTING.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md) for development setup and guidelines.
 
 ## Security
 
 Do not report vulnerabilities in public issues. Follow the
-[security policy](SECURITY.md) for private reporting instructions.
+[security policy](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private reporting instructions.
 
 ## License
 
 This project is licensed under the Apache License 2.0. See the
-[LICENSE](LICENSE) file for details.
+[LICENSE](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE) file for details.

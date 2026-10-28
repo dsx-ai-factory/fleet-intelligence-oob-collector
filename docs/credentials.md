@@ -37,7 +37,7 @@ operator for each destination Secret.
 ## 1. Store the credentials
 
 Prepare the complete BMC credentials JSON document using
-[credentials.example.json](../credentials.example.json). Its `profiles` contain
+[credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json). Its `profiles` contain
 shared credential fields, and its per-MAC `overrides` supply device-specific
 fields. Each field resolves from its MAC override, then the target's selected
 profile. This JSON document is separate from the collector TOML described in
@@ -126,7 +126,7 @@ kubectl create namespace fleet-intelligence \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-For Vault/VSO, edit [auth.yaml](../deployments/helm/examples/vault/auth.yaml) with
+For Vault/VSO, edit [auth.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/auth.yaml) with
 your server address and identity bindings. Set the `VaultConnection`'s
 `caCertSecretRef` when using a private CA, as described in the
 [VSO API reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/api-reference).
@@ -138,7 +138,7 @@ kubectl get vaultconnection,vaultauth --namespace fleet-intelligence
 ```
 
 For OpenBao/ESO, edit
-[secret-stores.yaml](../deployments/helm/examples/openbao/secret-stores.yaml) with
+[secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with
 your server, CA settings, and identity bindings. The `openbao-bmc` store selects
 mount `bmc`; `openbao-tokens` selects mount `credentials`. ESO uses its `vault`
 provider for OpenBao; see the
@@ -155,8 +155,8 @@ Edit the sync resources for your provider:
 
 | Operator | BMC JSON | Bootstrap token | Resource |
 | --- | --- | --- | --- |
-| VSO | [bmc-secrets.yaml](../deployments/helm/examples/vault/bmc-secrets.yaml) | [token-secrets.yaml](../deployments/helm/examples/vault/token-secrets.yaml) | `VaultStaticSecret` |
-| ESO | [bmc-secrets.yaml](../deployments/helm/examples/openbao/bmc-secrets.yaml) | [token-secrets.yaml](../deployments/helm/examples/openbao/token-secrets.yaml) | `ExternalSecret` |
+| VSO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-secrets.yaml) | `VaultStaticSecret` |
+| ESO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/token-secrets.yaml) | `ExternalSecret` |
 
 Set the namespace, auth/store reference, source paths, destination names, and
 refresh interval. Both providers produce these Secrets:
@@ -241,8 +241,8 @@ backend:
 ```
 
 The same references are provided in
-[credentials-values.yaml](../deployments/helm/examples/vault/credentials-values.yaml)
-and [token-values.yaml](../deployments/helm/examples/vault/token-values.yaml).
+[credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml)
+and [token-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-values.yaml).
 Pass the edited files to the Helm command in [Installation](installation.md),
 alongside your `inventory.targets` and backend URL.
 

@@ -5,7 +5,7 @@ Collector. This project is a Rust workspace for collecting Fleet Intelligence
 data from server BMC interfaces through out-of-band management paths.
 
 Participation in this project is governed by the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CODE_OF_CONDUCT.md).
 
 ## Ways to Contribute
 
@@ -17,7 +17,7 @@ You can help by:
 - Implementing fixes or features discussed in GitHub issues.
 
 Do not report security vulnerabilities through GitHub issues. Follow
-[SECURITY.md](SECURITY.md) for private vulnerability reporting.
+[SECURITY.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private vulnerability reporting.
 
 ## Before You Start
 
@@ -73,19 +73,19 @@ inventory locally:
 
 ```bash
 umask 077
-cp config.example.toml .config
+cp config.example.toml config.toml
 cp credentials.example.json credentials.json
-chmod 600 .config credentials.json
+chmod 600 config.toml credentials.json
 ```
 
-Before running inventory, edit `.config` with your BMC targets and set
+Before running inventory, edit `config.toml` with your BMC targets and set
 `credentials.file = "credentials.json"`. Edit `credentials.json` with your
 BMC credentials and matching profiles or MAC overrides. The relative credential
-path resolves beside `.config`. Keep both files private and outside commits.
+path resolves beside `config.toml`. Keep both files private and outside commits.
 Then collect inventory:
 
 ```bash
-cargo run --locked -- inventory --config .config
+cargo run --locked -- inventory
 ```
 
 Use `--insecure-tls` only when the test BMC certificate cannot be validated.
@@ -94,7 +94,7 @@ Run the long-running collector mode and submit to a backend:
 
 ```bash
 : "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
-cargo run --locked -- run --config .config \
+cargo run --locked -- run \
   --backend-url https://api.example.com
 ```
 
@@ -231,4 +231,4 @@ For more information about the DCO, see https://developercertificate.org/.
 ## License
 
 By contributing, you agree that your contributions will be licensed under the
-[Apache License 2.0](LICENSE).
+[Apache License 2.0](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE).

@@ -22,7 +22,7 @@ backend:
     secretKey: agent-token
 ```
 
-Both services use the same inventory and
+The collector and NICo use the same inventory and
 [JSON credential file](../../../credentials.example.json). Credential fields
 resolve from the MAC override, then the selected profile.
 Provision these Secrets directly or synchronize them from Vault/OpenBao using

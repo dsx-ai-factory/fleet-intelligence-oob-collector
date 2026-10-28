@@ -13,6 +13,8 @@ on:
       - 'README.md'
       - 'CONTRIBUTING.md'
       - 'scripts/docs-fetch-versions.py'
+      - 'scripts/check-docs-links.py'
+      - 'scripts/test_docs_links.py'
       - '.github/workflows/fern-docs-ci.yml'
   workflow_dispatch: {}
   ## --- OPTION: NVIDIA copy-PR-bot trigger ---
@@ -104,6 +106,11 @@ jobs:
             exit 1
           fi
           npm install -g "fern-api@${VERSION}"
+
+      - name: Check publication links
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_docs_links.py'
+          python3 scripts/check-docs-links.py
 
       - name: Generate versioned docs
         # No v1.0.0 stable tag exists yet, so fall back to RC content.

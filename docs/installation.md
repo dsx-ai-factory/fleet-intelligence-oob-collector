@@ -5,7 +5,7 @@ collector and, by default, NICo hardware health and an authenticated
 OpenTelemetry gateway.
 
 For the experimental bare-metal/VM DEB/RPM installer, see the
-[host package prototype](../deployments/packages/README.md).
+[host package prototype](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).
 
 ## Prerequisites
 
@@ -14,8 +14,6 @@ For the experimental bare-metal/VM DEB/RPM installer, see the
 - Network access from the cluster to the BMCs and Fleet Intelligence backend
 - Shared target Helm values (see [Configuration](configuration.md#helm-values))
 - A Fleet Intelligence bootstrap agent token
-- A trusted edge that injects customer identity before requests reach the Fleet
-  Intelligence agent API
 
 ## Configure targets and Secrets
 
@@ -25,7 +23,7 @@ JSON BMC credential file and the agent token in separate existing Secrets.
 Create them directly below, or synchronize them from Vault/OpenBao using the
 [credentials guide](credentials.md).
 
-Copy [credentials.example.json](../credentials.example.json) to
+Copy [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json) to
 `/secure/path/to/credentials.json` in an existing private directory, set its mode
 to `0600`, and replace its placeholder values. Obtain
 the bootstrap token from your Fleet Intelligence administrator, authorized for
@@ -84,35 +82,11 @@ backend:
     secretKey: agent-token
 ```
 
-If the images are private, create an image pull Secret using a token with
-`read:packages` access:
-
-```bash
-: "${GITHUB_USER:?Set GITHUB_USER before continuing}"
-: "${GITHUB_TOKEN:?Set GITHUB_TOKEN before continuing}"
-
-kubectl create secret docker-registry ghcr-pull-secret \
-  --namespace fleet-intelligence \
-  --docker-server=ghcr.io \
-  --docker-username="$GITHUB_USER" \
-  --docker-password="$GITHUB_TOKEN"
-```
+`backend.url` defaults to the production endpoint,
+`https://data.fleet-intelligence.nvidia.com`. Set it in your values file when
+using a different Fleet Intelligence endpoint.
 
 ## Install
-
-If the OCI chart package is private, authenticate Helm separately from the
-Kubernetes image pull Secret:
-
-```bash
-: "${GITHUB_USER:?Set GITHUB_USER before continuing}"
-: "${GITHUB_TOKEN:?Set GITHUB_TOKEN before continuing}"
-printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
-  --username "$GITHUB_USER" \
-  --password-stdin
-```
-
-This login lets Helm pull the chart. The `ghcr-pull-secret` lets
-Kubernetes nodes pull the deployed images.
 
 Choose a published chart version from the repository
 [releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases)
@@ -131,11 +105,8 @@ helm upgrade --install fleet-intelligence-oob-collector \
   --timeout 10m
 ```
 
-For private images, append:
-
-```text
---set 'imagePullSecrets[0].name=ghcr-pull-secret'
-```
+For a deployment using private registry mirrors, configure `imagePullSecrets`
+and authenticate Helm to the chart registry as required by your organization.
 
 Collector and NICo image tags default to the chart version. See
 [Configuration](configuration.md#helm-values) for supported overrides.
@@ -167,7 +138,7 @@ inventory uploads and the gateway logs for enrollment or export errors; running
 pods alone do not confirm access. For BMC authentication failures, check the
 target's `credentialsProfile`, matching MAC overrides, and actual BMC account.
 For Fleet Intelligence enrollment failures, check the bootstrap token's validity,
-authorization for both flows, backend URL, and trusted edge customer identity.
+authorization for both flows, and backend URL.
 For gateway export failures, also check backend reachability and TLS trust.
 
 The collector reloads its mounted TOML and JSON credentials each collection
@@ -205,10 +176,11 @@ machine.
 
 Skip the NICo command when it is disabled. Confirm the release ConfigMap omits
 the machine's BMC MAC and check the [collector logs](#verify) for failures
-affecting remaining targets. Data in transit can arrive after the rollout. Keep the shared credential Secret; remove an unused
-per-MAC override from its JSON file only when no other workload needs it.
+affecting remaining targets. Data in transit can arrive after the rollout.
+Keep the shared credential Secret; remove an unused per-MAC override from its
+JSON file only when no other workload needs it.
 
-## Uninstall the OOB Collector
+## Uninstall the OOB collector
 
 This stops collection for all targets in the deployment. Uploaded data remains
 in Fleet Intelligence. Substitute your release and namespace names

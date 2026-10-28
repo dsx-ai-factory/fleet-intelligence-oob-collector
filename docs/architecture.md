@@ -43,7 +43,7 @@ the BMC to record collector-to-BMC network latency. The probe round uses one
 inventory dispatcher admission. A check against an unroutable address runs
 once per local inventory command or runtime inventory phase to detect local TCP
 interception. Measurements are uploaded with each node's inventory; see the
-[inventory collection notes](../crates/bmc-inventory/README.md#network-latency-measurement).
+[inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#network-latency-measurement).
 
 The required configured BMC MAC identifies observations and correlates targets
 across workflows. Inventory node identity resolution is independent from
@@ -58,9 +58,9 @@ observations by position, so one rejected item does not hide accepted nodes in
 the same batch.
 
 Attestation runs for configured BMC targets after the inventory phase, even if
-that phase fails. The backend requires an active OOB source registered through
-inventory and uses inventory-derived model and firmware metadata for
-verification. That source can be registered in any collection cycle.
+that phase fails. Attestation needs the node's inventory to have been uploaded
+at least once. Model and firmware metadata from inventory are used to verify
+the attestation evidence.
 
 A nonce request error skips that target's evidence collection and upload until
 the next cycle; a backend `401 Unauthorized` triggers one re-enrollment and
@@ -106,10 +106,8 @@ then runs one collection cycle immediately. After each cycle finishes, it waits
 inventory concurrently while a bounded backend worker uploads completed nodes
 in mini-batches. It then collects attestation for configured BMCs by MAC, uploads
 bounded attestation mini-batches, and waits for the configured interval. A
-backend `401 Unauthorized` during an inventory upload, attestation nonce request, or attestation upload
-causes one re-enrollment and retry. Re-enrollment cannot fix a `401` caused by
-missing customer context; a trusted edge must inject that context before
-requests reach the agent API.
+backend `401 Unauthorized` during an inventory upload, attestation nonce
+request, or attestation upload causes one re-enrollment and retry.
 
 The collector loads one resolved target and credential snapshot per cycle and
 synchronizes the dispatcher's BMC endpoint set before starting collection.
@@ -130,7 +128,7 @@ start another attestation upload batch.
 Inventory preserves partial results. Recoverable domain failures are returned
 in `domainErrors`; failures that prevent meaningful target collection are
 returned in `targetError`. Detailed identity, mapping, and failure rules are in
-the [inventory collection notes](../crates/bmc-inventory/README.md).
+the [inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md).
 
 ## Request admission
 
@@ -167,7 +165,7 @@ services, grouped by `fleetint-oob.target` for full-stack start and stop. NICo's
 service starts. These prototype services run as root; the gateway
 listens only on loopback. Rust binaries are built statically with musl and the
 gateway with Go's CGO disabled; package builds verify no ELF interpreter or
-shared-library requirements remain. See the [host package prototype](../deployments/packages/README.md)
+shared-library requirements remain. See the [host package prototype](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md)
 for installation, credentials, and validation limits.
 
 ### Redfish URI sanitization

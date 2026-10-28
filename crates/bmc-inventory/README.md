@@ -31,8 +31,8 @@ All observations, including collection failures, are sent to the backend.
 Upload failures are reported per target, and collection errors are reported
 separately from upload outcomes.
 
-Attestation identifies configured BMCs by MAC. It requires an active OOB source
-registered through inventory. Attestation is attempted after the inventory
+Attestation identifies configured BMCs by MAC and needs each node's inventory
+to have been uploaded at least once. Attestation is attempted after the inventory
 phase for every configured BMC, independently of its inventory upload result.
 
 ## Partial Collection

@@ -111,6 +111,11 @@ def fix_mdx(content: str, tag: str) -> str:
         if re.match(r"^\s*```", line):
             in_code_block = not in_code_block
         if not in_code_block:
+            # Root pages are staged beside the guides, without the docs/ prefix.
+            line = re.sub(r"(\]\()docs/([^#)]+\.md)(?=[#)])", r"\1\2", line)
+            for source, staged in ROOT_PAGES:
+                line = re.sub(r"(\]\()" + re.escape(source) + r"(?=[#)])",
+                              lambda match: match[1] + staged, line)
             # <https://...> autolinks → [url](url)
             line = re.sub(
                 r"<(https://[^\s>]+)>",

@@ -54,7 +54,8 @@ Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or
 the `NFPM` executable as needed. `NICO_SOURCE` and `AGENT_SOURCE` can point to
 existing checkouts at the selected revisions; the Make targets verify their
 revisions and do not change those checkouts.
-Versions must be valid in both package formats, for example `0.1.0~prototype1`. The package revision is 1.
+Versions must be valid in both package formats, for example
+`0.1.0~prototype1`. The package revision is 1.
 
 Both Rust binaries use musl and the gateway uses `CGO_ENABLED=0`. The build
 rejects binaries that contain an ELF interpreter or shared-library dependency.

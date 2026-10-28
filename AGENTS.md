@@ -79,6 +79,11 @@ public guides, examples, and component references aligned with source, CLI
 defaults, chart templates, and packaging assets. Omit historical behavior
 comparisons and version-transition narratives.
 
+Only pages in `fern/docs.yml` are published to the docs site. Link other
+repository files with absolute GitHub `blob/main/` URLs; the version staging
+script pins them to the release ref. Validate both source and staged page links
+with `python3 scripts/check-docs-links.py`.
+
 ## Coding and Test Conventions
 
 - Use the pinned Rust toolchain in `rust-toolchain.toml`, Rust 2024 idioms,
@@ -132,6 +137,8 @@ For documentation changes, use the Fern version pinned in
 `fern/fern.config.json` and run:
 
 ```bash
+python3 -m unittest discover -s scripts -p 'test_docs_links.py'
+python3 scripts/check-docs-links.py
 fern check
 fern docs md check
 lychee --offline --no-progress 'docs/**/*.md'
