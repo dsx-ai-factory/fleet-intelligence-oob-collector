@@ -1,11 +1,8 @@
 # Contributing to Fleet Intelligence Out-of-Band Collector
 
-Thank you for your interest in contributing to Fleet Intelligence Out-of-Band
-Collector. This project is a Rust workspace for collecting Fleet Intelligence
-data from server BMC interfaces through out-of-band management paths.
+Thank you for your interest in contributing to Fleet Intelligence Out-of-Band Collector. This project is a Rust workspace for collecting Fleet Intelligence data from server BMC interfaces through out-of-band management paths.
 
-Participation in this project is governed by the
-[Code of Conduct](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CODE_OF_CONDUCT.md).
+Participation in this project is governed by the [Code of Conduct](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CODE_OF_CONDUCT.md).
 
 ## Ways to Contribute
 
@@ -16,15 +13,11 @@ You can help by:
 - Improving documentation, tests, or examples.
 - Implementing fixes or features discussed in GitHub issues.
 
-Do not report security vulnerabilities through GitHub issues. Follow
-[SECURITY.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private vulnerability reporting.
+Do not report security vulnerabilities through GitHub issues. Follow [SECURITY.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private vulnerability reporting.
 
 ## Before You Start
 
-For non-trivial changes, open an issue first so maintainers can discuss the
-problem, scope, and expected design. This is especially important for changes to
-Fleet Intelligence data models, backend API behavior, Redfish traversal, or
-collector runtime semantics.
+For non-trivial changes, open an issue first so maintainers can discuss the problem, scope, and expected design. This is especially important for changes to Fleet Intelligence data models, backend API behavior, Redfish traversal, or collector runtime semantics.
 
 ## Contribution Workflow
 
@@ -34,13 +27,11 @@ collector runtime semantics.
 4. Push the branch to your fork, for example `git push origin feat/my-feature`.
 5. Open a pull request against `main`.
 
-Report bugs and request features through
-[GitHub Issues](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/issues).
+Report bugs and request features through [GitHub Issues](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/issues).
 
 ## Development Setup
 
-From the repository root, activate and inspect the pinned Rust toolchain
-(rustup installs it if needed):
+From the repository root, activate and inspect the pinned Rust toolchain (rustup installs it if needed):
 
 ```bash
 rustup show
@@ -58,8 +49,7 @@ Run tests:
 cargo test --workspace
 ```
 
-Code style follows standard Rust formatting. Run formatting and lint checks,
-and add tests for new functionality, before opening a pull request:
+Code style follows standard Rust formatting. Run formatting and lint checks, and add tests for new functionality, before opening a pull request:
 
 ```bash
 cargo fmt --all --check
@@ -68,8 +58,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Running the Collector
 
-Copy the example configuration, replace its example values, and print BMC
-inventory locally:
+Copy the example configuration, replace its example values, and print BMC inventory locally:
 
 ```bash
 umask 077
@@ -78,11 +67,7 @@ cp credentials.example.json credentials.json
 chmod 600 config.toml credentials.json
 ```
 
-Before running inventory, edit `config.toml` with your BMC targets and set
-`credentials.file = "credentials.json"`. Edit `credentials.json` with your
-BMC credentials and matching profiles or MAC overrides. The relative credential
-path resolves beside `config.toml`. Keep both files private and outside commits.
-Then collect inventory:
+Before running inventory, edit `config.toml` with your BMC targets and set `credentials.file = "credentials.json"`. Edit `credentials.json` with your BMC credentials and matching profiles or MAC overrides. The relative credential path resolves beside `config.toml`. Keep both files private and outside commits. Then collect inventory:
 
 ```bash
 cargo run --locked -- inventory
@@ -98,15 +83,11 @@ cargo run --locked -- run \
   --backend-url https://api.example.com
 ```
 
-The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of
-the process arguments.
+The CLI reads the bootstrap token from `FLEETINT_AGENT_TOKEN`, keeping it out of the process arguments.
 
-Do not commit real BMC credentials, customer data, private backend URLs, or raw
-hardware dumps. The repository ignores the documented local configuration and
-environment files by default.
+Do not commit real BMC credentials, customer data, private backend URLs, or raw hardware dumps. The repository ignores the documented local configuration and environment files by default.
 
-See the [README](README.md) for installation, configuration, and architecture
-guides.
+See the [README](README.md) for installation, configuration, and architecture guides.
 
 ## Pull Requests
 
@@ -115,9 +96,7 @@ When opening a pull request:
 - Describe the user-visible behavior change.
 - Link related issues.
 - Include tests for new behavior or explain why tests are not practical.
-- Update the relevant guide under `docs/` or component documentation when
-  commands, configuration, data models, deployment behavior, or output formats
-  change.
+- Update the relevant guide under `docs/` or component documentation when commands, configuration, data models, deployment behavior, or output formats change.
 - Keep unrelated refactors out of feature and bug fix PRs.
 
 ## Commit and Pull Request Conventions
@@ -136,33 +115,17 @@ Use the same format for commit subjects and pull request titles:
 - Name branches `<type>/<short-dash-separated-name>`, for example `fix/missing-chassis` or `docs/configuration-guide`. Use one of the allowed types above.
 - Target `main` unless maintainers specify a release branch.
 
-PR descriptions must explain the behavior change, link related GitHub issues
-(use `Closes #123` when appropriate), report validation and remaining limitations,
-and highlight breaking changes. Add relevant tests and documentation, follow the
-PR template, and ensure CI passes. PR titles describe the final user-visible
-result and may appear in release notes.
+PR descriptions must explain the behavior change, link related GitHub issues (use `Closes #123` when appropriate), report validation and remaining limitations, and highlight breaking changes. Add relevant tests and documentation, follow the PR template, and ensure CI passes. PR titles describe the final user-visible result and may appear in release notes.
 
-Maintainers should **squash merge** each focused PR, using the PR title as the
-final commit subject. Contributors may keep separate review commits; they do not
-need to squash before review. Preserve all contributors' DCO `Signed-off-by:`
-trailers in the final squash commit and verify the final message before merging.
+Maintainers should **squash merge** each focused PR, using the PR title as the final commit subject. Contributors may keep separate review commits; they do not need to squash before review. Preserve all contributors' DCO `Signed-off-by:` trailers in the final squash commit and verify the final message before merging.
 
 ### PR title validation
 
-The **Contribution conventions / PR title** GitHub Actions check validates PR
-titles when a PR is opened, edited, or updated. Maintainers should require this
-check in branch protection and configure squash merging to use the PR title as
-the final commit subject. Local commit-format hooks are optional; individual
-commit messages do not become target-branch subjects when squash merging.
-Contributors must sign off every commit, and maintainers must preserve
-those sign-offs in the final squash commit.
+The **Contribution conventions / PR title** GitHub Actions check validates PR titles when a PR is opened, edited, or updated. Maintainers should require this check in branch protection and configure squash merging to use the PR title as the final commit subject. Local commit-format hooks are optional; individual commit messages do not become target-branch subjects when squash merging. Contributors must sign off every commit, and maintainers must preserve those sign-offs in the final squash commit.
 
 ## Release Process
 
-Pushing a semantic version tag such as `v0.1.0` runs the release validation,
-publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm
-chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are
-supported and do not update the collector image's `latest` tag.
+Pushing a semantic version tag such as `v0.1.0` runs the release validation, publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are supported and do not update the collector image's `latest` tag.
 
 ## Developer Certificate of Origin (DCO)
 
@@ -204,8 +167,7 @@ By making a contribution to this project, I certify that:
 
 ### How to Sign Your Work
 
-To sign your work and agree to the DCO, you must add a sign-off to every git
-commit. This is done by using the `-s` flag when committing:
+To sign your work and agree to the DCO, you must add a sign-off to every git commit. This is done by using the `-s` flag when committing:
 
 ```bash
 git commit -s -m "Your commit message"
@@ -217,8 +179,7 @@ This appends a line that looks like:
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-You must use your real name and a valid email address. Anonymous contributions
-or contributions under pseudonyms are not accepted.
+You must use your real name and a valid email address. Anonymous contributions or contributions under pseudonyms are not accepted.
 
 If you forget to add the sign-off to a commit, you can amend it:
 
@@ -230,5 +191,4 @@ For more information about the DCO, see https://developercertificate.org/.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the
-[Apache License 2.0](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE).
+By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/LICENSE).
