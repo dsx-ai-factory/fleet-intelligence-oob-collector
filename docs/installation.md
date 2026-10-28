@@ -2,8 +2,6 @@
 
 Install the collector on Kubernetes with its Helm chart. By default, the chart runs three workloads: the OOB collector, NICo hardware health, and a telemetry gateway that forwards NICo's metrics and logs to Fleet Intelligence.
 
-To run on a bare-metal host or VM instead, see the experimental [host package](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).
-
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`
@@ -22,16 +20,7 @@ The steps below create the Secrets by hand. To sync them from Vault or OpenBao i
 
 Copy [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json) to a private directory, for example `/secure/path/to/credentials.json`, set its mode to `0600`, and fill in your BMC usernames and passwords. [Configuration](configuration.md#bmc-credentials-file) explains the file format.
 
-Get the bootstrap token from your Fleet Intelligence administrator. It must be allowed to enroll both the collector and the gateway. Save it to `/secure/path/to/agent-token` with nothing else in the file, not even a trailing newline. In Bash, this reads it without showing it on screen or saving it in your shell history:
-
-```bash
-umask 077
-read -r -s -p 'Fleet Intelligence bootstrap token: ' FLEETINT_BOOTSTRAP_TOKEN
-printf '\n'
-: "${FLEETINT_BOOTSTRAP_TOKEN:?Token must not be empty}"
-printf '%s' "$FLEETINT_BOOTSTRAP_TOKEN" > /secure/path/to/agent-token
-unset FLEETINT_BOOTSTRAP_TOKEN
-```
+Get the bootstrap token from your Fleet Intelligence administrator. Save it to `/secure/path/to/agent-token` with nothing else in the file, not even a trailing newline, and set its mode to `0600`.
 
 Create the Secrets from those files:
 
@@ -128,7 +117,7 @@ If something fails:
 | Problem | What to check |
 | --- | --- |
 | A BMC rejects the login | The target's `credentialsProfile`, any override for its MAC, and the account on the BMC itself |
-| The collector or gateway can't enroll | That the bootstrap token is valid and allowed to enroll both, and that `backend.url` is correct |
+| The collector or gateway can't enroll | That the bootstrap token is valid and `backend.url` is correct |
 | The gateway can't export telemetry | That the backend is reachable from the cluster and its TLS certificate is trusted |
 
 To change settings later, edit your values file and run the same `helm upgrade --install` command. See [Rotation and ownership](credentials.md#rotation-and-ownership) for which changes take effect on their own and which need a restart.

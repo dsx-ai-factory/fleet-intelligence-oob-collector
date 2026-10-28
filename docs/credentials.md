@@ -13,7 +13,7 @@ Three separate logins are involved, and it helps to keep them apart:
 
 - **The secrets operator** signs in to Vault or OpenBao with its Kubernetes ServiceAccount. The collector and NICo never talk to Vault or OpenBao.
 - **The collector and NICo** sign in to BMCs with the usernames and passwords in the credentials file.
-- **The collector and gateway** each exchange the bootstrap token for their own Fleet Intelligence session. Get the bootstrap token from your Fleet Intelligence administrator, and make sure it is allowed to enroll both the collector and the gateway. A Vault or OpenBao token can't be used in its place.
+- **The collector and gateway** each exchange the bootstrap token for their own Fleet Intelligence session. Get the bootstrap token from your Fleet Intelligence administrator. A Vault or OpenBao token can't be used in its place.
 
 ## Before you start
 

@@ -194,7 +194,7 @@ Set `RUST_LOG` to change the log level; it defaults to `info`.
 | `--metrics-endpoint` | `0.0.0.0:9009` | Where NICo serves Prometheus metrics. |
 | `--metrics-prefix` | `fleetint` | Prefix for NICo metric names. |
 
-These options only configure NICo; they don't start a gateway. The Helm chart runs this command in NICo's init container, and the host package runs it before NICo starts.
+These options only configure NICo; they don't start a gateway. The Helm chart runs this command in NICo's init container.
 
 ## Helm values
 
