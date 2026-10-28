@@ -26,6 +26,14 @@ Pick one operator for each Secret. The examples pair Vault with the Vault Secret
 
 You need a server the cluster can reach over trusted TLS, KV version 2 mounts, Kubernetes authentication, and the operator's CRDs installed.
 
+The commands on this page use the namespace in `$NAMESPACE`. Use the same namespace you install the collector into, and set it again if you continue in a new terminal:
+
+```bash
+export NAMESPACE=fleet-intelligence
+```
+
+The example manifests can't read shell variables, so they name the namespace `fleet-intelligence` directly. If you use a different namespace, change it in each manifest you apply.
+
 ## 1. Store the credentials
 
 Prepare your BMC credentials file from [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json). [Configuration](configuration.md#bmc-credentials-file) explains its profiles and overrides.
@@ -57,11 +65,11 @@ Your secrets administrator sets up Kubernetes authentication (including TokenRev
 | --- | --- | --- |
 | Auth mount | `kubernetes` | `kubernetes` |
 | Role | `oob-credentials-reader` | `oob-credentials-reader` |
-| Namespace | `fleet-intelligence` | `fleet-intelligence` |
+| Namespace | `$NAMESPACE` | `$NAMESPACE` |
 | ServiceAccount | `vault-reader` | `openbao-reader` |
 | Token audience | `vault` | `vault` |
 
-Create the policy and role. For OpenBao, set `SECRETS_CLI=bao` and `SECRETS_READER_SERVICE_ACCOUNT=openbao-reader`. If you change the namespace or audience, change it here and in the manifests in the next steps.
+Create the policy and role. For OpenBao, set `SECRETS_CLI=bao` and `SECRETS_READER_SERVICE_ACCOUNT=openbao-reader`. If you change the audience, change it here and in the manifests in the next steps.
 
 ```bash
 SECRETS_CLI=vault
@@ -78,7 +86,7 @@ EOF
 
 "$SECRETS_CLI" write auth/kubernetes/role/oob-credentials-reader \
   bound_service_account_names="$SECRETS_READER_SERVICE_ACCOUNT" \
-  bound_service_account_namespaces=fleet-intelligence \
+  bound_service_account_namespaces="$NAMESPACE" \
   audience=vault \
   policies=oob-credentials-reader \
   ttl=1h
@@ -91,7 +99,7 @@ Policy paths include `data/` (for example `bmc/data/collector`), because that is
 Create the namespace:
 
 ```bash
-kubectl create namespace fleet-intelligence \
+kubectl create namespace "$NAMESPACE" \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -99,14 +107,14 @@ kubectl create namespace fleet-intelligence \
 
 ```bash
 kubectl apply -f /path/to/auth.yaml
-kubectl get vaultconnection,vaultauth --namespace fleet-intelligence
+kubectl get vaultconnection,vaultauth --namespace "$NAMESPACE"
 ```
 
 **OpenBao/ESO:** edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA, and identity settings. It defines two stores: `openbao-bmc` for the `bmc` mount and `openbao-tokens` for the `credentials` mount. ESO talks to OpenBao through its `vault` provider; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
 
 ```bash
 kubectl apply -f /path/to/secret-stores.yaml
-kubectl get secretstore --namespace fleet-intelligence
+kubectl get secretstore --namespace "$NAMESPACE"
 ```
 
 ## 4. Sync the Secrets into Kubernetes
@@ -140,21 +148,21 @@ Check status and events. None of these commands print secret values.
 
 ```bash
 # Vault/VSO
-kubectl get vaultstaticsecret --namespace fleet-intelligence
+kubectl get vaultstaticsecret --namespace "$NAMESPACE"
 kubectl describe vaultstaticsecret fleet-intelligence-bmc-credentials \
   fleet-intelligence-oob-collector-agent-token \
-  --namespace fleet-intelligence
+  --namespace "$NAMESPACE"
 
 # OpenBao/ESO
-kubectl get externalsecret --namespace fleet-intelligence
+kubectl get externalsecret --namespace "$NAMESPACE"
 kubectl describe externalsecret fleet-intelligence-bmc-credentials \
   fleet-intelligence-oob-collector-agent-token \
-  --namespace fleet-intelligence
+  --namespace "$NAMESPACE"
 
 kubectl wait --for=condition=Ready \
   externalsecret/fleet-intelligence-bmc-credentials \
   externalsecret/fleet-intelligence-oob-collector-agent-token \
-  --namespace fleet-intelligence --timeout=120s
+  --namespace "$NAMESPACE" --timeout=120s
 ```
 
 Then confirm each Secret has the right key:
@@ -162,7 +170,7 @@ Then confirm each Secret has the right key:
 ```bash
 kubectl get secret fleet-intelligence-bmc-credentials \
   fleet-intelligence-oob-collector-agent-token \
-  --namespace fleet-intelligence \
+  --namespace "$NAMESPACE" \
   -o go-template='{{range .items}}{{.metadata.name}}:{{range $key, $value := .data}} {{$key}}{{end}}{{"\n"}}{{end}}'
 ```
 
@@ -205,9 +213,9 @@ Restart after a token change:
 
 ```bash
 kubectl rollout restart deployment/fleet-intelligence-oob-collector \
-  --namespace fleet-intelligence
+  --namespace "$NAMESPACE"
 kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway \
-  --namespace fleet-intelligence
+  --namespace "$NAMESPACE"
 ```
 
 Use your release's Deployment names, and skip the gateway if it's disabled. You don't need to do anything for the short-lived Fleet Intelligence sessions; the collector and gateway renew those themselves.
