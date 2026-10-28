@@ -114,8 +114,12 @@ printf '%s' "$GITHUB_TOKEN" | helm registry login ghcr.io \
 This login lets Helm pull the chart. The `ghcr-pull-secret` instead lets
 Kubernetes nodes pull the deployed images.
 
+Choose a published chart version from the repository
+[releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases)
+and replace `<chart-version>` below:
+
 ```bash
-export OOB_CHART_VERSION=0.1.0
+export OOB_CHART_VERSION='<chart-version>'
 
 helm upgrade --install fleet-intelligence-oob-collector \
   oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
@@ -175,7 +179,7 @@ deployments automatically.
 
 Remove the machine from each collector that monitors it before completing the
 Delete Machine flow in Fleet Intelligence. This stops future collection;
-previously uploaded data remains in Fleet Intelligence.
+uploaded data remains in Fleet Intelligence.
 
 Use your deployment's resource names if they differ from the examples below.
 Update any configuration management source too, so it does not restore the
@@ -204,8 +208,8 @@ per-MAC override from its JSON file only when no other workload needs it.
 
 ## Uninstall the OOB Collector
 
-This stops collection for all targets in the deployment. Previously uploaded
-data remains in Fleet Intelligence. Substitute your release and namespace names
+This stops collection for all targets in the deployment. Uploaded data remains
+in Fleet Intelligence. Substitute your release and namespace names
 if they differ, and disable any automation that would reinstall the release.
 
 1. Remove the Helm release, including its OOB collector, NICo hardware health,

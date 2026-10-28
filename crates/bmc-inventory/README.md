@@ -77,7 +77,7 @@ application processing.
 Measurement status is `ok`, `unavailable`, `intercepted`, or `disabled`. A
 once-per-run check detects local TCP interception and skips target probes when
 present. Disable probing with `--disable-latency-probe` or
-`bmcCollector.latencyProbe: false`.
+`bmcCollector.latencyProbe.enabled: false`.
 
 Targets with `targetError` are not probed. Probe failures do not populate
 `domainErrors` or `targetError`.

@@ -39,10 +39,11 @@ Report bugs and request features through
 
 ## Development Setup
 
-Install the Rust toolchain configured by this repository:
+From the repository root, activate and inspect the pinned Rust toolchain
+(rustup installs it if needed):
 
 ```bash
-rustup toolchain install
+rustup show
 ```
 
 Build the workspace:
@@ -71,9 +72,20 @@ Copy the example configuration, replace its example values, and print BMC
 inventory locally:
 
 ```bash
+umask 077
 cp config.example.toml .config
-chmod 600 .config
-cargo run -- inventory --config .config
+cp credentials.example.json credentials.json
+chmod 600 .config credentials.json
+```
+
+Before running inventory, edit `.config` with your BMC targets and set
+`credentials.file = "credentials.json"`. Edit `credentials.json` with your
+BMC credentials and matching profiles or MAC overrides. The relative credential
+path resolves beside `.config`. Keep both files private and outside commits.
+Then collect inventory:
+
+```bash
+cargo run --locked -- inventory --config .config
 ```
 
 Use `--insecure-tls` only when the test BMC certificate cannot be validated.
@@ -82,7 +94,7 @@ Run the long-running collector mode and submit to a backend:
 
 ```bash
 : "${FLEETINT_AGENT_TOKEN:?Set FLEETINT_AGENT_TOKEN before continuing}"
-cargo run -- run --config .config \
+cargo run --locked -- run --config .config \
   --backend-url https://api.example.com
 ```
 

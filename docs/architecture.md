@@ -47,42 +47,46 @@ node's inventory; see the
 The required configured BMC MAC identifies observations and correlates targets
 across workflows. Inventory node identity resolution is independent from
 attestation. Attestation uses the normalized BMC MAC to request a nonce and key
-uploaded evidence. Completed
-inventories flow through a bounded channel to a backend worker, which flushes small batches by size, time, or the
-end of the collection cycle. The current worker flushes when the batch reaches
-the configured target concurrency or after 30 seconds, and the channel holds
-at most twice that concurrency. Backend item results are matched to submitted
-observations by position, so one rejected item does not hide accepted nodes in the same batch. Attestation
-runs for configured BMC targets after the inventory phase, even if that phase
-fails. The backend requires an active OOB source registered through inventory,
-including sources registered in an earlier cycle. Backend verification also uses inventory-derived model and firmware
-metadata. After concurrent nonce and evidence collection completes, results are
-uploaded only for targets that obtained a nonce. A nonce request error skips
-that target's evidence collection and upload until the next cycle; backend
-`401 Unauthorized` responses still trigger one re-enrollment and retry. Skipped
-targets are logged and counted separately. Results are
-uploaded in mini-batches bounded by the same target concurrency. Attestation
-retains its collection barrier so nonce-driven JWT rotation and
-whole-collection authentication retry remain deterministic. Upload responses
-are matched by BMC MAC, independently of response order, letter case, or
-separator format. Each target is reported
-as accepted, rejected, or unconfirmed. Missing or duplicate results leave only
-that target unconfirmed; an unreadable response leaves the mini-batch unconfirmed.
-Unexpected response rows are reported separately. Other mini-batches still run
-unless shutdown is requested or re-enrollment fails. Accepted items are not
-retried because another item fails.
+uploaded evidence.
+
+Completed inventories flow through a bounded channel to a backend worker,
+which flushes batches when they reach the configured target concurrency, after
+30 seconds, or at the end of the inventory phase. The channel holds at most
+twice the target concurrency. Backend item results are matched to submitted
+observations by position, so one rejected item does not hide accepted nodes in
+the same batch.
+
+Attestation runs for configured BMC targets after the inventory phase, even if
+that phase fails. The backend requires an active OOB source registered through
+inventory and uses inventory-derived model and firmware metadata for
+verification. That source can be registered in any collection cycle.
+
+A nonce request error skips that target's evidence collection and upload until
+the next cycle; a backend `401 Unauthorized` triggers one re-enrollment and
+retry. Skipped targets are logged and counted separately. Attestation finishes
+concurrent collection before uploading results for targets that obtained a
+nonce, keeping nonce-driven JWT rotation and whole-collection authentication
+retry deterministic. Upload batches are bounded by the target concurrency.
+
+Upload responses are matched by BMC MAC, independently of response order,
+letter case, or separator format. Each target is reported as accepted,
+rejected, or unconfirmed. Missing or duplicate results leave only that target
+unconfirmed; an unreadable response leaves the mini-batch unconfirmed.
+Unexpected response rows are reported separately. Other mini-batches run unless
+shutdown is requested or re-enrollment fails. Accepted items are not retried
+because another item fails.
 
 ### Backend transport and credential handling
 
 Enrollment, inventory uploads, nonce requests, and attestation uploads use the
 shared `backend-client` transport helpers. The session owns enrollment credentials,
 the current JWT, and its enrollment HTTP client; re-enrollment reuses that
-client. Each sink retains its payload mapping and response semantics.
+client. Each sink maps its payload and validates its response.
 Only a typed HTTP `401` is classified as a JWT rejection. A `403` or an error
 message containing `401` does not trigger re-enrollment.
 
-Request timeouts and the 10-second maximum connect timeout retain their
-existing behavior. Enrollment and inventory retain the default redirect policy;
+Backend request timeouts default to 30 seconds, with a connect timeout capped
+at 10 seconds. Enrollment and inventory use the default redirect policy;
 nonce and attestation uploads do not follow redirects. URL path modes are
 explicit: runtime enrollment/inventory paths extend the configured base path,
 while attestation's configured paths replace it. Deployments should use an API

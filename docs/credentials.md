@@ -263,7 +263,7 @@ the updated value into Kubernetes.
 
 | Change | Runtime behavior |
 | --- | --- |
-| BMC JSON credentials | Collector reads the file each cycle; NICo reloads it at runtime. The generated NICo TOML still references the same file. |
+| BMC JSON credentials | Collector reads the file each cycle and reloads once per target on an attestation BMC authentication failure; NICo reloads it at runtime. The generated NICo TOML references the shared JSON file. |
 | Shared bootstrap token | Restart the collector and bundled gateway so their environment variables use the updated Secret. |
 | Target inventory | Run `helm upgrade` with the edited values; checksums roll both collector and NICo, and the init container regenerates NICo TOML. |
 

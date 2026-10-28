@@ -33,8 +33,9 @@ OOB collector ──────────────► inventory and attest
 The OOB collector enrolls with Fleet Intelligence and collects inventory from
 configured BMCs concurrently. Completed node inventories enter a bounded
 delivery queue and are uploaded in small batches, without waiting for every BMC
-to finish. Attestation uses configured BMC MACs and uploads results in batches
-bounded by the target concurrency. The backend requires an active OOB source
+to finish. Attestation requests nonces for configured BMC MACs and uploads
+results for targets that obtain a nonce, in batches bounded by the target
+concurrency. The backend requires an active OOB source
 registered through inventory.
 NICo uses the same BMC configuration to emit hardware metrics and logs through
 the gateway. Partial inventory failures are preserved in the output so
@@ -65,8 +66,19 @@ Copy the example configuration, replace the example target and credential
 paths, and run a local collection:
 
 ```bash
+umask 077
 cp config.example.toml .config
-chmod 600 .config
+cp credentials.example.json credentials.json
+chmod 600 .config credentials.json
+```
+
+Before running inventory, edit `.config` with your BMC targets and set
+`credentials.file = "credentials.json"`. Edit `credentials.json` with your
+BMC credentials and matching profiles or MAC overrides. The relative credential
+path resolves beside `.config`. Keep both files private and outside commits.
+Then collect inventory:
+
+```bash
 cargo run --locked -- inventory --config .config
 ```
 
@@ -81,8 +93,14 @@ Full documentation is available at **[docs.nvidia.com/fleet-intel/oob-collector]
 For the broader Fleet Intelligence platform documentation, see [docs.nvidia.com/fleet-intel](https://docs.nvidia.com/fleet-intel).
 
 Component-specific details are available in the
-[inventory collection notes](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md),
-and [Helm chart reference](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md),
+[inventory collection notes](crates/bmc-inventory/README.md),
+[Helm chart reference](deployments/helm/fleet-intelligence-oob-collector/README.md),
+[host package guide](deployments/packages/README.md), and
+[local observability guide](dev/local-observability/README.md).
+
+Repository guides: [Installation](docs/installation.md),
+[Configuration](docs/configuration.md), [Credentials](docs/credentials.md), and
+[Architecture](docs/architecture.md).
 
 ## Contributing
 

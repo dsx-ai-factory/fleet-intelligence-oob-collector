@@ -14,11 +14,8 @@ Use `fleetint-oob.target` to start, stop, or restart the full stack.
 ## Build
 
 Install the nFPM version pinned in `nfpm.version` using an
-[official method](https://nfpm.goreleaser.com/docs/install/), for example:
-
-```bash
-npm install -g @goreleaser/nfpm@2.48.0
-```
+[official installation method](https://nfpm.goreleaser.com/docs/install/).
+Confirm that `nfpm --version` matches the pinned version before building.
 
 Install Rust through rustup, Go, Git, a C/C++ compiler, Clang, CMake,
 `pkg-config`, musl tools, and protobuf tools. On Ubuntu/Debian,
@@ -62,7 +59,7 @@ Versions must be valid in both package formats, for example `0.1.0~prototype1`. 
 Both Rust binaries use musl and the gateway uses `CGO_ENABLED=0`. The build
 rejects binaries that contain an ELF interpreter or shared-library dependency.
 The package therefore does not depend on glibc, libgcc, or OpenSSL. Systemd and
-CA certificates are still required on the host. Musl DNS behavior can differ
+CA certificates are required on the host. Musl DNS behavior can differ
 from glibc, so validate name resolution in the target environment.
 
 ## Configure a test VM
@@ -155,6 +152,6 @@ Git fixtures; they never manage host services or fetch remote sources.
 
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
-Real service startup, upgrade/rollback, and shutdown during collection still
-need validation in a disposable VM before production use. Signing and release
+Real service startup, upgrade/rollback, and shutdown during collection require
+validation in a disposable VM before production use. Signing and release
 publishing are outside this prototype.

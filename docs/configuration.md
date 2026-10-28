@@ -56,6 +56,42 @@ resolved from the directory containing its TOML file.
 Define each target with `[[targets]]`. Its optional `kind` is one of `unknown`,
 `compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
 
+## CLI commands
+
+The executable is `bmc-collector`; from a source checkout, use
+`cargo run --locked -- <command>`. Use `<command> --help` to inspect its options.
+
+| Command | Purpose |
+| --- | --- |
+| `inventory --config .config` | Collect once and print a table; use `--format json` for JSON or `--detail` for detailed table output. |
+| `run --config .config` | Enroll and continuously upload inventory and attestation. Requires a backend URL and bootstrap token. |
+| `render-nico-config --config .config --output nico.toml` | Generate NICo TOML referencing the shared credentials JSON file. |
+
+`inventory` and `run` share these options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--config` | `config.toml` | Collector TOML path. |
+| `--target-concurrency` | `64` | Concurrent target workflows. |
+| `--bmc-max-in-flight` | `4` | In-flight Redfish requests per BMC. |
+| `--bmc-requests-per-second` | `10` | Per-BMC request rate. |
+| `--bmc-burst` | `10` | Per-BMC burst capacity. |
+| `--timeout-seconds` | `30` | Redfish request timeout. |
+| `--insecure-tls` | Off | Disable collector BMC certificate verification. |
+| `--disable-latency-probe` | Off | Skip TCP latency measurements; also accepts `FLEETINT_DISABLE_LATENCY_PROBE`. |
+
+For `run`, set `FLEETINT_BACKEND_URL` to the backend API origin and
+`FLEETINT_AGENT_TOKEN` to the bootstrap token. `--backend-url` and `--agent-token`
+are also accepted; prefer the token environment variable to keep it out of
+process arguments. `--interval-seconds` defaults to `86400` and sets the delay
+after a cycle finishes. `RUST_LOG` configures collector logging and defaults to
+`info`.
+
+The renderer accepts `--otlp-endpoint` (default `http://localhost:4317`),
+`--metrics-endpoint` (default `0.0.0.0:9009`), and `--metrics-prefix` (default
+`fleetint`). These settings configure NICo's generated telemetry destinations;
+they do not start a gateway.
+
 ## Collector TOML
 
 | Field | Required | Description |
@@ -133,7 +169,8 @@ scopes, its corresponding Fleet Intelligence inventory placement field and
 telemetry label are omitted. Custom labels are not promoted to Fleet
 Intelligence placement fields.
 
-The JSON secret file is required for all collector runs. Store credential values
+The JSON secret file is required for `inventory`, `run`, and
+`render-nico-config`. Store credential values
 in its profiles or per-MAC overrides and select a profile with
 `credentials_profile` where needed.
 Helm renders the password-free TOML from `inventory` values and references an
@@ -161,6 +198,10 @@ render as generic static Redfish endpoints through the Rust renderer.
 | `telemetry.endpoint` | External OTLP/gRPC destination; disable `otelGateway`. |
 | `proxy` | Shared proxy, enabled explicitly; URLs cannot contain credentials. |
 | `bmcCollector.redfish` | Per-BMC request limits, timeout, and TLS verification. |
+| `bmcCollector.intervalSeconds` | Delay between collection cycles; defaults to `86400`. |
+| `bmcCollector.targetConcurrency` | Concurrent target workflows; defaults to `64`. |
+| `bmcCollector.latencyProbe.enabled` | Enable TCP latency measurements; defaults to `true`. |
+| `nicoHardwareHealth` | Hardware metrics and logs workload controls. |
 | `otelGateway` | Gateway deployment controls and replica count. |
 
 All workloads share image, resource, scheduling, annotation, and logging fields.
@@ -214,8 +255,8 @@ The report excludes credentials, secret references, backend/proxy/telemetry
 URLs, hardware target lists (already represented by inventory observations),
 and deployment settings such as images, resources, replicas, scheduling, and
 annotations. The backend stores the behavior configuration with each OOB
-observation, including observations with collection errors. Deploy the matching
-backend support before rolling out collectors that use the `collector` envelope.
+observation, including observations with collection errors. The backend must
+support the `collector` envelope.
 
 ## Proxy and TLS
 

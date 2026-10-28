@@ -50,8 +50,9 @@ Credential file updates are reloaded without restarting NICo and on each
 collector cycle.
 
 See [values.yaml](values.yaml) for defaults and the
-[configuration reference](../../../docs/configuration.md#helm-values) for tuning,
-CPER export, and TLS behavior. Helm validates value types, label-key syntax,
+[configuration reference](../../../docs/configuration.md#helm-values) for
+collection limits, telemetry destinations, and TLS behavior. Helm validates
+value types, label-key syntax,
 and workload combinations. The collector validates reserved label names,
 counts, and value lengths when loading configuration, including in the NICo
 init container.
