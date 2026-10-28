@@ -36,11 +36,13 @@ operator for each destination Secret.
 
 ## 1. Store the credentials
 
-Prepare the complete BMC JSON document using
+Prepare the complete BMC credentials JSON document using
 [credentials.example.json](../credentials.example.json). Its `profiles` contain
 shared credential fields, and its per-MAC `overrides` supply device-specific
 fields. Each field resolves from its MAC override, then the target's selected
-profile. See [Configuration](configuration.md#collector-toml) for the format.
+profile. This JSON document is separate from the collector TOML described in
+[Configuration](configuration.md), which selects a credential profile for each
+target and references the mounted JSON file.
 
 Store the whole JSON document as a **string** field named `credentials` in KV
 mount `bmc`, entry `collector`. The operator copies that string into the
