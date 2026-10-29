@@ -47,8 +47,8 @@ impl Runtime {
         )
     }
 
-    fn start_with_target_retry(backend_port: u16, bmc_port: u16) -> Self {
-        Self::launch(backend_port, bmc_port, 86400, 1, 1, 300)
+    fn start_with_target_retry(backend_port: u16, bmc_port: u16, delay_seconds: u64) -> Self {
+        Self::launch(backend_port, bmc_port, 86400, 1, 1, delay_seconds)
     }
 
     fn launch(
@@ -148,7 +148,11 @@ impl Drop for Runtime {
 }
 
 async fn accept_request(listener: &TcpListener) -> (TcpStream, String) {
-    timeout(Duration::from_secs(5), async {
+    accept_request_within(listener, Duration::from_secs(5)).await
+}
+
+async fn accept_request_within(listener: &TcpListener, wait: Duration) -> (TcpStream, String) {
+    timeout(wait, async {
         let (mut stream, _) = listener.accept().await.expect("accept request");
         let mut bytes = Vec::new();
         loop {
@@ -231,6 +235,7 @@ async fn sigterm_during_target_retry_uploads_held_failure_before_exiting() {
     let mut runtime = Runtime::start_with_target_retry(
         backend.local_addr().unwrap().port(),
         bmc.local_addr().unwrap().port(),
+        300,
     );
     let (mut enrollment, _) = accept_request(&backend).await;
     reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
@@ -259,6 +264,34 @@ async fn sigterm_during_target_retry_uploads_held_failure_before_exiting() {
             .is_err()
     );
     reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    runtime.expect_clean_exit().await;
+}
+
+#[tokio::test]
+async fn sigterm_during_attestation_retry_pass_exits_promptly() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+    // An unreachable BMC fails every request transiently, so both workflows
+    // retry it after the one-second delay.
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime =
+        Runtime::start_with_target_retry(backend.local_addr().unwrap().port(), bmc_port, 1);
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    // Request retries make each pass take a few seconds.
+    let wait = Duration::from_secs(20);
+    let (mut upload, request) = accept_request_within(&backend, wait).await;
+    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+    reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    let (mut nonce, request) = accept_request_within(&backend, wait).await;
+    assert!(request.contains("/nonce "));
+    reply(&mut nonce, r#"{"nonce":"example-nonce"}"#).await;
+
+    // The retry pass asks for a new nonce; leave it unanswered.
+    let (_pending, request) = accept_request_within(&backend, wait).await;
+    assert!(request.contains("/nonce "), "the retry pass started");
+    runtime.signal("-TERM").await;
     runtime.expect_clean_exit().await;
 }
 

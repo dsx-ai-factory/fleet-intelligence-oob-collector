@@ -508,17 +508,21 @@ async fn collect_and_upload_attestation(
                 target
             })
             .collect::<Vec<_>>();
-        dispatcher.clear_credential_rejections();
-        match collect_attestation(
-            &retry_targets,
-            credentials_file,
-            attestation_settings,
-            endpoints,
-            session.jwt(),
-            dispatcher,
-        )
-        .await
-        {
+        // The latch stays set: a rejected password is not sent again this
+        // cycle, but reloaded credentials are.
+        let retried = tokio::select! {
+            biased;
+            () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
+            retried = collect_attestation(
+                &retry_targets,
+                credentials_file,
+                attestation_settings,
+                endpoints,
+                session.jwt(),
+                dispatcher,
+            ) => retried,
+        };
+        match retried {
             Ok(retried) => {
                 if let Some(token) = retried.refreshed_jwt {
                     session.set_jwt(token);
@@ -905,7 +909,8 @@ async fn collect_inventory_with_retry(
         () = shutdown.wait() => return forward_held(held, &sender).await,
         () = tokio::time::sleep(delay) => {}
     }
-    retry.dispatcher.clear_credential_rejections();
+    // The latch stays set: a rejected password is not sent again this cycle,
+    // but reloaded credentials are.
     let targets = held
         .iter()
         .filter_map(|inventory| by_mac.remove(&inventory.source.mac))
@@ -1691,78 +1696,79 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         const MAC: &str = "00:11:22:33:44:55";
-        let (port, rejected) = spawn_bmc_accepting_good_password().await;
-        let target = move |password: &str| config::Target {
-            kind: bmc_inventory::models::TargetKind::Compute,
-            name: None,
-            compute_zone: None,
-            node_group: None,
-            ip: "127.0.0.1".parse().expect("ip"),
-            port: Some(port),
-            mac: MAC.parse().expect("mac"),
-            address: format!("http://127.0.0.1:{port}"),
-            credentials_profile: None,
-            username: "user".to_string(),
-            password: password.to_string(),
-            labels: Default::default(),
-        };
-        let dispatcher = Arc::new(
-            Dispatcher::start(
-                DispatcherConfig {
-                    global_max_in_flight: 4,
-                    bmc_max_in_flight: 4,
-                    bmc_requests_per_second: 100,
-                    bmc_burst: 100,
-                    workflow_queue_capacity: 8,
-                },
-                [MAC.to_string()],
+        // `reloaded` is the password in the credentials file at the retry.
+        for (reloaded, recovers) in [("good", true), ("bad", false)] {
+            let (port, rejected) = spawn_bmc_accepting_good_password().await;
+            let target = move |password: &str| config::Target {
+                kind: bmc_inventory::models::TargetKind::Compute,
+                name: None,
+                compute_zone: None,
+                node_group: None,
+                ip: "127.0.0.1".parse().expect("ip"),
+                port: Some(port),
+                mac: MAC.parse().expect("mac"),
+                address: format!("http://127.0.0.1:{port}"),
+                credentials_profile: None,
+                username: "user".to_string(),
+                password: password.to_string(),
+                labels: Default::default(),
+            };
+            let dispatcher = Arc::new(
+                Dispatcher::start(
+                    DispatcherConfig {
+                        global_max_in_flight: 4,
+                        bmc_max_in_flight: 4,
+                        bmc_requests_per_second: 100,
+                        bmc_burst: 100,
+                        workflow_queue_capacity: 8,
+                    },
+                    [MAC.to_string()],
+                )
+                .expect("dispatcher"),
+            );
+            let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
+                .expect("source");
+            let retry = InventoryRetry {
+                dispatcher: Arc::clone(&dispatcher),
+                reload_credentials: Box::new(move |_| Ok(("user".into(), reloaded.into()))),
+                delay: Some(Duration::ZERO),
+            };
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+            let (_signal, shutdown) = watch::channel(false);
+
+            collect_inventory_with_retry(
+                &source,
+                vec![target("bad")],
+                1,
+                &retry,
+                sender,
+                Shutdown(shutdown),
             )
-            .expect("dispatcher"),
-        );
-        let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
-            .expect("source");
-        // The credentials were rotated after the cycle loaded them.
-        let retry = InventoryRetry {
-            dispatcher: Arc::clone(&dispatcher),
-            reload_credentials: Box::new(|_| Ok(("user".into(), "good".into()))),
-            delay: Some(Duration::ZERO),
-        };
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
-        let (_signal, shutdown) = watch::channel(false);
+            .await
+            .expect("collection");
 
-        collect_inventory_with_retry(
-            &source,
-            vec![target("bad")],
-            1,
-            &retry,
-            sender,
-            Shutdown(shutdown),
-        )
-        .await
-        .expect("collection");
-
-        let mut forwarded = Vec::new();
-        while let Ok(inventory) = receiver.try_recv() {
-            forwarded.push(inventory);
+            let mut forwarded = Vec::new();
+            while let Ok(inventory) = receiver.try_recv() {
+                forwarded.push(inventory);
+            }
+            assert_eq!(
+                forwarded.len(),
+                1,
+                "the failed first attempt is replaced, not uploaded"
+            );
+            assert_eq!(
+                rejected.load(Ordering::SeqCst),
+                1,
+                "the rejected password is not sent again this cycle ({reloaded})"
+            );
+            assert!(dispatcher.credentials_rejected(MAC), "{reloaded}");
+            // The good password reaches the BMC, which answers 404 to collections.
+            assert_eq!(
+                forwarded[0].target_error.is_none(),
+                recovers,
+                "{reloaded}: {:?}",
+                forwarded[0].target_error
+            );
         }
-        assert_eq!(
-            forwarded.len(),
-            1,
-            "the failed first attempt is replaced, not uploaded"
-        );
-        assert_eq!(
-            rejected.load(Ordering::SeqCst),
-            1,
-            "one failed login before the retry"
-        );
-        assert!(!dispatcher.credentials_rejected(MAC));
-        assert!(
-            forwarded[0]
-                .domain_errors
-                .iter()
-                .all(|error| !error.message.contains("401")),
-            "the retried result uses the reloaded credentials: {:?}",
-            forwarded[0].domain_errors
-        );
     }
 }
