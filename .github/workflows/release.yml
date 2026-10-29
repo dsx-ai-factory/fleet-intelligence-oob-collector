@@ -300,6 +300,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
+          cp LICENSE deployments/helm/fleet-intelligence-oob-collector/LICENSE
           helm package deployments/helm/fleet-intelligence-oob-collector \
             --version "$VERSION" \
             --app-version "$VERSION" \

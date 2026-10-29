@@ -52,6 +52,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /nico-hardware-health /opt/nico/nico-hardware-health
+COPY --from=builder /src/LICENSE /src/THIRD-PARTY-LICENSES /licenses/
 
 USER 65532:65532
 ENTRYPOINT ["/opt/nico/nico-hardware-health"]
