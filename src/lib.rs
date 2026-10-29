@@ -426,7 +426,10 @@ struct AttestationTargets<'a> {
     credentials_file: &'a Path,
 }
 
-async fn collect_and_upload_attestation(
+/// Collect attestation for `targets`, enrolling again and collecting once more
+/// if the backend rejects the JWT on a nonce request. Returns `None` on
+/// shutdown.
+async fn collect_attestation_with_reenroll(
     AttestationTargets {
         targets,
         credentials_file,
@@ -435,9 +438,8 @@ async fn collect_and_upload_attestation(
     endpoints: &BackendEndpoints,
     session: &mut BackendSession,
     dispatcher: &Dispatcher,
-    retry_delay: Option<Duration>,
-    mut shutdown: Shutdown,
-) -> Result<AttestationUploadSummary, Box<dyn Error>> {
+    shutdown: &mut Shutdown,
+) -> Result<Option<collector::CollectionOutcome>, Box<dyn Error>> {
     let collect = |jwt: String| async move {
         collect_attestation(
             targets,
@@ -451,21 +453,48 @@ async fn collect_and_upload_attestation(
     };
     let result = tokio::select! {
         biased;
-        () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
+        () = shutdown.wait() => return Ok(None),
         result = collect(session.jwt().to_string()) => result,
     };
-    let mut outcome = match result {
-        Ok(outcome) => outcome,
+    match result {
+        Ok(outcome) => Ok(Some(outcome)),
         Err(err) if is_auth_failure(err.as_ref()) => {
             tracing::warn!(error = %err, "backend JWT rejected during nonce collection; enrolling again before retry");
             session.reenroll().await?;
             tokio::select! {
                 biased;
-                () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
-                result = collect(session.jwt().to_string()) => result?,
+                () = shutdown.wait() => Ok(None),
+                result = collect(session.jwt().to_string()) => result.map(Some),
             }
         }
-        Err(err) => return Err(err),
+        Err(err) => Err(err),
+    }
+}
+
+async fn collect_and_upload_attestation(
+    attestation_targets: AttestationTargets<'_>,
+    attestation_settings: &attestation_config::AttestationConfig,
+    endpoints: &BackendEndpoints,
+    session: &mut BackendSession,
+    dispatcher: &Dispatcher,
+    retry_delay: Option<Duration>,
+    mut shutdown: Shutdown,
+) -> Result<AttestationUploadSummary, Box<dyn Error>> {
+    let AttestationTargets {
+        targets,
+        credentials_file,
+    } = attestation_targets;
+    let Some(mut outcome) = collect_attestation_with_reenroll(
+        attestation_targets,
+        attestation_settings,
+        endpoints,
+        session,
+        dispatcher,
+        &mut shutdown,
+    )
+    .await?
+    else {
+        return Ok(AttestationUploadSummary::default());
     };
     // Carry any rotated token forward so the retry, the upload and subsequent
     // cycles authenticate with the freshest JWT.
@@ -510,20 +539,21 @@ async fn collect_and_upload_attestation(
             .collect::<Vec<_>>();
         // The latch stays set: a rejected password is not sent again this
         // cycle, but reloaded credentials are.
-        let retried = tokio::select! {
-            biased;
-            () = shutdown.wait() => return Ok(AttestationUploadSummary::default()),
-            retried = collect_attestation(
-                &retry_targets,
+        let retried = collect_attestation_with_reenroll(
+            AttestationTargets {
+                targets: &retry_targets,
                 credentials_file,
-                attestation_settings,
-                endpoints,
-                session.jwt(),
-                dispatcher,
-            ) => retried,
-        };
+            },
+            attestation_settings,
+            endpoints,
+            session,
+            dispatcher,
+            &mut shutdown,
+        )
+        .await;
         match retried {
-            Ok(retried) => {
+            Ok(None) => return Ok(AttestationUploadSummary::default()),
+            Ok(Some(retried)) => {
                 if let Some(token) = retried.refreshed_jwt {
                     session.set_jwt(token);
                 }
@@ -873,7 +903,8 @@ impl InventoryRetry {
 
 /// Collect every target and forward its inventory, holding back targets that
 /// failed as a whole. After `retry.delay`, collect those once more with
-/// reloaded credentials and forward that result instead.
+/// reloaded credentials and forward that result instead, unless the retry read
+/// nothing and the first attempt read part of the inventory.
 async fn collect_inventory_with_retry(
     source: &RedfishSource,
     targets: Vec<config::Target>,
@@ -934,18 +965,28 @@ async fn collect_inventory_with_retry(
         .collect::<std::collections::HashMap<_, _>>();
     let collections =
         inventory_collections(source, targets, concurrency, CollectionOrder::Completion);
+    // A retry that reads nothing from the BMC, such as one blocked because the
+    // credentials file still holds the rejected password, keeps a first
+    // attempt that read part of the inventory.
     let unsent = forward_inventory(collections, &sender, &mut shutdown, |inventory| {
-        unretried.remove(&inventory.source.mac);
-        false
+        let keeps_first = inventory.target_error.is_some()
+            && unretried
+                .get(&inventory.source.mac)
+                .is_some_and(|first| first.target_error.is_none());
+        if !keeps_first {
+            unretried.remove(&inventory.source.mac);
+        }
+        keeps_first
     })
     .await?;
     // Shutdown can stop the retry pass early; report the first attempt for
     // targets it did not finish.
-    forward_held(
-        unsent.into_iter().chain(unretried.into_values()).collect(),
-        &sender,
-    )
-    .await
+    let mut remaining = unsent
+        .into_iter()
+        .filter(|inventory| !unretried.contains_key(&inventory.source.mac))
+        .collect::<Vec<_>>();
+    remaining.extend(unretried.into_values());
+    forward_held(remaining, &sender).await
 }
 
 /// Forward held-back inventories unchanged when shutdown interrupts the retry,
@@ -1863,12 +1904,18 @@ mod tests {
                 "the rejected password is not sent again this cycle ({reloaded})"
             );
             assert!(dispatcher.credentials_rejected(MAC), "{reloaded}");
-            // The good password reaches the BMC, which answers 404 to collections.
+            assert!(forwarded[0].target_error.is_none(), "{reloaded}");
+            // The good password reaches the BMC, which answers 404 to
+            // collections. The blocked retry reads nothing, so the first
+            // attempt and its rejections are kept.
             assert_eq!(
-                forwarded[0].target_error.is_none(),
-                recovers,
+                forwarded[0]
+                    .domain_errors
+                    .iter()
+                    .any(|error| error.message.contains("401")),
+                !recovers,
                 "{reloaded}: {:?}",
-                forwarded[0].target_error
+                forwarded[0].domain_errors
             );
         }
     }

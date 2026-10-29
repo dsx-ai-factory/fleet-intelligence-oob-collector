@@ -295,6 +295,53 @@ async fn sigterm_during_attestation_retry_pass_exits_promptly() {
     runtime.expect_clean_exit().await;
 }
 
+#[tokio::test]
+async fn nonce_unauthorized_in_attestation_retry_pass_reenrolls_before_collecting() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+    // An unreachable BMC fails every request transiently, so attestation
+    // retries it after the one-second delay.
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime =
+        Runtime::start_with_target_retry(backend.local_addr().unwrap().port(), bmc_port, 1);
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    // Request retries make each pass take a few seconds.
+    let wait = Duration::from_secs(20);
+    let (mut upload, request) = accept_request_within(&backend, wait).await;
+    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+    reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    let (mut nonce, request) = accept_request_within(&backend, wait).await;
+    assert!(request.contains("/nonce "));
+    reply(&mut nonce, r#"{"nonce":"example-nonce"}"#).await;
+
+    let (mut nonce, request) = accept_request_within(&backend, wait).await;
+    assert!(request.contains("/nonce "), "the retry pass started");
+    reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+    let (mut reenrollment, request) = accept_request(&backend).await;
+    assert!(request.starts_with("POST /v1/agent/enroll "), "{request}");
+    reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
+    let (mut nonce, request) = accept_request(&backend).await;
+    assert!(request.contains("/nonce "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer renewed-jwt")
+    );
+    reply(&mut nonce, r#"{"nonce":"example-nonce"}"#).await;
+
+    let (mut upload, request) = accept_request_within(&backend, wait).await;
+    assert!(request.starts_with("POST /v1/agent/oob_nodes/attestation "));
+    reply(
+        &mut upload,
+        r#"{"results":[{"bmcMac":"02:00:00:00:00:01","status":"OK"}]}"#,
+    )
+    .await;
+    runtime.signal("-TERM").await;
+    runtime.expect_clean_exit().await;
+}
+
 async fn finish_attestation(backend: &TcpListener, runtime: &mut Runtime) {
     complete_attestation(backend, "02:00:00:00:00:01", "OK").await;
     runtime.signal("-TERM").await;
