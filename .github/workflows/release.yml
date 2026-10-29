@@ -19,8 +19,9 @@ env:
   IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
   NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
-  # Shared JSON credential support from dsx-ai-factory/infra-controller#7730.
-  NICO_SOURCE_REF: 70914e1cb8afcb82c9a0a30f67f2eb653352748e
+  # Includes BMC credential-rejection suppression from
+  # dsx-ai-factory/infra-controller#8323.
+  NICO_SOURCE_REF: 92c64e5099c0496ae7d6e5291555d9cbebc45976
   CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
