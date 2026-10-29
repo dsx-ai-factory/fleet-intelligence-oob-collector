@@ -1,19 +1,12 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Validates Fern docs configuration on pull requests that touch docs or fern/.
+# Check every PR so deleting or renaming a linked repository asset is validated.
 
 name: Fern Docs CI
 
 on:
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'fern/**'
-      - 'README.md'
-      - 'CONTRIBUTING.md'
-      - 'scripts/docs-fetch-versions.py'
-      - '.github/workflows/fern-docs-ci.yml'
+  pull_request: {}
   workflow_dispatch: {}
   ## --- OPTION: NVIDIA copy-PR-bot trigger ---
   ## Replace the pull_request block above with:
@@ -104,6 +97,11 @@ jobs:
             exit 1
           fi
           npm install -g "fern-api@${VERSION}"
+
+      - name: Check publication links
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_docs_links.py'
+          python3 scripts/check-docs-links.py
 
       - name: Generate versioned docs
         # No v1.0.0 stable tag exists yet, so fall back to RC content.

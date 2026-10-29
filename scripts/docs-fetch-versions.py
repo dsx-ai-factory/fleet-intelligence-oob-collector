@@ -102,15 +102,39 @@ def sort_files(files: list[str]) -> list[str]:
 REPO_URL = "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector"
 
 
+def markdown_lines(content: str):
+    """Yield lines and whether they belong to a backtick or tilde fenced block.
+
+    Closing fences must use the opening character, be at least as long, and
+    contain only trailing whitespace. Unclosed blocks extend to end of input.
+    """
+    fence = None
+    for line in content.split("\n"):
+        if fence is not None:
+            closing = re.fullmatch(r" {0,3}([`~]+)[ \t]*", line)
+            if closing:
+                marker = closing[1]
+                if len(marker) >= len(fence) and marker == fence[0] * len(marker):
+                    fence = None
+            yield line, True
+            continue
+
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if opening and not (opening[1][0] == "`" and "`" in opening[2]):
+            fence = opening[1]
+        yield line, fence is not None
+
+
 def fix_mdx(content: str, tag: str) -> str:
     """Apply MDX safety fixes to markdown content, skipping fenced code blocks."""
-    lines = content.split("\n")
-    in_code_block = False
     result = []
-    for line in lines:
-        if re.match(r"^\s*```", line):
-            in_code_block = not in_code_block
+    for line, in_code_block in markdown_lines(content):
         if not in_code_block:
+            # Root pages are staged beside the guides, without the docs/ prefix.
+            line = re.sub(r"(\]\()docs/([^#)]+\.md)(?=[#)])", r"\1\2", line)
+            for source, staged in ROOT_PAGES:
+                line = re.sub(r"(\]\()" + re.escape(source) + r"(?=[#)])",
+                              lambda match, staged=staged: match[1] + staged, line)
             # <https://...> autolinks → [url](url)
             line = re.sub(
                 r"<(https://[^\s>]+)>",

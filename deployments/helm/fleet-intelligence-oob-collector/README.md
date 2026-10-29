@@ -1,9 +1,8 @@
 # Fleet Intelligence OOB Collector
 
-Deploys the inventory/attestation collector, NICo hardware health, and an OTLP
-gateway. See the [installation guide](../../../docs/installation.md) for setup.
+This chart deploys the OOB inventory and attestation collector, NICo hardware health, and a telemetry gateway. Follow the [installation guide](../../../docs/installation.md) to install it.
 
-## Configuration
+## Minimal values
 
 ```yaml
 inventory:
@@ -22,36 +21,27 @@ backend:
     secretKey: agent-token
 ```
 
-Both services use the same inventory and
-[JSON credential file](../../../credentials.example.json). Credential fields
-resolve from the MAC override, then the selected profile.
-Provision these Secrets directly or synchronize them from Vault/OpenBao using
-the separately applied [examples](../examples/). Follow the
-[credentials guide](../../../docs/credentials.md) for setup.
+Each target needs a unique BMC MAC and an IP address in `address`. Set `port` separately if the BMC doesn't use the HTTPS default. `kind` is `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default).
 
-Targets require a unique MAC and an IP address. Kinds are `compute`, `nvswitch`,
-`power_shelf`, and `unknown` (default). Helm renders `collector.toml` from this
-inventory. The NICo init container runs `bmc-collector render-nico-config` against
-that file; all target kinds become generic static Redfish endpoints. The
-collector, init container, and NICo mount the same JSON credentials file at
-`/run/secrets/bmc/credentials.json`. NICo TOML stays in a pod-local `emptyDir`
-volume.
+The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the bootstrap token. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
 
-Each workload supports `enabled`, `image`, `resources`, `nodeSelector`,
-`tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo
-image tags default to the chart version. Registry auth uses `imagePullSecrets`.
+## Choosing components
 
-The bundled gateway uses `backend.url` and `backend.agentToken`. For an external
-OTLP/gRPC destination, set `telemetry.endpoint` and disable `otelGateway`.
-Disable NICo and the gateway for inventory only, or the collector for health only.
+| To run | Set |
+| --- | --- |
+| Everything (default) | Nothing |
+| Inventory and attestation only | `nicoHardwareHealth.enabled: false` and `otelGateway.enabled: false` |
+| Health telemetry only | `bmcCollector.enabled: false` |
+| NICo with your own OTLP/gRPC collector | `telemetry.endpoint` and `otelGateway.enabled: false` |
 
-After changing values, run `helm upgrade`; config changes roll the workloads.
-Credential file updates are reloaded without restarting NICo and on each
-collector cycle.
+The gateway requires NICo. NICo's init container uses the collector image even when the collector is disabled.
 
-See [values.yaml](values.yaml) for defaults and the
-[configuration reference](../../../docs/configuration.md#helm-values) for tuning,
-CPER export, and TLS behavior. Helm validates value types, label-key syntax,
-and workload combinations. The collector validates reserved label names,
-counts, and value lengths when loading configuration, including in the NICo
-init container.
+## How it works
+
+The chart turns `inventory` into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
+
+Every workload accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo image tags default to the chart version, and `imagePullSecrets` sets registry credentials.
+
+Helm checks value types, label key syntax, MAC uniqueness, and component combinations when you install. The collector checks the remaining rules, such as reserved label names, label counts, and value lengths, when it loads the configuration, including in NICo's init container.
+
+After you change values, run `helm upgrade`. See [rotation and ownership](../../../docs/credentials.md#rotation-and-ownership) for what restarts automatically and what doesn't, and [values.yaml](values.yaml) and the [configuration reference](../../../docs/configuration.md) for every setting.

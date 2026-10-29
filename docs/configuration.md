@@ -1,231 +1,215 @@
 # Configuration
 
-The collector reads targets from a TOML configuration file and credentials from
-a separate JSON secret file shared with NICo hardware health. Start from
-`config.example.toml` and define one or more Redfish targets:
+You configure the collector through your Helm values file. This page covers each part of it, in the order you'd fill it in. [Installation](installation.md#save-your-values-file) has a complete minimal example, and [values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/values.yaml) lists every setting with its default.
 
-```toml
-compute_zone = "us-west-dc1"
-node_group = "gb200-training"
+Passwords never go in the values file. They live in a separate [BMC credentials file](#bmc-credentials-file) that you store in a Kubernetes Secret, and the chart only references it.
 
-[credentials]
-file = "/run/secrets/bmc/credentials.json"
+## Targets
 
-[[targets]]
-kind = "compute"
-credentials_profile = "bmc"
-name = "node-01"
-ip = "10.0.0.10"
-port = 443
-mac = "00:11:22:33:44:55"
-labels = { site = "dev", environment = "development" }
+List one entry under `inventory.targets` for each BMC. The collector and NICo hardware health both read this list.
 
-[[targets]]
-kind = "nvswitch"
-credentials_profile = "switch"
-name = "switch-tray-01"
-ip = "10.0.0.11"
-mac = "02:00:0a:00:00:0b"
-
-[[targets]]
-kind = "power_shelf"
-credentials_profile = "bmc"
-name = "power-shelf-01"
-ip = "10.0.0.12"
-mac = "02:00:0a:00:00:0c"
+```yaml
+inventory:
+  computeZone: us-west-dc1
+  nodeGroup: gb200-training
+  labels:
+    site: dc1
+  targets:
+    - kind: compute
+      name: node-01
+      address: 192.0.2.10
+      mac: "00:11:22:33:44:55"
+      credentialsProfile: bmc
+      labels:
+        rack: rack-12
+    - kind: nvswitch
+      name: switch-tray-01
+      address: 192.0.2.11
+      mac: "02:00:0a:00:00:0b"
+      credentialsProfile: switch
+    - kind: power_shelf
+      name: power-shelf-01
+      address: 192.0.2.12
+      port: 8443
+      mac: "02:00:0a:00:00:0c"
+      credentialsProfile: bmc
 ```
 
-The JSON file uses NICo's `profiles` and per-MAC `overrides` schema; see
-[credentials.example.json](../credentials.example.json). Each field resolves from
-the MAC override, then the explicitly selected `credentials_profile`. There is
-no implicit default profile. Omitted or null fields inherit; an empty string is
-an explicit value. A username must be present; passwords may be omitted. MAC
-matching ignores letter case. Unknown fields, invalid MACs, malformed JSON,
-unknown profiles, or unresolved usernames reject the configuration without
-including credential values in errors.
-
-The collector reads the file on each collection cycle. During attestation, a BMC
-`401 Unauthorized` also triggers one credential reload and request retry per
-target, using its existing profile and MAC override. Target configuration stays
-fixed until the next cycle. Replace the complete file atomically, including
-when rotating a Kubernetes Secret. NICo reloads the
-same file through its cached reader and refreshes consumers after authentication
-failures. Use an absolute path for both processes; relative collector paths are
-resolved from the directory containing its TOML file.
-
-Define each target with `[[targets]]`. Its optional `kind` is one of `unknown`,
-`compute`, `nvswitch`, or `power_shelf`, and defaults to `unknown` when omitted.
-
-## Collector TOML
+You need at least one target. The chart rejects fields it doesn't recognize, so a typo fails the install instead of being ignored.
 
 | Field | Required | Description |
 | --- | --- | --- |
-| Top-level `compute_zone` | No | Default Fleet Intelligence compute zone inherited by targets and mirrored to telemetry as `compute_zone`. |
-| Top-level `node_group` | No | Default Fleet Intelligence node group inherited by targets and mirrored to telemetry as `node_group`. |
-| Top-level `labels` | No | Labels inherited by every target. Per-target labels with the same key override them. |
-| `credentials.file` | Yes | Path to the JSON secret file shared with NICo hardware health. |
-| `targets[].credentials_profile` | No | Named profile in the shared JSON file; a per-MAC override can supply credentials without a profile. |
-| `targets[].kind` | No | Target type: `unknown`, `compute`, `nvswitch`, or `power_shelf`; defaults to `unknown`. |
-| `targets[].name` | No | Human-readable name exported as inventory `name` and the NICo `machine_name` label. |
-| `targets[].compute_zone` | No | Per-target compute-zone override. |
-| `targets[].node_group` | No | Per-target node-group override. |
-| `targets[].ip` | Yes | IPv4 or IPv6 address of the BMC. |
-| `targets[].port` | No | Redfish port; the HTTPS default is used when omitted. |
-| `targets[].mac` | Yes | Stable BMC identity: Six-byte MAC in colon-separated, hyphen-separated, or unseparated hexadecimal form. Stored as bytes, formatted as uppercase colon-separated text, and unique in the file. The config file is not rewritten. |
-| `targets[].labels` | No | Labels added to this target or overriding inherited top-level labels. |
+| `address` | Yes | IPv4 or IPv6 address of the BMC, with no scheme or port. |
+| `mac` | Yes | MAC address of the BMC. See [target identity](#target-identity). |
+| `port` | No | Redfish port. Defaults to the HTTPS port. |
+| `kind` | No | `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default). |
+| `name` | No | Display name, shown as the inventory `name` and the NICo `machine_name` label. |
+| `credentialsProfile` | No | Profile to use from the credentials file. Optional only when a MAC override supplies the credentials. |
+| `computeZone` | No | Overrides `inventory.computeZone` for this target. See [placement](#placement). |
+| `nodeGroup` | No | Overrides `inventory.nodeGroup` for this target. |
+| `labels` | No | Extra telemetry labels for this target. See [labels](#labels). |
 
-Every target requires an explicit BMC MAC. The collector does not derive identity
-from the IP address. The normalized MAC is used consistently in configuration, inventory, and NICo
-telemetry; equivalent spellings are rejected as duplicate targets.
+These settings apply to every target unless the target overrides them:
 
-Label keys must match `[a-zA-Z_][a-zA-Z0-9_]*`. The collector reserves capacity
-for labels derived from `name`, `compute_zone`, and `node_group`, plus
-`oob="true"`. Values for labels and these fields are limited to 1,024 bytes.
-NICo identity fields and all four derived label names are reserved.
+| Field | Description |
+| --- | --- |
+| `inventory.computeZone` | Default compute zone. |
+| `inventory.nodeGroup` | Default node group. |
+| `inventory.labels` | Labels for every target. A target label with the same key wins. |
 
-### Fleet Intelligence placement fields
+### Target identity
 
-`compute_zone` and `node_group` are first-class configuration fields rather than
-custom labels. They assign the node to its Fleet Intelligence compute zone and
-node group, and the collector mirrors them to telemetry:
+Fleet Intelligence recognizes a machine by its BMC MAC address, not its IP address. That keeps inventory, attestation, and telemetry for the same machine together even if its IP changes, so every target needs its real BMC MAC.
 
-| TOML field | NICo telemetry label | Backend inventory field |
-| --- | --- | --- |
-| `compute_zone` | `compute_zone` | `computeZone` |
-| `node_group` | `node_group` | `nodeGroup` |
+Write the MAC with colons (`00:11:22:33:44:55`), hyphens, or no separators, in any letter case. Quote it in YAML. Fleet Intelligence shows it as uppercase with colons. Two targets with the same MAC, however it is spelled, are rejected as duplicates.
 
-The example value `us-west-dc1` illustrates a location or failure domain, while
-`gb200-training` illustrates a logical hardware/workload pool. These are only
-examples: deployments must use the exact compute-zone and node-group names
-configured in their Fleet Intelligence account.
+### Placement
 
-Set them at the top level when every configured target belongs to the same
-Fleet Intelligence placement. Override them directly on a target when its
-placement differs:
+`computeZone` and `nodeGroup` place each machine in a Fleet Intelligence compute zone and node group. Use the exact names configured in your Fleet Intelligence account; the values on this page are only examples. A compute zone is typically a location or failure domain, such as `us-west-dc1`. A node group is typically a pool of similar hardware or workloads, such as `gb200-training`.
 
-```toml
-compute_zone = "us-west-dc1"
-node_group = "gb200-training"
-[credentials]
-file = "/run/secrets/bmc/credentials.json"
+Set them under `inventory` when every target shares the same placement, and override them on any target that differs:
 
-[[targets]]
-kind = "compute"
-name = "node-01"
-ip = "10.0.0.10"
-mac = "02:00:0a:00:00:0a"
-credentials_profile = "bmc"
-
-[[targets]]
-kind = "compute"
-name = "node-02"
-ip = "10.0.0.11"
-mac = "02:00:0a:00:00:0b"
-credentials_profile = "bmc"
-compute_zone = "us-west-dc2"
-node_group = "gb200-inference"
+```yaml
+inventory:
+  computeZone: us-west-dc1
+  nodeGroup: gb200-training
+  targets:
+    - name: node-01
+      address: 192.0.2.10
+      mac: "02:00:0a:00:00:0a"
+      credentialsProfile: bmc
+    - name: node-02
+      address: 192.0.2.11
+      mac: "02:00:0a:00:00:0b"
+      credentialsProfile: bmc
+      computeZone: us-west-dc2
+      nodeGroup: gb200-inference
 ```
 
-In this example, `node-01` inherits the `us-west-dc1` compute zone and the
-`gb200-training` node group. `node-02` belongs to the `us-west-dc2` compute zone
-and the `gb200-inference` node group. If either field is omitted from both
-scopes, its corresponding Fleet Intelligence inventory placement field and
-telemetry label are omitted. Custom labels are not promoted to Fleet
-Intelligence placement fields.
+Here `node-01` uses the shared values, while `node-02` is in `us-west-dc2` and `gb200-inference`. If neither place sets a value, the machine is sent without it.
 
-The JSON secret file is required for all collector runs. Store credential values
-in its profiles or per-MAC overrides and select a profile with
-`credentials_profile` where needed.
-Helm renders the password-free TOML from `inventory` values and references an
-existing Secret for the JSON file. Credential values never enter Helm release
-state. See [installation](installation.md#configure-targets-and-secrets).
+The collector sends placement with the inventory and adds it to telemetry as the `compute_zone` and `node_group` labels. Custom labels such as `site` stay labels; they don't set placement.
 
-`bmc-collector render-nico-config` reads the same TOML and JSON files as the
-collector. It writes the JSON file's absolute path and each selected profile
-into NICo TOML, without copying credential values. Kubernetes invokes this
-command in its init container; the host package uses
-systemd `ExecStartPre`. All target kinds render as generic static Redfish
-endpoints without NICo machine, switch, or power-shelf descriptors.
+### Labels
 
-## Helm values
+Labels are added to NICo telemetry for each target.
 
-Both services use `inventory.targets`; addresses are IP literals with optional
-ports. Target placement and labels override shared defaults. All target kinds
-render as generic static Redfish endpoints through the Rust renderer.
+- Keys must match `[a-zA-Z_][a-zA-Z0-9_]*`.
+- Each target can have up to 32 labels. That count includes the labels added automatically: `oob="true"`, plus `machine_name`, `compute_zone`, and `node_group` when `name`, `computeZone`, and `nodeGroup` are set.
+- Label values, and the `name`, `computeZone`, and `nodeGroup` fields, can be up to 1,024 bytes. Those three fields are trimmed and can't be blank when set.
+- You can't use reserved names: the four labels above, and the labels NICo sets itself, such as `bmc_ip`, `endpoint_mac`, `gpu_uuid`, `machine_id`, and `system_uuid`. The full list is `RESERVED_NICO_LABELS` in the [configuration source](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/src/config/targets.rs).
 
-| Setting | Purpose |
+Helm checks key syntax when you install. The remaining rules are checked when the collector and NICo's init container load the configuration, so a violation shows up as a failed pod.
+
+## BMC credentials file
+
+The credentials file holds named `profiles` and per-BMC `overrides`, keyed by MAC address:
+
+```json
+{
+  "profiles": {
+    "bmc": { "username": "admin", "password": "replace-with-bmc-password" },
+    "switch": { "username": "switch-admin", "password": "replace-with-switch-password" }
+  },
+  "overrides": {
+    "02:00:0a:00:00:0b": { "password": "replace-with-target-password" }
+  }
+}
+```
+
+Store it in a Kubernetes Secret, either [by hand](installation.md#create-the-secrets) or [from Vault or OpenBao](credentials.md), and point the chart at it:
+
+```yaml
+credentials:
+  existingSecret: fleet-intelligence-bmc-credentials
+  secretKey: credentials.json
+```
+
+The chart mounts the file into the collector and NICo at `/run/secrets/bmc/credentials.json`. A complete example is in [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json).
+
+### How credentials are resolved
+
+For each BMC, the collector and NICo look up each field (`username`, `password`) in this order:
+
+1. The override for that BMC's MAC, if there is one.
+2. The profile named in the target's `credentialsProfile`.
+
+A field that is missing or `null` in the override comes from the profile. An empty string `""` is a real value: it is used as-is and doesn't fall back to the profile. There is no default profile.
+
+Every target must end up with a username. If neither source sets a password, the password is empty.
+
+Override keys follow the same MAC rules as targets: any separator or case works, and two keys for the same MAC are rejected.
+
+The collector rejects a credentials file with unknown fields, invalid MACs, malformed JSON, unknown profile names, or a target without a username. Error messages never include credential values.
+
+### When credential changes take effect
+
+You can change passwords without restarting anything: the collector and NICo both re-read the file. See [rotation](credentials.md#rotation-and-ownership) for timing and for what does need a restart.
+
+## Fleet Intelligence connection
+
+```yaml
+backend:
+  url: https://data.fleet-intelligence.nvidia.com
+  agentToken:
+    existingSecret: fleet-intelligence-oob-collector-agent-token
+    secretKey: agent-token
+```
+
+`backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
+
+`backend.agentToken` points to the Secret that holds the bootstrap token. The collector and the bundled gateway both use it.
+
+## Components and telemetry
+
+By default, the chart runs the collector, NICo hardware health, and a gateway that forwards NICo's metrics and logs to Fleet Intelligence. Each has an `enabled` switch:
+
+| To run | Set |
 | --- | --- |
-| `inventory` | Targets, placement, and labels. |
-| `credentials` | Shared BMC JSON Secret reference. |
-| `backend` | Fleet Intelligence URL and bootstrap token reference. |
-| `telemetry.endpoint` | External OTLP/gRPC destination; disable `otelGateway`. |
-| `proxy` | Shared proxy, enabled explicitly; URLs cannot contain credentials. |
-| `bmcCollector.redfish` | Per-BMC request limits, timeout, and TLS verification. |
-| `otelGateway` | Gateway deployment controls and replica count. |
+| Everything (default) | Nothing |
+| Inventory and attestation only | `nicoHardwareHealth.enabled: false` and `otelGateway.enabled: false` |
+| Health telemetry only | `bmcCollector.enabled: false` |
+| NICo with your own OTLP/gRPC collector | `telemetry.endpoint` (an `http://` or `https://` URL) and `otelGateway.enabled: false` |
 
-All workloads share image, resource, scheduling, annotation, and logging fields.
-Optional features use `enabled`; application Secret references use
-`existingSecret` and `secretKey`. See [values.yaml](../deployments/helm/fleet-intelligence-oob-collector/values.yaml)
-for defaults and [installation](installation.md#configure-targets-and-secrets)
-for an example.
+The gateway requires NICo.
 
-NICo uses the renderer defaults for sensor collection, SSE logs, GPU identity,
-CPER diagnostics, and alert details.
+NICo's telemetry settings are fixed by the chart. NICo collects BMC logs from the Redfish event stream, so BMCs need EventService support for log collection; there is no polling fallback. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
-Provision the shared JSON Secret and `backend.agentToken` directly or through
-an external secrets operator. See [Credentials](credentials.md) for Vault and
-OpenBao setup and credential reload behavior.
+## Collection settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `bmcCollector.intervalSeconds` | `86400` | Wait time after one collection cycle ends before the next starts (24 hours). |
+| `bmcCollector.targetConcurrency` | `64` | Number of BMCs collected at the same time. |
+| `bmcCollector.redfish.maxInFlight` | `4` | Maximum simultaneous requests to one BMC. |
+| `bmcCollector.redfish.requestsPerSecond` | `10` | Maximum request rate to one BMC. Short bursts up to the same number are allowed. |
+| `bmcCollector.redfish.timeoutSeconds` | `30` | Redfish request timeout. |
+| `bmcCollector.redfish.insecureTls` | `false` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
+| `bmcCollector.latencyProbe.enabled` | `true` | Measure network latency to each BMC. |
+
+These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. See [request limits](architecture.md#request-limits) for how they work together.
+
+## Workload settings
+
+Every workload (`bmcCollector`, `nicoHardwareHealth`, and `otelGateway`) accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. `otelGateway.replicas` sets the number of gateway replicas.
+
+Collector and NICo image tags default to the chart version. If you pull images through a private registry mirror, set `imagePullSecrets`.
 
 ## Reported collector behavior
 
-Every backend inventory batch includes `collector.version` and a typed
-`collector.config` shared by its observations. `runtime` reports the effective
-collection interval, concurrency, per-BMC limits, timeout, TLS and latency-probe
-settings, and logging filter (including the `info` fallback).
-
-Helm also passes the following reporting metadata to the collector:
-
-| Helm value | Reported field | Environment variable |
-| --- | --- | --- |
-| `proxy.enabled` | `runtime.proxyEnabled` | `FLEETINT_PROXY_ENABLED` |
-| `nicoHardwareHealth.enabled` | `nicoHealth.enabled` | `FLEETINT_NICO_ENABLED` |
-| `nicoHardwareHealth.logLevel` | `nicoHealth.logLevel` | `FLEETINT_NICO_LOG_LEVEL` |
-| NICo/gateway enablement | `nicoHealth.telemetryDestination` | `FLEETINT_NICO_TELEMETRY_DESTINATION` |
-| `otelGateway.enabled` | `otelGateway.enabled` | `FLEETINT_OTEL_GATEWAY_ENABLED` |
-| `otelGateway.logLevel` | `otelGateway.logLevel` | `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` |
-
-The telemetry destination is `disabled` when NICo is disabled, `bundledGateway`
-when both services are enabled, and `external` when NICo uses `telemetry.endpoint`.
-These values describe configured behavior, not service health. Gateway disablement
-does not mean telemetry export is disabled. Proxy reporting describes Helm's
-proxy setting; it does not inspect inherited proxy environment variables.
-
-For non-Helm installations, unset reporting variables omit their corresponding
-fields; an unset service enablement flag omits that service object. Explicit
-`false` remains false. Boolean variables accept only lowercase `true` and `false`.
-NICo log levels accept `trace`, `debug`, `info`, `warn`, `error`, and `off`;
-gateway log levels accept `debug`, `info`, `warn`, and `error`. Reporting a
-service's log level or telemetry destination requires its enablement flag.
-Invalid or incomplete metadata stops `run` before enrollment without echoing
-invalid values. These variables report settings; they do not configure the
-separate NICo or gateway process. Restart the collector to refresh metadata.
-
-The report excludes credentials, secret references, backend/proxy/telemetry
-URLs, hardware target lists (already represented by inventory observations),
-and deployment settings such as images, resources, replicas, scheduling, and
-annotations. The backend stores the behavior configuration with each OOB
-observation, including observations with collection errors. Deploy the matching
-backend support before rolling out collectors that use the `collector` envelope.
+With each inventory upload, the collector reports its version and the settings it is running with, such as the collection interval, request limits, and which telemetry components are enabled. The report never includes secrets, credential references, or URLs. It describes configuration, not whether those components are healthy.
 
 ## Proxy and TLS
 
-Use an absolute API origin, such as `https://api.example.com`, for
-`FLEETINT_BACKEND_URL` or `--backend-url`, without a `/v1/agent` endpoint suffix.
-Backend URLs cannot contain embedded credentials, query parameters, or fragments.
-Supply the bootstrap token through `FLEETINT_AGENT_TOKEN`; authentication is
-independent of the URL.
+To send traffic through an HTTP proxy, enable `proxy` and set the proxy URLs. They must be reachable from the cluster and can't contain credentials.
 
-Enable `proxy` with a cluster-reachable URL without credentials.
-`bmcCollector.redfish.insecureTls` disables BMC certificate verification and
-permits interception. It does not affect backend TLS or NICo; the pinned NICo
-client accepts invalid Redfish certificates.
+```yaml
+proxy:
+  enabled: true
+  httpsProxy: http://proxy.example.com:3128
+  noProxy: localhost,127.0.0.1,.svc,.cluster.local
+```
+
+`proxy` also accepts `httpProxy` and `allProxy`. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
+
+`bmcCollector.redfish.insecureTls` turns off BMC certificate checks for the collector. Use it only for BMCs with self-signed certificates on a network you trust, because it allows traffic to be intercepted. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.

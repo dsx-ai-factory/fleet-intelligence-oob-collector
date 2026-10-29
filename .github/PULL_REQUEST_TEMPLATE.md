@@ -6,7 +6,7 @@
 
 ## Breaking changes
 
-<!-- Describe breaking changes and migration steps, or state "None". -->
+<!-- Describe breaking changes and required operator actions, or state "None". -->
 
 ## Validation
 
