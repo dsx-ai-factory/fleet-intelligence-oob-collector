@@ -911,7 +911,7 @@ async fn collect_inventory_with_retry(
     }
     // The latch stays set: a rejected password is not sent again this cycle,
     // but reloaded credentials are.
-    let targets = held
+    let targets: Vec<_> = held
         .iter()
         .filter_map(|inventory| by_mac.remove(&inventory.source.mac))
         .map(|mut target| {
@@ -928,10 +928,24 @@ async fn collect_inventory_with_retry(
             target
         })
         .collect();
+    let mut unretried = held
+        .into_iter()
+        .map(|inventory| (inventory.source.mac.clone(), inventory))
+        .collect::<std::collections::HashMap<_, _>>();
     let collections =
         inventory_collections(source, targets, concurrency, CollectionOrder::Completion);
-    forward_inventory(collections, &sender, &mut shutdown, |_| false).await?;
-    Ok(())
+    let unsent = forward_inventory(collections, &sender, &mut shutdown, |inventory| {
+        unretried.remove(&inventory.source.mac);
+        false
+    })
+    .await?;
+    // Shutdown can stop the retry pass early; report the first attempt for
+    // targets it did not finish.
+    forward_held(
+        unsent.into_iter().chain(unretried.into_values()).collect(),
+        &sender,
+    )
+    .await
 }
 
 /// Forward held-back inventories unchanged when shutdown interrupts the retry,
@@ -949,12 +963,13 @@ async fn forward_held(
     Ok(())
 }
 
-/// Forward collected inventories, returning those `hold` keeps back instead.
+/// Forward collected inventories, returning those `hold` keeps back instead,
+/// and any that shutdown stopped before they were sent.
 async fn forward_inventory(
     mut collections: impl Stream<Item = NodeInventory> + Unpin,
     sender: &tokio::sync::mpsc::Sender<NodeInventory>,
     shutdown: &mut Shutdown,
-    hold: impl Fn(&NodeInventory) -> bool,
+    mut hold: impl FnMut(&NodeInventory) -> bool,
 ) -> Result<Vec<NodeInventory>, &'static str> {
     let mut held = Vec::new();
     loop {
@@ -972,9 +987,14 @@ async fn forward_inventory(
         }
         tokio::select! {
             biased;
-            () = shutdown.wait() => break,
-            result = sender.send(inventory) => {
-                result.map_err(|_| "inventory export worker stopped before collection completed")?;
+            () = shutdown.wait() => {
+                held.push(inventory);
+                break;
+            }
+            permit = sender.reserve() => {
+                permit
+                    .map_err(|_| "inventory export worker stopped before collection completed")?
+                    .send(inventory);
             }
         }
     }
@@ -1636,9 +1656,12 @@ mod tests {
     }
 
     /// A BMC with a public service root that accepts only the `good` password,
-    /// answering every other authenticated request with 404. Returns its port
-    /// and the number of requests it rejected with 401.
-    async fn spawn_bmc_accepting_good_password() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    /// answering every other authenticated request with 404, or never when
+    /// `good_hangs`. Returns its port and the number of requests it rejected
+    /// with 401.
+    async fn spawn_bmc_accepting_good_password(
+        good_hangs: bool,
+    ) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1662,6 +1685,7 @@ mod tests {
         let rejected = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&rejected);
         tokio::spawn(async move {
+            let mut unanswered = Vec::new();
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut request = Vec::new();
                 let mut buffer = [0; 1024];
@@ -1675,6 +1699,9 @@ mod tests {
                 let path = request.split_whitespace().nth(1).unwrap_or_default();
                 let (status, body) = if path.trim_end_matches('/') == "/redfish/v1" {
                     ("200 OK", SERVICE_ROOT)
+                } else if good_hangs && request.contains(GOOD_AUTHORIZATION) {
+                    unanswered.push(stream);
+                    continue;
                 } else if request.contains(GOOD_AUTHORIZATION) {
                     ("404 Not Found", "{}")
                 } else {
@@ -1692,13 +1719,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_during_inventory_retry_forwards_the_first_attempt() {
+        const MAC: &str = "00:11:22:33:44:55";
+        // The retry's reloaded password reaches a BMC that never answers.
+        let (port, _) = spawn_bmc_accepting_good_password(true).await;
+        let dispatcher = Arc::new(
+            Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 4,
+                    bmc_max_in_flight: 4,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                [MAC.to_string()],
+            )
+            .expect("dispatcher"),
+        );
+        let source = RedfishSource::new(false, Duration::from_secs(30), Arc::clone(&dispatcher))
+            .expect("source");
+        let retry = InventoryRetry {
+            dispatcher: Arc::clone(&dispatcher),
+            reload_credentials: Box::new(|_| Ok(("user".into(), "good".into()))),
+            delay: Some(Duration::ZERO),
+        };
+        let target = config::Target {
+            kind: bmc_inventory::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().expect("ip"),
+            port: Some(port),
+            mac: MAC.parse().expect("mac"),
+            address: format!("http://127.0.0.1:{port}"),
+            credentials_profile: None,
+            username: "user".to_string(),
+            password: "bad".to_string(),
+            labels: Default::default(),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let (signal, shutdown) = watch::channel(false);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = signal.send(true);
+        });
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            collect_inventory_with_retry(
+                &source,
+                vec![target],
+                1,
+                &retry,
+                sender,
+                Shutdown(shutdown),
+            ),
+        )
+        .await
+        .expect("shutdown stops the retry pass")
+        .expect("collection");
+
+        let forwarded = receiver.try_recv().expect("the first attempt is reported");
+        assert_eq!(forwarded.source.mac, MAC);
+        assert!(
+            forwarded
+                .domain_errors
+                .iter()
+                .any(|error| error.message.contains("401")),
+            "{:?}",
+            forwarded.domain_errors
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn failed_inventory_target_is_retried_once_with_reloaded_credentials() {
         use std::sync::atomic::Ordering;
 
         const MAC: &str = "00:11:22:33:44:55";
         // `reloaded` is the password in the credentials file at the retry.
         for (reloaded, recovers) in [("good", true), ("bad", false)] {
-            let (port, rejected) = spawn_bmc_accepting_good_password().await;
+            let (port, rejected) = spawn_bmc_accepting_good_password(false).await;
             let target = move |password: &str| config::Target {
                 kind: bmc_inventory::models::TargetKind::Compute,
                 name: None,
