@@ -89,6 +89,7 @@ mod tests {
     fn maps_success_report() {
         let node = RedfishMapper.map(SourceRecord {
             target: target(),
+            retryable: false,
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             nonce_refresh_timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             result: Ok(RedfishAttestationReport {
@@ -115,6 +116,7 @@ mod tests {
     fn sanitizes_component_errors_before_building_attestation_model() {
         let node = RedfishMapper.map(SourceRecord {
             target: target(),
+            retryable: false,
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             nonce_refresh_timestamp: None,
             result: Ok(RedfishAttestationReport {
@@ -138,6 +140,7 @@ mod tests {
     fn maps_error_record_as_failed_node() {
         let node = RedfishMapper.map(SourceRecord {
             target: target(),
+            retryable: false,
             collected_at: "2026-01-01T00:00:00Z".to_string(),
             nonce_refresh_timestamp: Some("2026-01-01T00:00:00Z".to_string()),
             result: Err("nonce request: timeout".to_string()),

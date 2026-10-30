@@ -25,8 +25,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleet_intelligence_oob::{
     DEFAULT_BMC_BURST, DEFAULT_BMC_MAX_IN_FLIGHT, DEFAULT_BMC_REQUESTS_PER_SECOND,
     DEFAULT_INVENTORY_INTERVAL_SECONDS, DEFAULT_REDFISH_TIMEOUT_SECONDS,
-    DEFAULT_TARGET_CONCURRENCY, InventoryFormat, InventoryOptions, RuntimeOptions, run_inventory,
-    run_runtime,
+    DEFAULT_TARGET_CONCURRENCY, DEFAULT_TARGET_RETRY_DELAY_SECONDS, InventoryFormat,
+    InventoryOptions, RuntimeOptions, run_inventory, run_runtime,
 };
 
 #[derive(Debug, Parser)]
@@ -100,6 +100,11 @@ struct RuntimeArgs {
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]
     interval_seconds: u64,
+
+    /// Seconds to wait before collecting targets that failed as a whole once
+    /// more in the same cycle; 0 skips the retry. Hidden: for tests.
+    #[arg(long, hide = true, default_value_t = DEFAULT_TARGET_RETRY_DELAY_SECONDS)]
+    target_retry_delay_seconds: u64,
 }
 
 #[derive(Debug, Parser)]
@@ -189,6 +194,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backend_url: args.backend_url,
                 agent_token: args.agent_token,
                 interval_seconds: args.interval_seconds,
+                target_retry_delay: (args.target_retry_delay_seconds > 0)
+                    .then(|| std::time::Duration::from_secs(args.target_retry_delay_seconds)),
                 log_level,
             })
             .await?

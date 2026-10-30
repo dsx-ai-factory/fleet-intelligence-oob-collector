@@ -210,6 +210,137 @@ mod tests {
         assert!(inventory.latency.is_empty());
     }
 
+    const PUBLIC_SERVICE_ROOT: &str = r##"{
+        "@odata.id": "/redfish/v1",
+        "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
+        "Id": "RootService",
+        "Name": "Root Service",
+        "RedfishVersion": "1.15.1",
+        "Links": {
+            "Sessions": {"@odata.id": "/redfish/v1/SessionService/Sessions"}
+        },
+        "Managers": {"@odata.id": "/redfish/v1/Managers"},
+        "Systems": {"@odata.id": "/redfish/v1/Systems"},
+        "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
+        "UpdateService": {"@odata.id": "/redfish/v1/UpdateService"},
+        "Fabrics": {"@odata.id": "/redfish/v1/Fabrics"}
+    }"##;
+
+    /// A BMC whose service root is public and which rejects every
+    /// authenticated request. Returns its port and the rejected request count.
+    async fn spawn_rejecting_bmc() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&rejected);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let path = String::from_utf8_lossy(&request)
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                let (status, body) = if path.trim_end_matches('/') == "/redfish/v1" {
+                    ("200 OK", PUBLIC_SERVICE_ROOT)
+                } else {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    ("401 Unauthorized", r#"{"error":"unauthorized"}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (port, rejected)
+    }
+
+    #[tokio::test]
+    async fn rejected_credentials_cost_one_login_per_cycle() {
+        use std::sync::atomic::Ordering;
+
+        let (port, rejected) = spawn_rejecting_bmc().await;
+        let dispatcher = Arc::new(
+            Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 4,
+                    bmc_max_in_flight: 4,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["00:11:22:33:44:55".to_string()],
+            )
+            .expect("dispatcher"),
+        );
+        let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
+            .expect("source");
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().expect("ip"),
+            port: Some(port),
+            mac: "00:11:22:33:44:55".parse().expect("mac"),
+            address: format!("http://127.0.0.1:{port}"),
+            credentials_profile: None,
+            username: "user".to_string(),
+            password: "password".to_string(),
+            labels: Default::default(),
+        };
+
+        let inventory = source.collect(target.clone()).await;
+        assert_eq!(
+            rejected.load(Ordering::SeqCst),
+            1,
+            "every domain after the first 401 is skipped locally"
+        );
+        assert_eq!(
+            inventory.source.redfish_version.as_deref(),
+            Some("1.15.1"),
+            "public service-root data is still reported"
+        );
+        assert!(
+            inventory
+                .domain_errors
+                .iter()
+                .skip(1)
+                .all(|error| error.message.contains("request was not sent")),
+            "{:?}",
+            inventory.domain_errors
+        );
+
+        source.collect(target.clone()).await;
+        assert_eq!(
+            rejected.load(Ordering::SeqCst),
+            1,
+            "same cycle stays latched"
+        );
+
+        dispatcher.clear_credential_rejections();
+        source.collect(target).await;
+        assert_eq!(
+            rejected.load(Ordering::SeqCst),
+            2,
+            "the next cycle tries once more"
+        );
+    }
+
     #[tokio::test]
     async fn disabled_probe_reports_disabled_status() {
         let source = RedfishSource::new(true, Duration::from_secs(5), Arc::new(test_dispatcher()))

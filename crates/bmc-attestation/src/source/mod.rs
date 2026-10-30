@@ -18,7 +18,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use base64::Engine;
-use bmc_dispatch::RequestGate;
+use bmc_dispatch::{DispatchError, FailureKind, RequestGate};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -53,6 +53,9 @@ pub struct SourceRecord {
     pub collected_at: String,
     pub nonce_refresh_timestamp: Option<String>,
     pub result: Result<RedfishAttestationReport, String>,
+    /// The failure was a credential rejection or a transient error, so the
+    /// target is worth another attempt later in the cycle.
+    pub retryable: bool,
 }
 
 impl SourceRecord {
@@ -66,6 +69,7 @@ impl SourceRecord {
             collected_at: now_rfc3339(),
             nonce_refresh_timestamp,
             result: Err(error.into()),
+            retryable: false,
         }
     }
 }
@@ -117,34 +121,59 @@ struct BmcSession<'a> {
     credentials_reloaded: bool,
 }
 
+/// Whether a request may be sent again after a transient failure.
+#[derive(Clone, Copy)]
+enum Idempotency {
+    Retry,
+    /// The request has side effects, such as a measurement `POST`.
+    SendOnce,
+}
+
 impl BmcSession<'_> {
     async fn request_json<T: serde::de::DeserializeOwned>(
         &mut self,
+        idempotency: Idempotency,
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T, Box<dyn Error>> {
         loop {
-            let result = self
-                .gate
-                .execute(async {
-                    request()
-                        .basic_auth(&self.target.username, Some(&self.target.password))
-                        .send()
-                        .await?
-                        .error_for_status()?
-                        .json::<T>()
+            let credentials = bmc_dispatch::BmcCredentials::new(
+                self.target.username.clone(),
+                self.target.password.clone(),
+            );
+            let send = || async {
+                request()
+                    .basic_auth(&self.target.username, Some(&self.target.password))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<T>()
+                    .await
+            };
+            let result = match idempotency {
+                Idempotency::Retry => {
+                    self.gate
+                        .execute_idempotent(&credentials, send, classify_error)
                         .await
-                })
-                .await;
+                }
+                Idempotency::SendOnce => {
+                    self.gate
+                        .execute_classified(&credentials, send(), classify_error)
+                        .await
+                }
+            };
             match result {
                 Ok(value) => return Ok(value),
-                Err(bmc_dispatch::DispatchError::Transport(err))
-                    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED)
+                // Inventory may have latched these credentials already.
+                Err(DispatchError::CredentialsRejected) if !self.credentials_reloaded => {}
+                Err(DispatchError::Transport(err))
+                    if classify_error(&err) == FailureKind::CredentialsRejected
                         && !self.credentials_reloaded => {}
                 Err(err) => return Err(err.into()),
             }
             self.credentials_reloaded = true;
             // Only credentials can change here. Retry this request with the same
             // nonce, retaining measurements already collected for other components.
+            // Unchanged credentials stay rejected, so the retry fails locally.
             let (username, password) = (self.reload_credentials)(&self.target)
                 .map_err(|_| "failed to reload BMC credentials")?;
             self.target.username = username;
@@ -196,15 +225,22 @@ impl RedfishAttestationSource {
     ) -> SourceRecord {
         let collected_at = now_rfc3339();
         let nonce_refresh_timestamp = nonce.nonce_refresh_timestamp.clone();
-        let result = self
+        let (result, retryable) = match self
             .collect_report(&target, &nonce, &request, gate, reload_credentials)
             .await
-            .map_err(|err| err.to_string());
+        {
+            Ok((report, retryable)) => (Ok(report), retryable),
+            Err(error) => {
+                let retryable = is_retryable(error.as_ref());
+                (Err(error.to_string()), retryable)
+            }
+        };
         SourceRecord {
             target,
             collected_at,
             nonce_refresh_timestamp,
             result,
+            retryable,
         }
     }
 
@@ -215,7 +251,7 @@ impl RedfishAttestationSource {
         request: &MeasurementRequest,
         gate: RequestGate,
         reload_credentials: &CredentialReloader<'_>,
-    ) -> Result<RedfishAttestationReport, Box<dyn Error>> {
+    ) -> Result<(RedfishAttestationReport, bool), Box<dyn Error>> {
         let mut session = BmcSession {
             target: target.clone(),
             base_url: bmc_url(&target.address, self.port)?,
@@ -223,30 +259,49 @@ impl RedfishAttestationSource {
             reload_credentials,
             credentials_reloaded: false,
         };
-        let components = self.discover_gpu_irot_components(&mut session).await?;
+        self.collect_session_report(&mut session, nonce, request)
+            .await
+    }
+
+    /// Also reports whether any component failed in a way a later attempt
+    /// could fix.
+    async fn collect_session_report(
+        &self,
+        session: &mut BmcSession<'_>,
+        nonce: &NonceData,
+        request: &MeasurementRequest,
+    ) -> Result<(RedfishAttestationReport, bool), Box<dyn Error>> {
+        let components = self.discover_gpu_irot_components(session).await?;
         if components.is_empty() {
             return Err("no GPU IRoT ComponentIntegrity resources found".into());
         }
 
         let mut evidences = Vec::new();
         let mut component_errors = Vec::new();
+        let mut retryable = false;
         for component in components {
             match self
-                .collect_component(&mut session, &component, nonce, request)
+                .collect_component(session, &component, nonce, request)
                 .await
             {
                 Ok(evidence) => evidences.push(evidence),
-                Err(err) => component_errors.push(ComponentErrorData {
-                    component_id: Some(component.id),
-                    message: err.to_string(),
-                }),
+                Err(err) => {
+                    retryable |= is_retryable(err.as_ref());
+                    component_errors.push(ComponentErrorData {
+                        component_id: Some(component.id),
+                        message: err.to_string(),
+                    });
+                }
             }
         }
 
-        Ok(RedfishAttestationReport {
-            evidences,
-            errors: component_errors,
-        })
+        Ok((
+            RedfishAttestationReport {
+                evidences,
+                errors: component_errors,
+            },
+            retryable,
+        ))
     }
 
     async fn discover_gpu_irot_components(
@@ -382,7 +437,9 @@ impl RedfishAttestationSource {
         path: &str,
     ) -> Result<T, Box<dyn Error>> {
         let url = join_redfish_path(&session.base_url, path)?;
-        session.request_json(|| self.client.get(url.clone())).await
+        session
+            .request_json(Idempotency::Retry, || self.client.get(url.clone()))
+            .await
     }
 
     async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(
@@ -393,8 +450,34 @@ impl RedfishAttestationSource {
     ) -> Result<T, Box<dyn Error>> {
         let url = join_redfish_path(&session.base_url, path)?;
         session
-            .request_json(|| self.client.post(url.clone()).json(body))
+            .request_json(Idempotency::SendOnce, || {
+                self.client.post(url.clone()).json(body)
+            })
             .await
+    }
+}
+
+/// Whether a failed collection could succeed on a later attempt this cycle:
+/// the BMC rejected the credentials, which may since have been rotated, or a
+/// request still failed transiently after its retries.
+fn is_retryable(error: &(dyn Error + 'static)) -> bool {
+    match error.downcast_ref::<DispatchError<reqwest::Error>>() {
+        Some(DispatchError::CredentialsRejected) => true,
+        Some(DispatchError::Transport(error)) => classify_error(error) != FailureKind::Permanent,
+        _ => false,
+    }
+}
+
+/// Only a 401 rejects the credentials; a 403 forbids one resource. Timeouts,
+/// failed connections and overload responses are transient.
+fn classify_error(error: &reqwest::Error) -> FailureKind {
+    match error.status().map(|status| status.as_u16()) {
+        Some(401) => FailureKind::CredentialsRejected,
+        Some(429 | 502 | 503 | 504) => FailureKind::Transient,
+        None if error.is_timeout() || error.is_connect() || error.is_request() => {
+            FailureKind::Transient
+        }
+        Some(_) | None => FailureKind::Permanent,
     }
 }
 
@@ -804,9 +887,15 @@ mod tests {
     async fn auth_retry_is_bounded_and_credential_reload_errors_are_safe() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::AsyncWriteExt;
-        for (status, reload_fails, requests, reloads) in
-            [(401, false, 2, 1), (403, false, 1, 0), (401, true, 1, 1)]
-        {
+        // `reloaded` is the reloaded credentials, or `None` when reloading fails.
+        // Reloaded credentials equal to the rejected ones are not sent again,
+        // and a 401 stops inventory from sending the rejected credentials.
+        for (status, reloaded, requests, reloads) in [
+            (401, Some(("rotated", "new")), 2, 1),
+            (401, Some(("user", "old")), 1, 1),
+            (403, Some(("rotated", "new")), 1, 0),
+            (401, None, 1, 1),
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move {
@@ -830,11 +919,9 @@ mod tests {
             let count = AtomicUsize::new(0);
             let reload = |_: &crate::config::Target| {
                 count.fetch_add(1, Ordering::Relaxed);
-                if reload_fails {
-                    Err("private-credential-detail".into())
-                } else {
-                    Ok(("rotated".into(), "new".into()))
-                }
+                reloaded
+                    .map(|(username, password)| (username.into(), password.into()))
+                    .ok_or_else(|| "private-credential-detail".into())
             };
             let mut session = BmcSession {
                 target: crate::config::Target {
@@ -856,18 +943,284 @@ mod tests {
                 .build()
                 .unwrap();
             let error = session
-                .request_json::<serde_json::Value>(|| {
+                .request_json::<serde_json::Value>(Idempotency::Retry, || {
                     client.get(format!("http://{address}/redfish/v1"))
                 })
                 .await
                 .unwrap_err();
             assert!(!error.to_string().contains("private-credential-detail"));
             assert_eq!(count.load(Ordering::Relaxed), reloads);
+            let inventory = dispatcher
+                .inventory_gate("bmc-1")
+                .unwrap()
+                .execute_classified(
+                    &bmc_dispatch::BmcCredentials::new("user".into(), "old".into()),
+                    async { Ok::<_, Infallible>(()) },
+                    |_| FailureKind::Permanent,
+                )
+                .await;
+            assert_eq!(
+                matches!(
+                    inventory,
+                    Err(bmc_dispatch::DispatchError::CredentialsRejected)
+                ),
+                status == 401,
+                "{status}"
+            );
             tokio::time::timeout(Duration::from_secs(3), server)
                 .await
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    /// Answer every request with `status` and return the listening port.
+    async fn spawn_status_server(status: &'static str) -> u16 {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                read_request(&mut stream).await;
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn credentials_latched_by_inventory_are_reloaded_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        // `reloaded` is the password in the credentials file after inventory's 401.
+        for (reloaded, sent) in [("new", 1), ("old", 0)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                for _ in 0..sent {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let request = read_request(&mut socket).await;
+                    let authorization =
+                        base64::engine::general_purpose::STANDARD.encode("user:new");
+                    assert!(request.contains(&format!("Basic {authorization}")));
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+                }
+            });
+            let dispatcher = Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 1,
+                    bmc_max_in_flight: 1,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["bmc-1".into()],
+            )
+            .unwrap();
+            // Inventory's request with the old password was rejected.
+            let _ = dispatcher
+                .inventory_gate("bmc-1")
+                .unwrap()
+                .execute_classified(
+                    &bmc_dispatch::BmcCredentials::new("user".into(), "old".into()),
+                    async { Err::<(), _>(()) },
+                    |_| FailureKind::CredentialsRejected,
+                )
+                .await;
+            let reloads = AtomicUsize::new(0);
+            let reload = |_: &crate::config::Target| {
+                reloads.fetch_add(1, Ordering::Relaxed);
+                Ok(("user".into(), reloaded.into()))
+            };
+            let mut session = BmcSession {
+                target: crate::config::Target {
+                    name: "bmc-1".into(),
+                    bmc_mac: "00:11:22:33:44:55".into(),
+                    address: "192.0.2.1".into(),
+                    credentials_profile: None,
+                    username: "user".into(),
+                    password: "old".into(),
+                },
+                base_url: format!("http://{address}").parse().unwrap(),
+                gate: dispatcher.attestation_gate("bmc-1").unwrap(),
+                reload_credentials: &reload,
+                credentials_reloaded: false,
+            };
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let result = session
+                .request_json::<serde_json::Value>(Idempotency::Retry, || {
+                    client.get(format!("http://{address}/redfish/v1"))
+                })
+                .await;
+            assert_eq!(result.is_ok(), sent == 1, "{reloaded}");
+            assert_eq!(reloads.load(Ordering::Relaxed), 1, "{reloaded}");
+            tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_component_failures_make_the_target_retryable() {
+        use tokio::io::AsyncWriteExt;
+        for (status, retryable) in [(503, true), (404, false)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            // Discovery succeeds; the measurement POST, which is sent once, fails.
+            let server = tokio::spawn(async move {
+                for (status, body) in [
+                    (
+                        200,
+                        r#"{"Members":[{"@odata.id":"/redfish/v1/ComponentIntegrity/GPU_0_IRoT"}]}"#,
+                    ),
+                    (
+                        200,
+                        r##"{"Id":"GPU_0_IRoT","Actions":{"#ComponentIntegrity.SPDMGetSignedMeasurements":{"target":"/measurements"}}}"##,
+                    ),
+                    (status, "{}"),
+                ] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    read_request(&mut socket).await;
+                    socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            let dispatcher = Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 1,
+                    bmc_max_in_flight: 1,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["bmc-1".into()],
+            )
+            .unwrap();
+            let reload = |_: &crate::config::Target| Err("unused".into());
+            let mut session = BmcSession {
+                target: crate::config::Target {
+                    name: "bmc-1".into(),
+                    bmc_mac: "00:11:22:33:44:55".into(),
+                    address: "192.0.2.1".into(),
+                    credentials_profile: None,
+                    username: "user".into(),
+                    password: "password".into(),
+                },
+                base_url: format!("http://{address}").parse().unwrap(),
+                gate: dispatcher.attestation_gate("bmc-1").unwrap(),
+                reload_credentials: &reload,
+                credentials_reloaded: false,
+            };
+            let mut source = RedfishAttestationSource::new(
+                443,
+                false,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+                Duration::from_millis(1),
+            )
+            .unwrap();
+            source.client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let (report, actual) = source
+                .collect_session_report(
+                    &mut session,
+                    &NonceData {
+                        nonce: "nonce".into(),
+                        nonce_refresh_timestamp: None,
+                    },
+                    &MeasurementRequest {
+                        measurement_indices: vec![1],
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(report.errors.len(), 1, "{status}");
+            assert_eq!(actual, retryable, "{status}");
+            tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn only_credential_and_transient_failures_are_retryable() {
+        for (status, retryable) in [
+            ("401 Unauthorized", true),
+            ("403 Forbidden", false),
+            ("404 Not Found", false),
+        ] {
+            let port = spawn_status_server(status).await;
+            let dispatcher = Dispatcher::start(
+                DispatcherConfig {
+                    global_max_in_flight: 1,
+                    bmc_max_in_flight: 1,
+                    bmc_requests_per_second: 100,
+                    bmc_burst: 100,
+                    workflow_queue_capacity: 8,
+                },
+                ["bmc-1".to_string()],
+            )
+            .expect("dispatcher");
+            let mut source = RedfishAttestationSource::new(
+                443,
+                false,
+                Duration::from_secs(5),
+                Duration::from_secs(1),
+                Duration::from_millis(5),
+            )
+            .expect("source");
+            source.client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .expect("client");
+            // The Secret still holds the rejected credentials.
+            let reload = |target: &crate::config::Target| {
+                Ok((target.username.clone(), target.password.clone()))
+            };
+            let mut session = BmcSession {
+                target: crate::config::Target {
+                    name: "bmc-1".to_string(),
+                    bmc_mac: "00:11:22:33:44:55".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    credentials_profile: None,
+                    username: "user".to_string(),
+                    password: "secret".to_string(),
+                },
+                base_url: Url::parse(&format!("http://127.0.0.1:{port}")).expect("base URL"),
+                gate: dispatcher
+                    .attestation_gate("bmc-1")
+                    .expect("attestation gate"),
+                reload_credentials: &reload,
+                credentials_reloaded: false,
+            };
+
+            let error = source
+                .get_json::<serde_json::Value>(&mut session, "/redfish/v1/ComponentIntegrity")
+                .await
+                .expect_err("BMC refuses the request");
+            assert_eq!(is_retryable(error.as_ref()), retryable, "{status}");
+        }
+
+        let skipped: Box<dyn Error> =
+            Box::new(DispatchError::<reqwest::Error>::CredentialsRejected);
+        assert!(is_retryable(skipped.as_ref()), "skipped after a 401");
+        let no_components: Box<dyn Error> = "no GPU IRoT ComponentIntegrity resources found".into();
+        assert!(!is_retryable(no_components.as_ref()), "nothing to attest");
     }
 
     #[tokio::test]
