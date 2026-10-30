@@ -127,6 +127,16 @@ labels = { rack = "rack-12" }
 
 Unlike Helm, the TOML file accepts a MAC with mixed separators. The collector reports MACs as uppercase with colons and doesn't rewrite the file.
 
+An optional `[nico]` table controls NICo's BMC load when `render-nico-config` generates its configuration:
+
+```toml
+[nico]
+sensor_fetch_interval_seconds = 120
+bmc_request_concurrency = 2
+```
+
+The fields map to `nicoHardwareHealth.sensorFetchIntervalSeconds` and `nicoHardwareHealth.bmcRequestConcurrency` in Helm. Both accept positive integers up to `4294967295`. Omit either field to retain its bundled NICo default. These values affect NICo only; see [NICo BMC load](docs/configuration.md#nico-bmc-load) for their behavior. Regenerate the NICo file and restart NICo after changing them.
+
 ### CLI reference
 
 The executable is `bmc-collector`. Add `--help` to any command to list its options.

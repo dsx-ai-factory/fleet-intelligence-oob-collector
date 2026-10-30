@@ -2,7 +2,7 @@
 Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 */}}
-{{/* Keep generated TOML limited to validated inventory values. */}}
+{{/* Keep generated TOML limited to validated inventory and NICo values. */}}
 {{- define "fleet-intelligence-oob-collector.tomlLabels" -}}
 {{- $entries := list -}}
 {{- range $name, $value := . -}}
@@ -18,6 +18,11 @@ SPDX-License-Identifier: Apache-2.0
 
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
+{{ if or .Values.nicoHardwareHealth.sensorFetchIntervalSeconds .Values.nicoHardwareHealth.bmcRequestConcurrency }}
+[nico]
+{{ with .Values.nicoHardwareHealth.sensorFetchIntervalSeconds }}sensor_fetch_interval_seconds = {{ . | int64 }}
+{{ end }}{{ with .Values.nicoHardwareHealth.bmcRequestConcurrency }}bmc_request_concurrency = {{ . | int64 }}
+{{ end }}{{ end -}}
 {{ range .Values.inventory.targets }}
 [[targets]]
 kind = {{ default "unknown" .kind | toJson }}

@@ -307,6 +307,7 @@ async fn run_collection_cycle(
     let config::CollectorConfig {
         targets,
         credentials_file,
+        ..
     } = target_config;
     dispatcher.sync_endpoints(targets.iter().map(|target| target.mac.to_string()))?;
     // Each cycle reloads credentials, so give every BMC one fresh attempt.

@@ -68,6 +68,9 @@ bmcCollector:
 
 nicoHardwareHealth:
   enabled: true
+  # null retains NICo's defaults: 60 seconds and 4 concurrent operations per BMC.
+  sensorFetchIntervalSeconds: null
+  bmcRequestConcurrency: null
   image:
     repository: ghcr.io/dsx-ai-factory/nico-hardware-health
     # An empty tag uses the chart version.

@@ -173,7 +173,28 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 
 The gateway requires NICo.
 
-NICo's telemetry settings are fixed by the chart. NICo collects BMC logs from the Redfish event stream, so BMCs need EventService support for log collection; there is no polling fallback. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+NICo collects BMC logs from the Redfish event stream, so BMCs need EventService support for log collection; there is no polling fallback. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+
+### NICo BMC load
+
+You can tune NICo's sensor polling and per-BMC request concurrency to suit your BMCs. Both settings are optional; leave them unset or `null` to use the bundled NICo defaults.
+
+| Setting | NICo default | Description |
+| --- | --- | --- |
+| `nicoHardwareHealth.sensorFetchIntervalSeconds` | `60` | Interval between sensor fetch iterations, in seconds. |
+| `nicoHardwareHealth.bmcRequestConcurrency` | `4` | Maximum simultaneous Redfish operations per BMC across NICo collectors, including fan-out requests. |
+
+For example, poll sensors every two minutes with at most two concurrent NICo operations per BMC:
+
+```yaml
+nicoHardwareHealth:
+  sensorFetchIntervalSeconds: 120
+  bmcRequestConcurrency: 2
+```
+
+Set each override to a positive integer no greater than `4294967295`. The overrides apply to all NICo targets and are independent of the inventory and attestation limits below. A longer interval reduces collection frequency and delays detection of sensor changes; lower concurrency limits simultaneous operations without setting a request rate. Neither setting changes the BMC log streaming mode or OTLP export interval.
+
+Apply changes with `helm upgrade`; the generated configuration checksum restarts the workloads so NICo loads the new settings. Use BMC management usability and continued request progress to decide whether tuning is needed; additional latency under collection load alone does not require a lower polling frequency.
 
 ## Collection settings
 

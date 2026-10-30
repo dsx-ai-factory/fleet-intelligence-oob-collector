@@ -38,7 +38,9 @@ The gateway requires NICo. NICo's init container uses the collector image even w
 
 ## How it works
 
-The chart turns `inventory` into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
+The chart turns `inventory` and optional NICo load settings into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
+
+Set `nicoHardwareHealth.sensorFetchIntervalSeconds` and `nicoHardwareHealth.bmcRequestConcurrency` to tune BMC load. Leave either unset or `null` to retain its NICo default. See [NICo BMC load](../../../docs/configuration.md#nico-bmc-load) for defaults and examples.
 
 Every workload accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo image tags default to the chart version, and `imagePullSecrets` sets registry credentials.
 

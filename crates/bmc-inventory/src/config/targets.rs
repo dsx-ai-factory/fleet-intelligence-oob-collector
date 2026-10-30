@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use mac_address::MacAddress;
 use serde::Deserialize;
 
-use super::TargetKind;
+use super::{NicoCollectionConfig, TargetKind};
 
 const MAX_NICO_LABELS: usize = 32;
 const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
@@ -73,6 +73,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
 pub struct CollectorConfig {
     pub targets: Vec<Target>,
     pub credentials_file: PathBuf,
+    pub nico: NicoCollectionConfig,
 }
 
 #[derive(Clone)]
@@ -111,6 +112,8 @@ impl fmt::Debug for Target {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
+    #[serde(default)]
+    nico: NicoCollectionConfig,
     #[serde(default)]
     compute_zone: Option<String>,
     #[serde(default)]
@@ -184,6 +187,7 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
         return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
     }
 
+    config.nico.validate()?;
     validate_nico_labels("labels", &config.labels)?;
     let default_compute_zone = normalize_config_value("compute_zone", config.compute_zone)?;
     let default_node_group = normalize_config_value("node_group", config.node_group)?;
@@ -239,6 +243,7 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
     Ok(CollectorConfig {
         targets,
         credentials_file,
+        nico: config.nico,
     })
 }
 

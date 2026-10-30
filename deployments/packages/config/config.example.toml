@@ -3,6 +3,11 @@
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 
+# Optional NICo load controls; omit fields to retain NICo's defaults.
+# [nico]
+# sensor_fetch_interval_seconds = 120
+# bmc_request_concurrency = 2
+
 # Uncomment and replace this example before starting the services.
 # At least one real target and the shared JSON credentials file are required.
 # [[targets]]
