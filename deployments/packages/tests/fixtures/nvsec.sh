@@ -26,6 +26,12 @@ if [[ "$source" == *.deb ]]; then
     done < <(ar t "$source")
     gpg --batch --yes --armor --clearsign --output "$work/_gpgbuilder" "$work/manifest"
     ar q "$target" "$work/_gpgbuilder"
+elif [[ "$source" == *.rpm ]]; then
+    cp "$source" "$target"
+    if [[ ${SIGN_MODE:-} != missing ]]; then
+        rpmsign --addsign --define "_gpg_name $SIGN_TEST_FINGERPRINT" \
+            --define "_gpg_path $GNUPGHOME" --define '__gpg /usr/bin/gpg' "$target"
+    fi
 else
     gpg --batch --yes --armor --detach-sign --output "$target" "$source"
 fi

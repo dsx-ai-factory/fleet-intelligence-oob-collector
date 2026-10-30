@@ -1,16 +1,10 @@
 # Verify host-package releases
 
-Debian releases include signed `fleetint-oob` packages for AMD64 and ARM64,
-a signed checksum manifest, the public signing key, and a package verifier.
-The package contains the OOB collector, NICo hardware health, and the OTLP
-gateway. For installation instructions, see
-[host packaging](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).
+GitHub releases include signed DEB and RPM `fleetint-oob` packages for AMD64 and ARM64, a signed checksum manifest, the public signing key, and a package verifier. The package contains the OOB collector, NICo hardware health, and the OTLP gateway. For installation instructions, see [host packaging](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md).
 
 ## Verify a downloaded release
 
-Download the DEB, `fleet-intelligence.pub.asc`, `checksums.txt`,
-`checksums.txt.asc` and `verify-linux-package-signature.sh` from the same release.
-Run verification from the download directory using a fresh keyring:
+Download the DEB or RPM, `fleet-intelligence.pub.asc`, `checksums.txt`, `checksums.txt.asc` and `verify-linux-package-signature.sh` from the same release. Run verification from the download directory using a fresh keyring:
 
 ```bash
 (
@@ -27,6 +21,4 @@ Run verification from the download directory using a fresh keyring:
 )
 ```
 
-Replace `VERSION` and architecture with the downloaded package name. The signed
-SHA-256 manifest authenticates complete package bytes; the package verifier
-also checks the embedded builder signature and its complete payload inventory.
+Replace `VERSION` and architecture with the downloaded package name. For RPMs, use the `.rpm` filename and install your distribution's `rpm` tool before running the verifier. The signed SHA-256 manifest authenticates complete package bytes; the package verifier also checks embedded package signatures and payload digests. Older DEB-only releases remain verifiable with their original assets.

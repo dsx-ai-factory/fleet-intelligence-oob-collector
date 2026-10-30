@@ -344,7 +344,7 @@ jobs:
             core.setOutput('release-id', data.id);
 
   build-debian:
-    name: Build and test Debian package (${{ matrix.architecture }})
+    name: Build and test host packages (${{ matrix.architecture }})
     needs: reserve-debian-release
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -364,16 +364,28 @@ jobs:
       - name: Build and test release package
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: make debian-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+          PACKAGE_ARCH: ${{ matrix.architecture }}
+        run: |
+          make debian-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+          make rpm-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+          # One flat upload root preserves the layout expected by signing.
+          mkdir -p dist/release
+          for format in deb rpm; do
+            name="fleetint-oob_${RELEASE_TAG#v}_${PACKAGE_ARCH}.$format"
+            case "$format" in deb) source_dir=debian ;; rpm) source_dir=rpm ;; esac
+            test -s "dist/$source_dir/$name"
+            cp "dist/$source_dir/$name" dist/release/
+          done
+          test "$(find dist/release -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
       - uses: actions/upload-artifact@v4
         with:
           name: unsigned-debian-${{ matrix.architecture }}
-          path: dist/debian/*.deb
+          path: dist/release/*
           if-no-files-found: error
           retention-days: 7
 
   sign-debian:
-    name: Sign and verify Debian release
+    name: Sign and verify host packages
     needs: build-debian
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
@@ -395,8 +407,13 @@ jobs:
           ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
           ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
         run: |
-          for tool in nvsec gpg gpgv ar sha256sum md5sum sha1sum; do
+          for tool in nvsec gpg gpgv ar rpm sha256sum md5sum sha1sum; do
             command -v "$tool" >/dev/null || { echo "Required signing tool is unavailable: $tool" >&2; exit 1; }
+          done
+          for arch in amd64 arm64; do
+            for format in deb rpm; do
+              test -s "dist/fleetint-oob_${RELEASE_TAG#v}_${arch}.$format"
+            done
           done
           : "${NVSEC_SSA_CLIENT_ID:?Configure signing credentials}"
           : "${NVSEC_SSA_CLIENT_SECRET:?Configure signing credentials}"
@@ -419,6 +436,7 @@ jobs:
           name: signed-debian-release
           path: |
             dist/*.deb
+            dist/*.rpm
             dist/checksums.txt
             dist/checksums.txt.asc
             dist/fleet-intelligence.pub.asc
@@ -427,7 +445,7 @@ jobs:
           retention-days: 7
 
   publish-debian:
-    name: Publish verified Debian release
+    name: Publish verified host packages
     needs: [reserve-debian-release, sign-debian, publish-chart]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -441,6 +459,8 @@ jobs:
         with:
           name: signed-debian-release
           path: dist
+      - name: Install RPM verification tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
       - name: Verify downloaded signed artifacts
         run: scripts/verify-debian-release.sh dist
       - name: Upload verified assets to the draft without replacing existing assets

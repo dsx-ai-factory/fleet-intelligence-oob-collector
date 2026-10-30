@@ -94,11 +94,20 @@ socat -T 5 TCP4-LISTEN:18888,bind=127.0.0.1,reuseaddr,fork EXEC:/backend.sh > "$
 backend_pid=$!
 # Trust an ephemeral loopback certificate. The real gateway still verifies TLS;
 # the fixture server uses ordinary HTTPS without mutual TLS client certificates.
+if command -v update-ca-certificates >/dev/null 2>&1; then
+    certificate=/usr/local/share/ca-certificates/fleetint-test.crt
+else
+    certificate=/etc/pki/ca-trust/source/anchors/fleetint-test.crt
+fi
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=fleetint-package-test \
     -addext subjectAltName=IP:127.0.0.1 -addext basicConstraints=critical,CA:TRUE \
-    -keyout "$work/backend-test.key" -out /usr/local/share/ca-certificates/fleetint-test.crt > "$work/tls.log" 2>&1
-update-ca-certificates >> "$work/tls.log" 2>&1
-socat -T 5 OPENSSL-LISTEN:18889,bind=127.0.0.1,reuseaddr,fork,cert=/usr/local/share/ca-certificates/fleetint-test.crt,key="$work/backend-test.key",verify=0 EXEC:/backend.sh >> "$work/backend.log" 2>&1 &
+    -keyout "$work/backend-test.key" -out "$certificate" > "$work/tls.log" 2>&1
+if command -v update-ca-certificates >/dev/null 2>&1; then
+    update-ca-certificates >> "$work/tls.log" 2>&1
+else
+    update-ca-trust >> "$work/tls.log" 2>&1
+fi
+socat -T 5 "OPENSSL-LISTEN:18889,bind=127.0.0.1,reuseaddr,fork,cert=$certificate,key=$work/backend-test.key,verify=0" EXEC:/backend.sh >> "$work/backend.log" 2>&1 &
 tls_pid=$!
 wait_for "$tls_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18889' 2>/dev/null
 wait_for "$backend_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18888' 2>/dev/null

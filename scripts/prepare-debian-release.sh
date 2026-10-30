@@ -14,9 +14,18 @@ for arch in amd64 arm64; do
     echo "Missing release package for $arch" >&2; exit 1;
   }
 done
+rpms=("$dist_dir"/*.rpm)
+if (( ${#rpms[@]} )); then
+  [[ ${#rpms[@]} == 2 ]] || { echo "Expected exactly two RPM architecture packages" >&2; exit 1; }
+  for arch in amd64 arm64; do
+    [[ -s "$dist_dir/fleetint-oob_${version}_${arch}.rpm" ]] || {
+      echo "Missing release RPM for $arch" >&2; exit 1;
+    }
+  done
+fi
 key=deployments/packages/keys/fleet-intelligence.pub.asc
 # Start with the unsigned hashes; refresh only the signed package entries later.
-(cd "$dist_dir" && sha256sum fleetint-oob_*.deb > checksums.txt)
+(cd "$dist_dir" && sha256sum fleetint-oob_*.deb "${rpms[@]##*/}" > checksums.txt)
 scripts/sign-linux-packages.sh "$dist_dir" "$key"
 install -m 0644 "$key" "$dist_dir/fleet-intelligence.pub.asc"
 install -m 0755 scripts/verify-linux-package-signature.sh "$dist_dir/verify-linux-package-signature.sh"

@@ -1,0 +1,11 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM rockylinux:9
+RUN dnf install -y ca-certificates curl-minimal openssl systemd socat util-linux findutils diffutils && dnf clean all
+COPY NOTICE /expected-NOTICE
+COPY deployments/packages/tests/rpm.sh /rpm.sh
+COPY deployments/packages/tests/startup.sh /startup.sh
+COPY deployments/packages/tests/runtime.sh /runtime.sh
+COPY deployments/packages/tests/fixtures/backend.sh /backend.sh
+RUN chmod 755 /backend.sh
+CMD ["/bin/bash", "/rpm.sh"]

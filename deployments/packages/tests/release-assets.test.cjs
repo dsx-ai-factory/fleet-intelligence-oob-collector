@@ -107,3 +107,29 @@ for (const problem of ['nonempty', 'digest', 'delete']) {
     } finally { f.cleanup(); }
   });
 }
+
+
+test('uploads RPMs alongside DEBs and retains immutable retries', async () => {
+  const f = fixture();
+  try {
+    for (const arch of ['amd64', 'arm64']) {
+      fs.writeFileSync(path.join(f.directory, `fleetint-oob_1.2.3_${arch}.rpm`), arch);
+    }
+    await upload(f.args);
+    assert.equal(f.state.uploads, 8);
+    await upload(f.args);
+    assert.equal(f.state.uploads, 8);
+    fs.appendFileSync(path.join(f.directory, 'fleetint-oob_1.2.3_amd64.rpm'), 'changed');
+    await assert.rejects(upload(f.args));
+    assert.equal(f.state.uploads, 8);
+  } finally { f.cleanup(); }
+});
+
+test('rejects an incomplete RPM set before uploading any assets', async () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.directory, 'fleetint-oob_1.2.3_amd64.rpm'), 'fixture');
+    await assert.rejects(upload(f.args));
+    assert.equal(f.state.uploads, 0);
+  } finally { f.cleanup(); }
+});
