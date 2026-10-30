@@ -44,10 +44,10 @@ software that may be contained in this product.
 
 FALLBACK_DIR = os.path.join(ROOT, "scripts", "notice-fallbacks")
 NV_REDFISH = (
-    "nv-redfish-0.18.1.LICENSE",
-    "https://github.com/dsx-ai-factory/nv-redfish/blob/v0.18.1/LICENSE",
+    "nv-redfish-0.22.0.LICENSE",
+    "https://github.com/dsx-ai-factory/nv-redfish/blob/v0.22.0/LICENSE",
     # The upstream LICENSE appendix says "Copyright 2020", which predates the
-    # project. The source file headers at v0.18.1 carry 2025 and 2026.
+    # project. The source file headers at v0.22.0 carry 2025 and 2026.
     "Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
 )
 TAGGED_TYPES = (
@@ -62,7 +62,7 @@ TAGGED_TYPES = (
 # copyright line is for upstreams whose LICENSE does not state it.
 FALLBACKS = {
     **{
-        (name, "0.18.1"): NV_REDFISH
+        (name, "0.22.0"): NV_REDFISH
         for name in (
             "nv-redfish",
             "nv-redfish-bmc-http",
@@ -70,6 +70,7 @@ FALLBACKS = {
             "nv-redfish-core",
             "nv-redfish-csdl-compiler",
             "nv-redfish-dispatcher",
+            "nv-redfish-quirks",
             "nv-redfish-schema",
         )
     },

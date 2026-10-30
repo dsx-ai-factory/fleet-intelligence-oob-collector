@@ -30,11 +30,12 @@ use http::HeaderMap;
 /// Credentials whose rejection [`RequestGate::execute_classified`] records.
 pub use nv_redfish::bmc_http::BmcCredentials;
 use nv_redfish::bmc_http::{
-    CacheableError, HttpClient, MultipartUpdateRequest, RejectedUriReferenceError, RequestError,
+    CacheableError, HttpClient, HttpPushUriUpdateRequest, MultipartUpdateRequest,
+    RejectedUriReferenceError, RequestError,
 };
 use nv_redfish::core::{
-    BmcError, BmcErrorClass, BoxTryStream, ModificationResponse, ODataETag, SessionCreateResponse,
-    UploadReader,
+    BmcError, BmcErrorClass, BoxTryStream, DecodeError, ModificationResponse, ODataETag, Repair,
+    SessionCreateResponse, UploadReader,
 };
 use nv_redfish_dispatcher::{
     BoundedConcurrency, ClockConfig, Completion, CostUnits, FixedCost, FutureWork, Readiness,
@@ -648,6 +649,20 @@ impl<E: StdError + 'static> StdError for DispatchError<E> {
 }
 
 impl<E: BmcError + 'static> BmcError for DispatchError<E> {
+    fn response_body(&self) -> Option<&str> {
+        match self {
+            Self::Transport(error) => error.response_body(),
+            _ => None,
+        }
+    }
+
+    fn into_decode_error(self) -> Result<DecodeError, Self> {
+        match self {
+            Self::Transport(error) => error.into_decode_error().map_err(Self::Transport),
+            other => Err(other),
+        }
+    }
+
     fn error_class(&self) -> BmcErrorClass {
         match self {
             Self::Transport(error) => error.error_class(),
@@ -738,13 +753,19 @@ where
         credentials: &BmcCredentials,
         etag: Option<ODataETag>,
         custom_headers: &HeaderMap,
+        repair: &impl Repair,
     ) -> Result<T, Self::Error>
     where
         T: DeserializeOwned + Send + Sync,
     {
         self.dispatch_read(credentials, || {
-            self.inner
-                .get(url.clone(), credentials, etag.clone(), custom_headers)
+            self.inner.get(
+                url.clone(),
+                credentials,
+                etag.clone(),
+                custom_headers,
+                repair,
+            )
         })
         .await
     }
@@ -812,6 +833,25 @@ where
             Some(credentials),
             self.inner
                 .post_multipart_update(url, request, credentials, custom_headers),
+        )
+        .await
+    }
+
+    async fn post_http_push_uri_update<U, T>(
+        &self,
+        url: Url,
+        request: HttpPushUriUpdateRequest<U>,
+        credentials: &BmcCredentials,
+        custom_headers: &HeaderMap,
+    ) -> Result<ModificationResponse<T>, Self::Error>
+    where
+        U: UploadReader,
+        T: DeserializeOwned + Send + Sync,
+    {
+        self.dispatch(
+            Some(credentials),
+            self.inner
+                .post_http_push_uri_update(url, request, credentials, custom_headers),
         )
         .await
     }
