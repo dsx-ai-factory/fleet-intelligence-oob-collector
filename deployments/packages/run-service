@@ -1,0 +1,26 @@
+#!/bin/sh
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+# Preserve existing EnvironmentFile tokens while supporting a protected file.
+if [ -n "${FLEETINT_AGENT_TOKEN_FILE:-}" ]; then
+    if ! FLEETINT_AGENT_TOKEN=$(cat -- "$FLEETINT_AGENT_TOKEN_FILE"); then
+        echo 'Could not read FLEETINT_AGENT_TOKEN_FILE' >&2
+        exit 2
+    fi
+    export FLEETINT_AGENT_TOKEN
+fi
+if [ -z "${FLEETINT_AGENT_TOKEN:-}" ]; then
+    echo 'Configure FLEETINT_AGENT_TOKEN_FILE or FLEETINT_AGENT_TOKEN' >&2
+    exit 2
+fi
+case "${1:-}" in
+    collector)
+        exec /usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml \
+            --interval-seconds "${FLEETINT_INTERVAL_SECONDS:-86400}"
+        ;;
+    gateway)
+        exec /usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
+        ;;
+    *) echo 'Unknown host service' >&2; exit 2 ;;
+esac

@@ -2,9 +2,21 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 set -eu
-if [ -f /etc/fleetint-oob/service.conf ]; then
-    chmod 0600 /etc/fleetint-oob/service.conf
+systemd-sysusers /usr/lib/sysusers.d/fleetint-oob.conf
+if [ "$(id -u fleetint-oob)" -eq 0 ] || [ "$(id -g fleetint-oob)" -eq 0 ] || [ "$(id -gn fleetint-oob)" != fleetint-oob ]; then
+    echo 'fleetint-oob must be a non-root account with its own primary group' >&2; exit 1;
 fi
+systemd-tmpfiles --create /usr/lib/fleetint-oob/permissions.conf
 if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload >/dev/null || true
+    systemctl daemon-reload >/dev/null || echo '[WARNING] Could not reload systemd units' >&2
+    if [ "${1:-1}" -gt 1 ]; then
+        for unit in fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service; do
+            if systemctl is-active --quiet "$unit"; then
+                systemctl try-restart "$unit" || echo "[WARNING] Could not restart $unit after upgrade" >&2
+            else
+                status=$?
+                case "$status" in 3|4) ;; *) echo "[WARNING] Could not query state of $unit" >&2 ;; esac
+            fi
+        done
+    fi
 fi

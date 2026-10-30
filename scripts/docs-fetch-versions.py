@@ -78,12 +78,13 @@ PAGE_ORDER = [
     "contributing.md",
 ]
 
-# Root-level files mirrored into fern/docs.yml's HEAD navigation as pages
+# Repository files outside docs/ mirrored into HEAD navigation as pages
 # (Overview <- README.md, Contributing <- CONTRIBUTING.md). Mapped to the
 # staged filename so slugs match the HEAD nav (slug = filename stem).
 ROOT_PAGES: list[tuple[str, str]] = [
     ("README.md", "overview.md"),
     ("CONTRIBUTING.md", "contributing.md"),
+    ("deployments/packages/README.md", "host-package.md"),
 ]
 
 

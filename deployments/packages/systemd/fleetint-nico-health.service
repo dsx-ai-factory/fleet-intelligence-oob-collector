@@ -7,12 +7,28 @@ After=network-online.target fleetint-otel-gateway.service
 PartOf=fleetint-oob.target
 
 [Service]
+User=fleetint-oob
+Group=fleetint-oob
+EnvironmentFile=/etc/fleetint-oob/service.conf
 RuntimeDirectory=fleetint-nico-health
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/bmc-collector render-nico-config --config /etc/fleetint-oob/config.toml --output /run/fleetint-nico-health/config.toml --otlp-endpoint http://127.0.0.1:4317 --metrics-endpoint 127.0.0.1:9009
-ExecStart=/usr/lib/fleetint-oob/nico-hardware-health /run/fleetint-nico-health/config.toml
+ExecStart=/usr/lib/fleetint-oob/run-nico
 Restart=on-failure
 RestartSec=10s
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

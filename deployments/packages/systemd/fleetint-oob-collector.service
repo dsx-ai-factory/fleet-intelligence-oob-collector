@@ -7,12 +7,28 @@ After=network-online.target
 PartOf=fleetint-oob.target
 
 [Service]
+User=fleetint-oob
+Group=fleetint-oob
 EnvironmentFile=/etc/fleetint-oob/service.conf
-ExecStart=/usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml --interval-seconds ${FLEETINT_INTERVAL_SECONDS}
+ExecStart=/usr/lib/fleetint-oob/run-service collector
 RestartPreventExitStatus=2
 Restart=on-failure
 RestartSec=10s
-TimeoutStopSec=300s
+TimeoutStopSec=300
+KillSignal=SIGINT
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

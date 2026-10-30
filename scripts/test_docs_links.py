@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -22,6 +24,29 @@ class PublicationLinksTest(unittest.TestCase):
             self.assertTrue(links.check_page(
                 "[JSON](../credentials.example.json)", "docs/credentials.md", pages, root
             ))
+
+    def test_host_package_is_in_versioned_docs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs/configuration.md").write_text("# Configuration")
+            package_dir = root / "deployments/packages"
+            package_dir.mkdir(parents=True)
+            content = f"[Configuration]({links.REPO_URL}/blob/main/docs/configuration.md)"
+            (package_dir / "README.md").write_text(content)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run([
+                "git", "-C", str(root), "-c", "user.name=Docs Tests",
+                "-c", "user.email=tests@example.test", "commit", "-qm", "fixture",
+            ], check=True)
+            stager = links.load_stager()
+            versions = root / "versions"
+            with patch.object(stager, "REPO_ROOT", root), patch.object(stager, "VERSIONS_DIR", versions):
+                files = stager.fetch_version("test", "HEAD")
+            self.assertIn("host-package.md", files)
+            staged = (versions / "test-content/host-package.md").read_text()
+            self.assertIn("/blob/HEAD/docs/configuration.md", staged)
 
     def test_asset_url_pins_to_release(self):
         with tempfile.TemporaryDirectory() as directory:

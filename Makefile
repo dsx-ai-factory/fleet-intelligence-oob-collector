@@ -20,14 +20,15 @@ NFPM ?= nfpm
 CARGO ?= cargo
 RUSTUP ?= rustup
 MUSL_CC ?= musl-gcc
+STRIP ?= strip
 RUST_TARGET = $(if $(filter amd64,$(ARCH)),x86_64-unknown-linux-musl,$(if $(filter arm64,$(ARCH)),aarch64-unknown-linux-musl,unsupported))
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = $(MUSL_CC)
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = $(MUSL_CC)
+# Keep Rust's self-contained musl linker defaults; musl-gcc can add an ELF
+# interpreter to static PIE executables on amd64. C dependencies still need musl.
 export CC_x86_64_unknown_linux_musl = $(MUSL_CC)
 export CC_aarch64_unknown_linux_musl = $(MUSL_CC)
 GO ?= go
 OCB_VERSION ?= v0.156.0
-NICO_REF := $(shell sed -n 's/^  NICO_SOURCE_REF: //p' .github/workflows/release.yml)
+NICO_REF ?= $(shell sed -n 's/^  NICO_SOURCE_REF: //p' .github/workflows/release.yml)
 AGENT_REF ?= 6eace17c3c19adf1524ba71c9cbd0450266a61f1
 PACKAGE_SOURCEDIR ?= dist/package-sources
 NICO_SOURCE ?= $(PACKAGE_SOURCEDIR)/infra-controller-$(NICO_REF)
@@ -62,6 +63,7 @@ package-static-check:
 	done
 
 package-native-check:
+	@test -n "$(NICO_REF)" -a -n "$(AGENT_REF)" || { echo 'Pinned NICo and agent revisions are required' >&2; exit 1; }
 	@test "$$(uname -s)" = Linux || { echo 'Host packages must be built on Linux' >&2; exit 1; }
 	@test "$(ARCH)" = "$$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')" || { echo 'Build natively for ARCH=$(ARCH); cross-compilation is not configured' >&2; exit 1; }
 
@@ -70,6 +72,8 @@ package-collector: package-native-check
 	mkdir -p "$(INPUTDIR)"
 	FLEETINT_BUILD_VERSION="$(VERSION)" $(CARGO) build --release --locked --target "$(RUST_TARGET)" --bin bmc-collector
 	install -m 0755 "target/$(RUST_TARGET)/release/bmc-collector" "$(INPUTDIR)/bmc-collector"
+	$(STRIP) "$(INPUTDIR)/bmc-collector"
+	sh deployments/packages/collect-licenses fleet-intelligence-oob "$(abspath $(INPUTDIR))/collector-dependencies"
 
 $(NICO_SOURCE)/Cargo.toml:
 	mkdir -p "$(dir $(NICO_SOURCE))"
@@ -87,6 +91,8 @@ package-nico: package-native-check $(NICO_SOURCE)/Cargo.toml
 		CARGO_TARGET_DIR="$(abspath $(PACKAGE_BUILDDIR))/nico" \
 		$(CARGO) build --release --locked --target "$(RUST_TARGET)" -p carbide-health --bin forge-hw-health
 	install -m 0755 "$(PACKAGE_BUILDDIR)/nico/$(RUST_TARGET)/release/forge-hw-health" "$(INPUTDIR)/nico-hardware-health"
+	$(STRIP) "$(INPUTDIR)/nico-hardware-health"
+	cd "$(NICO_SOURCE)" && sh "$(abspath deployments/packages/collect-licenses)" carbide-health "$(abspath $(INPUTDIR))/nico-dependencies"
 	cat "$(NICO_SOURCE)/LICENSE" "$(NICO_SOURCE)/THIRD-PARTY-LICENSES" > "$(INPUTDIR)/nico-NOTICES"
 
 $(AGENT_SOURCE)/otelcol/otelcol-builder.yaml:
@@ -102,7 +108,13 @@ package-gateway: package-native-check $(AGENT_SOURCE)/otelcol/otelcol-builder.ya
 		$(GO) run go.opentelemetry.io/collector/cmd/builder@$(OCB_VERSION) \
 		--config=otelcol-builder.yaml --output-path="$(abspath $(PACKAGE_BUILDDIR))/gateway"
 	install -m 0755 "$(PACKAGE_BUILDDIR)/gateway/fleetint-otelcol" "$(INPUTDIR)/otel-gateway"
+	$(STRIP) "$(INPUTDIR)/otel-gateway"
 	cat "$(AGENT_SOURCE)/LICENSE" "$(AGENT_SOURCE)/NOTICE" > "$(INPUTDIR)/gateway-NOTICES"
+
+.PHONY: packages-test-linking
+packages-test-linking: package-native-check
+	$(RUSTUP) target add "$(RUST_TARGET)"
+	sh deployments/packages/tests/linking.sh "$(RUST_TARGET)" "$(CARGO)"
 
 packages-test-build:
 	sh deployments/packages/tests/build.sh
@@ -121,8 +133,8 @@ packages-check-deb:
 		for config in /etc/fleetint-oob/config.toml /etc/fleetint-oob/service.conf /etc/fleetint-oob/gateway.yaml; do \
 			dpkg-deb --ctrl-tarfile "$$package" | tar --wildcards -xOf - '*conffiles' | grep -Fx "$$config"; \
 		done; \
-		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
-			echo 'Credential file or account definition found in package' >&2; exit 1; \
+		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)(agent-token|username|password)$$'; then \
+			echo 'Credential file found in package' >&2; exit 1; \
 		fi; \
 	done
 	@set -e; for script in deployments/packages/scripts/* deployments/packages/scripts/*/*; do \
@@ -134,8 +146,8 @@ packages-check-rpm:
 	@set -e; for package in "$(OUTPUTDIR)"/fleetint-oob-*.rpm; do \
 		test -f "$$package" || continue; \
 		rpm --checksig --nosignature "$$package"; \
-		if rpm -qpl "$$package" | grep -E '(^|/)(agent-token|username|password)$$|/sysusers[.]d/'; then \
-			echo 'Credential file or account definition found in package' >&2; exit 1; \
+		if rpm -qpl "$$package" | grep -E '(^|/)(agent-token|username|password)$$'; then \
+			echo 'Credential file found in package' >&2; exit 1; \
 		fi; \
 	done
 
@@ -176,3 +188,23 @@ coverage-html:
 		exit 1; \
 	}
 	cargo llvm-cov --workspace --html --open
+
+# Reproducible Linux environment for the same native make/nFPM build path.
+.PHONY: debian-package debian-test package-snapshot
+PACKAGE_VERSION ?=
+PACKAGE_OUTPUT ?= dist/debian
+SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD)
+debian-package:
+	docker build --file deployments/packages/Dockerfile --target export \
+		--build-arg NICO_SOURCE_REF="$(NICO_REF)" \
+		--build-arg NFPM_VERSION="$$(cat deployments/packages/nfpm.version)" \
+		--build-arg PACKAGE_VERSION="$(PACKAGE_VERSION)" \
+		--build-arg SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" \
+		--output type=local,dest=$(PACKAGE_OUTPUT) .
+
+debian-test: debian-package
+	docker build --file deployments/packages/tests/Dockerfile --tag fleetint-oob-debian-test .
+	docker run --rm --mount "type=bind,src=$(abspath $(PACKAGE_OUTPUT)),dst=/packages,readonly" fleetint-oob-debian-test
+
+package-snapshot:
+	$(MAKE) debian-package PACKAGE_OUTPUT=dist/snapshot PACKAGE_VERSION="$$(cargo pkgid -p fleet-intelligence-oob | sed 's/.*[#@]//')~snapshot.$$(git rev-parse --short=12 HEAD)"
