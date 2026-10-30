@@ -1,0 +1,18 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+.git
+.github
+.claude
+.codex
+.agents
+.aws
+.DS_Store
+target
+dist
+redfish-raw*
+*.log
+*.tmp
+.config
+.env
+charts
+dev

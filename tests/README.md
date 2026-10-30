@@ -19,3 +19,7 @@ Where to look:
 | Attestation uploads and response matching | `crates/bmc-attestation/src/sink/backend_tests.rs` |
 | BMC credential reload and retry | Attestation source unit tests in `crates/bmc-attestation/src/source/` |
 | Backend URL validation, endpoint paths, enrollment, HTTP errors | `crates/backend-client/src/lib.rs` |
+
+Run `make debian-test` for a real three-component Debian package installation,
+non-root daemon startup, authenticated telemetry export to loopback fixtures,
+and upgrade/removal coverage. These checks use shell scripts in Docker.

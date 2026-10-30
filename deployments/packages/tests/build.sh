@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 
+sh deployments/packages/tests/startup.sh
+
 test_root=$(mktemp -d)
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 mkdir -p "$test_root/bin" "$test_root/nico" "$test_root/agent/otelcol"
@@ -25,6 +27,11 @@ expect_failure make --no-print-directory packages-check-deb OUTPUTDIR="$test_roo
 grep -q 'No DEB packages' "$test_root/failure.log"
 expect_failure make --no-print-directory packages-check-rpm OUTPUTDIR="$test_root/empty"
 grep -q 'No RPM packages' "$test_root/failure.log"
+
+expect_failure make --no-print-directory package-native-check NICO_REF=
+grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
+expect_failure make --no-print-directory package-native-check AGENT_REF=
+grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
 
 # Real local Git repositories, with mocked compilers: no network or actual builds.
 printf '[workspace]\n' > "$test_root/nico/Cargo.toml"
@@ -51,6 +58,10 @@ export GIT_CONFIG_VALUE_1=https://github.com/dsx-ai-factory/fleet-intelligence-a
 cat > "$test_root/bin/cargo" <<'EOF'
 #!/bin/sh
 set -eu
+if [ "$1" = tree ]; then
+    echo 'fixture v0.1.0: Apache-2.0'
+    exit 0
+fi
 while [ "$1" != --target ]; do shift; done
 target=$2
 mkdir -p "$CARGO_TARGET_DIR/$target/release"
@@ -67,6 +78,7 @@ git rev-parse HEAD > "$output/fleetint-otelcol"
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$test_root/bin/rustup"
 cp "$test_root/bin/rustup" "$test_root/bin/protoc"
+cp "$test_root/bin/rustup" "$test_root/bin/strip"
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 
@@ -100,12 +112,15 @@ grep -q 'aarch64-unknown-linux-musl' "$test_root/arm64.log"
 # Never ship an ELF interpreter or a shared-library dependency, including OpenSSL.
 cat > "$test_root/bin/readelf" <<'EOF'
 #!/bin/sh
-if [ "${TEST_DYNAMIC:-0}" = 1 ]; then
-    echo ' 0x0000000000000001 (NEEDED) Shared library: [libssl.so.3]'
-fi
+case "${TEST_DYNAMIC:-0}" in
+    needed) echo ' 0x0000000000000001 (NEEDED) Shared library: [libssl.so.3]' ;;
+    interpreter) echo ' INTERP 0x0000000000000238' ;;
+esac
 EOF
 chmod +x "$test_root/bin/readelf"
 make --no-print-directory package-static-check INPUTDIR="$test_root/input"
-expect_failure env TEST_DYNAMIC=1 make --no-print-directory package-static-check INPUTDIR="$test_root/input"
-grep -q 'dynamically linked; refusing' "$test_root/failure.log"
+for dependency in needed interpreter; do
+    expect_failure env TEST_DYNAMIC="$dependency" make --no-print-directory package-static-check INPUTDIR="$test_root/input"
+    grep -q 'dynamically linked; refusing' "$test_root/failure.log"
+done
 echo 'Package build regression checks passed.'
