@@ -21,7 +21,7 @@ data:
     [credentials]
     file = "/run/secrets/bmc/credentials.json"
 
-    [nico]
+    [nico_health]
     sensor_fetch_interval_seconds = 120
     bmc_request_concurrency = 2
 

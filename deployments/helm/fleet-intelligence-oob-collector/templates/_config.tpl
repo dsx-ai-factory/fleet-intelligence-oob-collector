@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 {{ if or .Values.nicoHardwareHealth.sensorFetchIntervalSeconds .Values.nicoHardwareHealth.bmcRequestConcurrency }}
-[nico]
+[nico_health]
 {{ with .Values.nicoHardwareHealth.sensorFetchIntervalSeconds }}sensor_fetch_interval_seconds = {{ . | int64 }}
 {{ end }}{{ with .Values.nicoHardwareHealth.bmcRequestConcurrency }}bmc_request_concurrency = {{ . | int64 }}
 {{ end }}{{ end -}}

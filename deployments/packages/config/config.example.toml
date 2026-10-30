@@ -4,7 +4,7 @@
 file = "/etc/fleetint-oob/credentials/credentials.json"
 
 # Optional NICo load controls; omit fields to retain NICo's defaults.
-# [nico]
+# [nico_health]
 # sensor_fetch_interval_seconds = 120
 # bmc_request_concurrency = 2
 

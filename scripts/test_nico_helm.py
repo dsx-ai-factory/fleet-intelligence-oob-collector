@@ -43,12 +43,12 @@ class NicoHelmTests(unittest.TestCase):
                     expected["sensor_fetch_interval_seconds"] = interval
                 if concurrency is not None:
                     expected["bmc_request_concurrency"] = concurrency
-                self.assertEqual(config.get("nico", {}), expected)
+                self.assertEqual(config.get("nico_health", {}), expected)
                 self.assertEqual(len(config["targets"]), 3)
                 self.assertEqual(config["targets"][0]["credentials_profile"], "bmc")
                 self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
                 if not expected:
-                    self.assertNotIn("nico", config)
+                    self.assertNotIn("nico_health", config)
 
     def test_invalid_settings_fail_schema_validation(self):
         for key in ["sensorFetchIntervalSeconds", "bmcRequestConcurrency"]:

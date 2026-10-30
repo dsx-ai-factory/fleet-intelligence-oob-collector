@@ -220,6 +220,10 @@ Collector and NICo image tags default to the chart version. If you pull images t
 
 With each inventory upload, the collector reports its version and the settings it is running with, such as the collection interval, request limits, and which telemetry components are enabled. The report never includes secrets, credential references, or URLs. It describes configuration, not whether those components are healthy.
 
+The report's `collector.config.nicoHealth` includes explicitly configured `sensorFetchIntervalSeconds` and `bmcRequestConcurrency` from the shared `[nico_health]` settings. An omitted override stays omitted in both the generated NICo file and the report, leaving the default owned by the bundled NICo version. The collector refreshes these reported overrides when it reloads configuration for a collection cycle. This reports configured intent; it does not confirm that a separately running NICo process has loaded the changes.
+
+Component enablement is reported only when explicitly supplied by deployment metadata. Helm supplies this metadata, and native packages include `FLEETINT_NICO_ENABLED`, `FLEETINT_NICO_TELEMETRY_DESTINATION`, and `FLEETINT_OTEL_GATEWAY_ENABLED` in `service.conf`. A manually started collector without this metadata omits the corresponding component reports instead of assuming those services are running.
+
 ## Proxy and TLS
 
 To send traffic through an HTTP proxy, enable `proxy` and set the proxy URLs. They must be reachable from the cluster and can't contain credentials.

@@ -101,6 +101,7 @@ impl Runtime {
                 format!("http://127.0.0.1:{backend_port}"),
             )
             .env("FLEETINT_AGENT_TOKEN", "example-token")
+            .env("FLEETINT_NICO_ENABLED", "true")
             .env("NO_PROXY", "*")
             .env("NO_COLOR", "1")
             .env("RUST_LOG", "info")
@@ -145,6 +146,45 @@ impl Drop for Runtime {
         let _ = std::fs::remove_file(&self.config);
         let _ = std::fs::remove_file(&self.credentials);
     }
+}
+
+#[tokio::test]
+async fn inventory_reports_nico_overrides_from_each_configuration_snapshot() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime =
+        Runtime::start_with_interval(backend.local_addr().unwrap().port(), bmc_port, 1);
+    let original = std::fs::read_to_string(&runtime.config).unwrap();
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    for interval in [None, Some(120), None] {
+        let (mut inventory, request) =
+            accept_request_within(&backend, Duration::from_secs(10)).await;
+        assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+        let body = request.split_once("\r\n\r\n").unwrap().1;
+        assert!(body.contains(r#""nicoHealth":{"enabled":true"#));
+        if let Some(interval) = interval {
+            assert!(body.contains(&format!(r#""sensorFetchIntervalSeconds":{interval}"#)));
+            assert!(body.contains(r#""bmcRequestConcurrency":2"#));
+        } else {
+            assert!(!body.contains("sensorFetchIntervalSeconds"));
+            assert!(!body.contains("bmcRequestConcurrency"));
+        }
+        let next = if interval.is_none() {
+            format!(
+                "[nico_health]\nsensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2\n{original}"
+            )
+        } else {
+            original.clone()
+        };
+        std::fs::write(&runtime.config, next).unwrap();
+        reply(&mut inventory, r#"{"results":[{"status":"OK"}]}"#).await;
+        complete_attestation(&backend, "02:00:00:00:00:01", "OK").await;
+    }
+    runtime.signal("-TERM").await;
+    runtime.expect_clean_exit().await;
 }
 
 async fn accept_request(listener: &TcpListener) -> (TcpStream, String) {

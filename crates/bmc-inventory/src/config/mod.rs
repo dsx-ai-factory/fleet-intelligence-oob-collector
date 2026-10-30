@@ -15,8 +15,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod nico;
+mod services;
 mod targets;
 
 pub use crate::models::TargetKind;
-pub use nico::{NicoCollectionConfig, NicoConfigOptions, render_nico_config};
+pub use nico::{NicoConfigOptions, render_nico_config};
+pub use services::NicoHealthSettings;
 pub use targets::{CollectorConfig, Target, load_config, load_target_credentials, load_targets};

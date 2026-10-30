@@ -19,28 +19,9 @@ use std::error::Error;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::CollectorConfig;
-
-/// Optional NICo load controls. Unset values retain the bundled NICo defaults.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct NicoCollectionConfig {
-    pub sensor_fetch_interval_seconds: Option<NonZeroU32>,
-    pub bmc_request_concurrency: Option<NonZeroU32>,
-}
-
-impl NicoCollectionConfig {
-    pub(super) fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if let Some(concurrency) = self.bmc_request_concurrency
-            && u64::from(concurrency.get()) > tokio::sync::Semaphore::MAX_PERMITS as u64
-        {
-            return Err("nico.bmc_request_concurrency exceeds NICo's semaphore limit".into());
-        }
-        Ok(())
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct NicoConfigOptions {
@@ -63,7 +44,7 @@ pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
 ) -> Result<String, Box<dyn Error>> {
-    config.nico.validate()?;
+    config.nico_health.validate()?;
     let otlp_endpoint = options.otlp_endpoint.trim();
     let metrics_endpoint = options.metrics_endpoint.trim();
     let metrics_prefix = options.metrics_prefix.trim();
@@ -90,19 +71,20 @@ pub fn render_nico_config(
         .collect();
 
     let nico_config = NicoConfig {
-        bmc_request_concurrency: config.nico.bmc_request_concurrency,
+        bmc_request_concurrency: config.nico_health.bmc_request_concurrency,
         endpoint_sources: NicoEndpointSources {
             nico_api: NicoEnabled { enabled: false },
             static_credentials_file: &config.credentials_file,
             static_bmc_endpoints,
         },
         collectors: NicoCollectors {
-            sensors: config.nico.sensor_fetch_interval_seconds.map(|seconds| {
-                NicoSensorsCollector {
+            sensors: config
+                .nico_health
+                .sensor_fetch_interval_seconds
+                .map(|seconds| NicoSensorsCollector {
                     enabled: true,
                     sensor_fetch_interval: format!("{seconds}s"),
-                }
-            }),
+                }),
             logs: NicoLogsCollector {
                 enabled: true,
                 // "sse" streams BMC log entries over Redfish SSE without the
@@ -351,7 +333,7 @@ mod tests {
             (None, None),
             (Some(u32::MAX), Some(4)),
         ] {
-            let mut settings = String::from("[nico]\n");
+            let mut settings = String::from("[nico_health]\n");
             if let Some(interval) = interval {
                 settings.push_str(&format!("sensor_fetch_interval_seconds = {interval}\n"));
             }
@@ -394,8 +376,9 @@ mod tests {
     fn rejects_invalid_collection_settings_without_echoing_input() {
         for setting in ["sensor_fetch_interval_seconds", "bmc_request_concurrency"] {
             for value in ["0", "-1", "1.5", "4294967296", "true", "'sensitive-value'"] {
-                let input =
-                    format!("[nico]\n{setting} = {value}\n[credentials]\nfile = 'unused.json'");
+                let input = format!(
+                    "[nico_health]\n{setting} = {value}\n[credentials]\nfile = 'unused.json'"
+                );
                 let error = parse_config(&input, "test.toml").unwrap_err().to_string();
                 assert!(
                     error.contains("invalid TOML config"),
@@ -405,12 +388,34 @@ mod tests {
             }
         }
         let error = parse_config(
-            "[nico]\nsensor_fetch_intervl_seconds = 120\n[credentials]\nfile = 'unused.json'",
+            "[nico_health]\nsensor_fetch_intervl_seconds = 120\n[credentials]\nfile = 'unused.json'",
             "test.toml",
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("invalid TOML config"));
+    }
+
+    #[test]
+    fn legacy_nico_section_is_an_alias_and_conflicting_sections_fail() {
+        let suffix = "\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'";
+        let legacy = parse_test_config(
+            &format!("[nico]\nsensor_fetch_interval_seconds = 120{suffix}"),
+            "test.toml",
+        )
+        .unwrap();
+        assert_eq!(
+            legacy
+                .nico_health
+                .sensor_fetch_interval_seconds
+                .unwrap()
+                .get(),
+            120
+        );
+        assert!(parse_test_config(
+            &format!("[nico]\nsensor_fetch_interval_seconds = 120\n[nico_health]\nsensor_fetch_interval_seconds = 300{suffix}"),
+            "test.toml",
+        ).is_err());
     }
 
     #[test]
