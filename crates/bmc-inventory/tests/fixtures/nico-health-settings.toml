@@ -1,0 +1,54 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+sensor_fetch_interval_seconds = 120
+bmc_request_concurrency = 2
+endpoint_discovery_interval_seconds = 240
+
+[discovery]
+refresh_interval_seconds = 600
+concurrency = 8
+[sensors]
+enabled = false
+include_sensor_thresholds = false
+[metrics]
+enabled = true
+fetch_interval_seconds = 180
+[telemetry]
+enabled = true
+fetch_interval_seconds = 90
+[firmware]
+enabled = true
+refresh_interval_seconds = 14400
+[manager]
+enabled = false
+poll_interval_seconds = 600
+[leak_detector]
+enabled = false
+poll_interval_seconds = 120
+state_refresh_interval_seconds = 3600
+[logs]
+enabled = true
+mode = "auto"
+[logs.sse]
+initial_backoff_seconds = 2
+max_backoff_seconds = 60
+[logs.periodic]
+collection_interval_seconds = 600
+state_refresh_interval_seconds = 3600
+exclude_services = []
+skip_initial_history = true
+[logs.auto]
+sse_not_available_threshold = 2
+connect_failure_window_seconds = 600
+connect_failure_threshold = 8
+retry_sse_after_downgrade = false
+[reachability]
+enabled = true
+interval_seconds = 60
+timeout_seconds = 2
+log_mode = "all"
+[rate_limit]
+enabled = true
+bucket_burst = 50
+bucket_replenish_milliseconds = 100
+max_jitter_milliseconds = 0

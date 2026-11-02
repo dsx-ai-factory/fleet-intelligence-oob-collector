@@ -75,6 +75,10 @@ configs=("$directory"/config.*/config.toml)
 grep -Fxq 'bmc_request_concurrency = 2' "${configs[0]}"
 grep -Fxq '[collectors.sensors]' "${configs[0]}"
 grep -Fxq 'sensor_fetch_interval = "120s"' "${configs[0]}"
+grep -Fxq '[collectors.leak_detector]' "${configs[0]}"
+grep -Fxq 'poll_interval = "180s"' "${configs[0]}"
+grep -Fxq '[collectors.logs.sse]' "${configs[0]}"
+grep -Fxq 'max_backoff = "60s"' "${configs[0]}"
 [[ $(stat -c %a "${configs[0]}") == 640 ]]
 [[ $(stat -c %u "${configs[0]}") == "$(id -u fleetint-oob)" ]]
 # NICo may handle TERM or use the default signal disposition.

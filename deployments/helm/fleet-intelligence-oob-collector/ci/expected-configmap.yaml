@@ -22,8 +22,9 @@ data:
     file = "/run/secrets/bmc/credentials.json"
 
     [nico_health]
-    sensor_fetch_interval_seconds = 120
     bmc_request_concurrency = 2
+    sensor_fetch_interval_seconds = 120
+
 
     [[targets]]
     kind = "compute"

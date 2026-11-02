@@ -11,6 +11,24 @@ SPDX-License-Identifier: Apache-2.0
 {{- printf "labels = { %s }" (join ", " $entries) -}}
 {{- end -}}
 
+{{/* Only schema-validated NICo fields enter this recursive TOML writer.
+Use explicit nil checks: false, zero jitter, and empty exclusion arrays are overrides. */}}
+{{- define "fleet-intelligence-oob-collector.nicoToml" -}}
+[{{ .path }}]
+{{ range $key := keys .values | sortAlpha -}}
+{{- $value := get $.values $key -}}
+{{- if and (ne $value nil) (not (kindIs "map" $value)) -}}
+{{ regexReplaceAll "([A-Z])" $key "_${1}" | lower }} = {{ $value | toJson }}
+{{ end -}}
+{{- end -}}
+{{- range $key := keys .values | sortAlpha -}}
+{{- $value := get $.values $key -}}
+{{- if kindIs "map" $value }}
+{{ include "fleet-intelligence-oob-collector.nicoToml" (dict "path" (printf "%s.%s" $.path (regexReplaceAll "([A-Z])" $key "_${1}" | lower)) "values" $value) }}
+{{ end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "fleet-intelligence-oob-collector.collectorConfig" -}}
 {{ with .Values.inventory.computeZone }}compute_zone = {{ trim . | toJson }}
 {{ end }}{{ with .Values.inventory.nodeGroup }}node_group = {{ trim . | toJson }}
@@ -18,11 +36,14 @@ SPDX-License-Identifier: Apache-2.0
 
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
-{{ if or .Values.nicoHardwareHealth.sensorFetchIntervalSeconds .Values.nicoHardwareHealth.bmcRequestConcurrency }}
-[nico_health]
-{{ with .Values.nicoHardwareHealth.sensorFetchIntervalSeconds }}sensor_fetch_interval_seconds = {{ . | int64 }}
-{{ end }}{{ with .Values.nicoHardwareHealth.bmcRequestConcurrency }}bmc_request_concurrency = {{ . | int64 }}
-{{ end }}{{ end -}}
+{{- $nico := dict -}}
+{{- range $key := list "sensorFetchIntervalSeconds" "bmcRequestConcurrency" "endpointDiscoveryIntervalSeconds" "discovery" "sensors" "metrics" "telemetry" "firmware" "manager" "leakDetector" "logs" "reachability" "rateLimit" -}}
+{{- $value := get $.Values.nicoHardwareHealth $key -}}
+{{- if and (hasKey $.Values.nicoHardwareHealth $key) (ne $value nil) -}}{{- $_ := set $nico $key $value -}}{{- end -}}
+{{- end }}
+{{ if $nico }}
+{{ include "fleet-intelligence-oob-collector.nicoToml" (dict "path" "nico_health" "values" $nico) }}
+{{ end -}}
 {{ range .Values.inventory.targets }}
 [[targets]]
 kind = {{ default "unknown" .kind | toJson }}

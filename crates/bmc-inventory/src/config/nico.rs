@@ -73,27 +73,17 @@ pub fn render_nico_config(
 
     let nico_config = NicoConfig {
         bmc_request_concurrency: config.nico_health.bmc_request_concurrency,
+        endpoint_discovery_interval: config
+            .nico_health
+            .endpoint_discovery_interval_seconds
+            .map(|n| format!("{n}s")),
+        rate_limit: config.nico_health.native_rate_limit(),
         endpoint_sources: NicoEndpointSources {
             nico_api: NicoEnabled { enabled: false },
             static_credentials_file: &config.credentials_file,
             static_bmc_endpoints,
         },
-        collectors: NicoCollectors {
-            sensors: config
-                .nico_health
-                .sensor_fetch_interval_seconds
-                .map(|seconds| NicoSensorsCollector {
-                    enabled: true,
-                    sensor_fetch_interval: format!("{seconds}s"),
-                }),
-            logs: NicoLogsCollector {
-                enabled: true,
-                // "sse" streams BMC log entries over Redfish SSE without the
-                // LogService polling fallback "auto" applies per endpoint, so an
-                // endpoint that lacks /EventService emits no log records.
-                mode: "sse",
-            },
-        },
+        collectors: config.nico_health.native_collectors(),
         attributes: NicoAttributes { gpu_identity: true },
         sinks: NicoSinks {
             tracing: NicoEnabled { enabled: true },
@@ -128,7 +118,11 @@ struct NicoConfig<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     bmc_request_concurrency: Option<NonZeroU32>,
     endpoint_sources: NicoEndpointSources<'a>,
-    collectors: NicoCollectors,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint_discovery_interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rate_limit: Option<toml::Table>,
+    collectors: toml::Table,
     attributes: NicoAttributes,
     sinks: NicoSinks<'a>,
     metrics: NicoMetrics<'a>,
@@ -166,27 +160,6 @@ struct NicoStaticBmcEndpoint<'a> {
 #[derive(Serialize)]
 struct NicoAttributes {
     gpu_identity: bool,
-}
-
-#[derive(Serialize)]
-struct NicoCollectors {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sensors: Option<NicoSensorsCollector>,
-    logs: NicoLogsCollector,
-}
-
-#[derive(Serialize)]
-struct NicoSensorsCollector {
-    enabled: bool,
-    sensor_fetch_interval: String,
-}
-
-/// NICo leaves the logs collector disabled unless the section is present, so it
-/// must be rendered explicitly for BMC log entries to reach the OTLP sink.
-#[derive(Serialize)]
-struct NicoLogsCollector {
-    enabled: bool,
-    mode: &'static str,
 }
 
 #[derive(Serialize)]
@@ -323,6 +296,37 @@ mod tests {
         );
         assert!(rendered.get("bmc_request_concurrency").is_none());
         assert!(rendered["collectors"].get("sensors").is_none());
+    }
+
+    #[test]
+    fn renders_complete_collection_configuration_at_native_table_boundaries() {
+        let settings = include_str!("../../tests/fixtures/nico-health-settings.toml");
+        let settings = settings.replace("\n[", "\n[nico_health.");
+        let collector = parse_test_config(
+            &format!("[nico_health]\n{settings}\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'"),
+            "test.toml",
+        ).unwrap();
+        let native = render_nico_config(&collector, &NicoConfigOptions::default()).unwrap();
+        let native: toml::Value = toml::from_str(&native).unwrap();
+        assert_eq!(native["endpoint_discovery_interval"].as_str(), Some("240s"));
+        assert_eq!(native["bmc_request_concurrency"].as_integer(), Some(2));
+        assert_eq!(
+            native["rate_limit"]["bucket_replenish"].as_str(),
+            Some("100ms")
+        );
+        assert_eq!(
+            native["collectors"]["leak_detector"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            native["collectors"]["logs"]["auto"]["logs_collection_interval"].as_str(),
+            Some("600s")
+        );
+        assert!(
+            native["endpoint_sources"]
+                .get("endpoint_discovery_interval")
+                .is_none()
+        );
     }
 
     #[test]

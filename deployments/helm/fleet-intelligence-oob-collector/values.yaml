@@ -71,6 +71,18 @@ nicoHardwareHealth:
   # null retains NICo's defaults: 60 seconds and 4 concurrent operations per BMC.
   sensorFetchIntervalSeconds: null
   bmcRequestConcurrency: null
+  # Optional collection groups; null preserves existing behavior.
+  endpointDiscoveryIntervalSeconds: null
+  discovery: null
+  sensors: null
+  metrics: null
+  telemetry: null
+  firmware: null
+  manager: null
+  leakDetector: null
+  logs: null
+  reachability: null
+  rateLimit: null
   image:
     repository: ghcr.io/dsx-ai-factory/nico-hardware-health
     # An empty tag uses the chart version.

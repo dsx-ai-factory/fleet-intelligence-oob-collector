@@ -52,6 +52,48 @@ class NicoHelmTests(unittest.TestCase):
                 if not expected:
                     self.assertNotIn("nico_health", config)
 
+    def test_all_nested_controls_preserve_names_values_and_placement(self):
+        """Pass every typed setting through Helm, including false, zero, and []."""
+        source = tomllib.loads((ROOT / "crates/bmc-inventory/tests/fixtures/nico-health-settings.toml").read_text())
+
+        def camel_keys(value):
+            if not isinstance(value, dict):
+                return value
+            return {
+                re.sub(r"_([a-z])", lambda match: match[1].upper(), key): camel_keys(item)
+                for key, item in value.items()
+            }
+
+        result = render(camel_keys(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
+        self.assertEqual(config["nico_health"], source)
+        self.assertEqual(len(config["targets"]), 3)
+        self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
+
+    def test_nested_validation_and_rollout(self):
+        """Reject invalid nested settings and roll NICo after a nested-only edit."""
+        for key, value in [
+            ("leakDetector.enabled", "false"),
+            ("leakDetector.pollIntervalSeconds", 0),
+            ("logs.mode", "unsupported"),
+            ("logs.sse.initialBackoffSeconds", -1),
+            ("logs.auto.connectFailureThreshold", 0),
+            ("logs.periodic.excludeServices", [False]),
+            ("reachability.logMode", "invalid"),
+            ("rateLimit.maxJitterMilliseconds", -1),
+            ("discovery.concurrency", 4294967296),
+            ("telemetry.unknown", True),
+        ]:
+            with self.subTest(key=key, value=value):
+                self.assertNotEqual(render({key: value}).returncode, 0)
+        checksums = []
+        for settings in [{}, {"leakDetector.enabled": False}, {"logs.sse.maxBackoffSeconds": 60}]:
+            result = render(settings, "nico-hardware-health-deployment.yaml")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            checksums.append(re.search(r"checksum/config: ([0-9a-f]{64})", result.stdout)[1])
+        self.assertEqual(len(set(checksums)), 3)
+
     def test_invalid_settings_fail_schema_validation(self):
         """Reject invalid types and values before producing a ConfigMap."""
         for key in ["sensorFetchIntervalSeconds", "bmcRequestConcurrency"]:

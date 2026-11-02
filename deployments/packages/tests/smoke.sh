@@ -66,6 +66,12 @@ cat > "$conf/config.toml" <<'CONFIG'
 [nico_health]
 sensor_fetch_interval_seconds = 120
 bmc_request_concurrency = 2
+[nico_health.leak_detector]
+enabled = false
+poll_interval_seconds = 180
+[nico_health.logs.sse]
+initial_backoff_seconds = 2
+max_backoff_seconds = 60
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 [[targets]]

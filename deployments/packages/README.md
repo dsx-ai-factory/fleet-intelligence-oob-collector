@@ -92,13 +92,9 @@ references the same credentials JSON file as the collector; credential values
 stay in that file. This needs no separate TOML parser or Python dependency.
 Do not edit the generated file under `/run`; it is replaced on the next start.
 
-The launcher keeps NICo configuration generation separate from token loading.
-It does not provide an independently editable NICo configuration. The current
-renderer sets log collection to SSE and does not expose general NICo-specific
-settings such as CEPR. Adding those settings would require extending the
-renderer while keeping shared BMC settings in the collector configuration.
+The launcher keeps NICo configuration generation separate from token loading. Configure polling, collector enablement, log modes, SSE backoff, and the iteration limiter in the shared `[nico_health]` table and its nested groups. The generated NICo file remains private to the launcher.
 
-To configure NICo's sensor polling and request concurrency, add an optional `[nico_health]` table to `/etc/fleetint-oob/config.toml`, with `sensor_fetch_interval_seconds` and/or `bmc_request_concurrency` as positive integers. For example, `sensor_fetch_interval_seconds = 120` polls sensors every two minutes. Omitted fields retain the bundled NICo defaults. See [NICo collection controls](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/configuration.md#nico-collection-controls) for defaults and tradeoffs. After editing, run `sudo systemctl restart fleetint-nico-health.service` to regenerate the NICo configuration and load the new settings.
+Use snake_case versions of the Helm settings, for example `[nico_health.leak_detector]` with `enabled = false`, or `[nico_health.logs.sse]` with `max_backoff_seconds = 60`. Omitted fields retain the existing defaults. See [NICo collection controls](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/configuration.md#nico-collection-controls) for every supported field and its behavior. Run `sudo systemctl restart fleetint-nico-health.service` after editing to regenerate the NICo configuration and load the new settings.
 
 The packaged `service.conf` declares NICo and the gateway as configured bundle components so the collector can report their settings. When excluding a component, update its `FLEETINT_NICO_ENABLED` or `FLEETINT_OTEL_GATEWAY_ENABLED` value; use `FLEETINT_NICO_TELEMETRY_DESTINATION=disabled` when excluding NICo, or `external` when forwarding through your own gateway. Existing installations that retain an older `service.conf` need these metadata entries added explicitly to include component settings in backend reports. Restart the collector after changing its environment file. Reported overrides describe the shared configuration file, not confirmation that NICo has applied them.
 

@@ -127,15 +127,22 @@ labels = { rack = "rack-12" }
 
 Unlike Helm, the TOML file accepts a MAC with mixed separators. The collector reports MACs as uppercase with colons and doesn't rewrite the file.
 
-An optional `[nico_health]` table controls NICo's BMC load when `render-nico-config` generates its configuration:
+An optional `[nico_health]` table controls NICo collection when `render-nico-config` generates its configuration:
 
 ```toml
 [nico_health]
 sensor_fetch_interval_seconds = 120
 bmc_request_concurrency = 2
+[nico_health.discovery]
+refresh_interval_seconds = 600
+[nico_health.leak_detector]
+enabled = false
+[nico_health.logs.sse]
+initial_backoff_seconds = 2
+max_backoff_seconds = 60
 ```
 
-The fields map to `nicoHardwareHealth.sensorFetchIntervalSeconds` and `nicoHardwareHealth.bmcRequestConcurrency` in Helm. Both accept positive integers up to `4294967295`. Omit either field to retain its bundled NICo default. These values affect NICo only; see [NICo collection controls](docs/configuration.md#nico-collection-controls) for their behavior. Regenerate the NICo file and restart NICo after changing them.
+Fields and nested groups map to the camelCase names under `nicoHardwareHealth` in Helm. Integer controls accept positive values up to `4294967295`; `rate_limit.max_jitter_milliseconds` also accepts zero. Omit fields to retain existing behavior. Timing overrides alone preserve each collector's enabled state, and logs retain the bundle's SSE default. These values affect NICo only; see [NICo collection controls](docs/configuration.md#nico-collection-controls) for their behavior. Regenerate the NICo file and restart NICo after changing them.
 
 The shared `NicoHealthSettings` model drives both NICo configuration generation and the `collector.config.nicoHealth` backend report. Its TOML fields use snake_case and its reported JSON fields use camelCase. The `[nico]` section is accepted as an alias for `[nico_health]`; specifying both sections is rejected. Component enablement metadata remains explicit, and an unknown component is omitted from the report.
 
