@@ -199,8 +199,7 @@ struct NicoOtlpTarget<'a> {
     /// off there because bodies are large and potentially sensitive; we accept
     /// both to get CPER off the BMC.
     include_diagnostics: bool,
-    /// Ignored by NICo builds that predate the flag, which do not reject
-    /// unknown OTLP target keys.
+    /// Include collected health-report alert details in OTLP logs.
     include_alert_details: bool,
     batch_size: usize,
     flush_interval: &'a str,

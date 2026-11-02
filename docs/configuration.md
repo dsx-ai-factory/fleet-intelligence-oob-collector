@@ -220,32 +220,23 @@ Set these optional values under `nicoHardwareHealth`. Omit a field or set it to 
 | `rateLimitBucketReplenishMilliseconds` | `30` | Interval between token replenishments. |
 | `rateLimitMaxJitterMilliseconds` | `50` | Maximum token-bucket jitter; `0` disables this jitter. |
 
-For example, set sensor polling, leak-detector polling, SSE retry timing, and per-BMC concurrency independently:
+For example:
 
 ```yaml
 nicoHardwareHealth:
   sensorFetchIntervalSeconds: 120
   bmcRequestConcurrency: 2
-  discoveryRefreshIntervalSeconds: 600
-  leakDetectorEnabled: true
   leakDetectorPollIntervalSeconds: 120
-  leakDetectorStateRefreshIntervalSeconds: 3600
-  logsMode: sse
-  logsSseInitialBackoffSeconds: 2
   logsSseMaxBackoffSeconds: 60
 ```
 
-All integer controls accept values from `1` through `4294967295`, except `rateLimitMaxJitterMilliseconds`, which also accepts `0`. SSE maximum backoff must be at least its initial backoff; omitted values in that comparison use the defaults above. Unknown fields and invalid types are rejected. Explicit `false`, zero jitter, and empty exclusion arrays are preserved.
+Integer controls accept `1` through `4294967295`; `rateLimitMaxJitterMilliseconds` also accepts `0`. SSE maximum backoff must be at least its initial backoff. Explicit `false`, zero jitter, and empty exclusion arrays are preserved.
 
-The controls apply to all NICo targets and are independent of the inventory and attestation limits below. Polling intervals are waits between iterations, not guarantees of a complete scan within that time. Sensor collection, entity discovery, leak collection, and log collection run independently; disabling sensors alone leaves discovery for GPU identity and other enabled collectors running. Leak-report processors consume collected data locally and add no BMC requests.
+Controls apply to all NICo targets, independently of inventory and attestation. Polling intervals are waits between iterations. Each collector runs independently, so disabling sensors leaves discovery for GPU identity and other enabled collectors active. Established SSE streams release their concurrency slot after the handshake. The global limiter counts collector iterations, not HTTP requests.
 
-The BMC concurrency limit covers Redfish operations across collectors. An established SSE connection releases its slot after the handshake, so a stream can remain open alongside the configured number of operations. The global limiter counts collector iterations across endpoints, not individual HTTP requests or incoming SSE events. NICo's separate OTLP batch/export timing is unchanged.
+Auto fallback uses the configured log-polling fields. Mode changes can replay or miss records when SSE and LogService histories differ; temporary checkpoints can be lost on pod replacement or native directory cleanup. Manager polling requires power-shelf metadata and stays inactive for the renderer's generic endpoints.
 
-Auto mode uses the same flat log-polling controls, such as `logsCollectionIntervalSeconds` and `logsStateRefreshIntervalSeconds`, when it falls back to polling, including when you configure `logsAuto*` thresholds. Retry thresholds govern SSE fallback; they are separate from the shared concurrency limit. Automatic mode changes can replay or miss records when a BMC's SSE and LogService histories differ. Periodic and auto checkpoint files use NICo's default temporary directory; pod replacement or native private-directory cleanup can remove checkpoints and cause retained history to replay.
-
-The renderer produces generic Redfish endpoints for every configured target kind. Manager polling requires NICo power-shelf endpoint metadata and therefore remains inactive for these generic endpoints, even when `managerEnabled` is true. Switch-host protocols and local leak-report thresholds are outside these BMC collection controls.
-
-Apply changes with `helm upgrade`; the generated configuration checksum restarts the workloads so NICo loads the new settings. Native installations use the same fields under `[nico_health]`, with snake_case names, and restart `fleetint-nico-health.service` to regenerate the NICo file.
+Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` and restart `fleetint-nico-health.service` on native installations.
 
 ## Collection settings
 
@@ -271,9 +262,9 @@ Collector and NICo image tags default to the chart version. If you pull images t
 
 With each inventory upload, the collector reports its version and the settings it is running with, such as the collection interval, request limits, and which telemetry components are enabled. The report never includes secrets, credential references, or URLs. It describes configuration, not whether those components are healthy.
 
-The report's `collector.config.nicoHealth` includes the explicitly configured flat NICo collection controls from the shared `[nico_health]` settings. The report uses camelCase names and preserves explicit `false`, zero jitter, and empty exclusion arrays. An omitted override stays omitted in both the generated NICo file and the report, leaving the default owned by the bundled NICo version. The collector refreshes these reported overrides when it reloads configuration for a collection cycle. This reports configured intent; it does not confirm that a separately running NICo process has loaded the changes.
+`collector.config.nicoHealth` reports explicitly configured controls in camelCase from each cycle's `[nico_health]` snapshot. Omitted controls stay omitted. These are configured values; checking what NICo has loaded requires checking that service after a restart.
 
-Component enablement is reported only when explicitly supplied by deployment metadata. Helm supplies this metadata, and native packages include `FLEETINT_NICO_ENABLED`, `FLEETINT_NICO_TELEMETRY_DESTINATION`, and `FLEETINT_OTEL_GATEWAY_ENABLED` in `service.conf`. A manually started collector without this metadata omits the corresponding component reports instead of assuming those services are running.
+Component reports require explicit deployment metadata. Helm and native packages supply it; a manually started collector without it omits those reports. Native package metadata is configured in `service.conf`.
 
 ## Proxy and TLS
 

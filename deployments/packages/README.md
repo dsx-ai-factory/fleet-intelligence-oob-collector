@@ -92,11 +92,9 @@ references the same credentials JSON file as the collector; credential values
 stay in that file. This needs no separate TOML parser or Python dependency.
 Do not edit the generated file under `/run`; it is replaced on the next start.
 
-The launcher keeps NICo configuration generation separate from token loading. Configure polling, collector enablement, log modes, SSE backoff, and the iteration limiter in the shared `[nico_health]` table. The generated NICo file remains private to the launcher.
+Configure NICo with flat snake_case fields under `[nico_health]` in `/etc/fleetint-oob/config.toml`. See [NICo collection controls](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/configuration.md#nico-collection-controls) for supported fields and defaults. Run `sudo systemctl restart fleetint-nico-health.service` after editing; the launcher regenerates NICo's configuration before starting it.
 
-Use snake_case versions of the Helm settings, for example `leak_detector_enabled = false` or `logs_sse_max_backoff_seconds = 60` directly under `[nico_health]`. Omitted fields retain the existing defaults. See [NICo collection controls](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/configuration.md#nico-collection-controls) for every supported field and its behavior. Run `sudo systemctl restart fleetint-nico-health.service` after editing to regenerate the NICo configuration and load the new settings.
-
-The packaged `service.conf` declares NICo and the gateway as configured bundle components so the collector can report their settings. When excluding a component, update its `FLEETINT_NICO_ENABLED` or `FLEETINT_OTEL_GATEWAY_ENABLED` value; use `FLEETINT_NICO_TELEMETRY_DESTINATION=disabled` when excluding NICo, or `external` when forwarding through your own gateway. Existing installations that retain an older `service.conf` need these metadata entries added explicitly to include component settings in backend reports. Restart the collector after changing its environment file. Reported overrides describe the shared configuration file, not confirmation that NICo has applied them.
+The packaged `service.conf` supplies component reporting metadata through `FLEETINT_NICO_ENABLED`, `FLEETINT_NICO_TELEMETRY_DESTINATION`, and `FLEETINT_OTEL_GATEWAY_ENABLED`. Set enablement to `false` when excluding a component, and set the NICo destination to `disabled` when excluding NICo or `external` when using your own gateway. Restart the collector after changing this file.
 
 Set `BACKEND_ENDPOINT` and `ENROLL_ENDPOINT` explicitly when changing the backend. Environment files do not expand references to other variables. The host needs access to the BMCs and backend, but no local GPU. `FLEETINT_BACKEND_URL` is the collector API origin; `BACKEND_ENDPOINT` is the gateway telemetry base URL (including `/api/v1/health`), and `ENROLL_ENDPOINT` is its enrollment URL (including `/api/v1/health/enroll`).
 
@@ -177,7 +175,7 @@ publishing are outside this prototype.
 Docker, installs the actual package in Debian 12, starts all three daemons under
 the service account, verifies enrollment and authenticated gateway export against
 a loopback fixture, and checks configuration preservation, upgrades, removal,
-and purge. The shell tests also cover legacy/file token selection, active-only
+and purge. The shell tests also cover environment/file token selection, active-only
 restarts, visible failure reporting, and permission migration without following
 credential symlinks. No customer backend or BMC is contacted.
 
