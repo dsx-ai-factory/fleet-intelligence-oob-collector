@@ -3,5 +3,5 @@
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 if [ -d /run/systemd/system ]; then
-    systemctl daemon-reload >/dev/null || true
+    systemctl daemon-reload >/dev/null || echo "[WARNING] Service management failed during rpm/postremove; inspect systemd state" >&2
 fi

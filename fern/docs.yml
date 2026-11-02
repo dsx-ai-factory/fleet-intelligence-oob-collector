@@ -22,6 +22,9 @@ navigation:
   - page: Overview
     path: ../README.md
     slug: overview
+  - page: Host package
+    path: ../deployments/packages/README.md
+    slug: host-package
   - page: Installation
     path: ../docs/installation.md
     slug: installation

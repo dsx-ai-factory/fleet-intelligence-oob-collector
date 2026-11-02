@@ -5,7 +5,7 @@ set -eu
 case "${1:-}" in
     remove|deconfigure|failed-upgrade)
         if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-            deb-systemd-invoke stop fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || true
+            deb-systemd-invoke stop fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service >/dev/null || echo "[WARNING] Service management failed during deb/prerm; inspect systemd state" >&2
         fi
         ;;
 esac

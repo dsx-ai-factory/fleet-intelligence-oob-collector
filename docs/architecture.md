@@ -70,3 +70,16 @@ See [collection settings](configuration.md#collection-settings) to change the li
 **Kubernetes workloads.** All workloads run as non-root, with read-only root filesystems, no Linux capabilities, and no Kubernetes API token. The collector and NICo restart with `Recreate`, so two copies never collect at the same time; the gateway can be scaled out and uses rolling updates. A NetworkPolicy allows traffic to the gateway's OTLP ports (4317 and 4318) only from pods in the same release and namespace, if your cluster's network plugin enforces NetworkPolicies.
 
 **URLs in BMC data.** BMCs sometimes include full URLs in their responses. Before inventory or attestation data leaves the collector, whether as an upload, JSON, or a table, the collector strips the host, credentials, and query string from Redfish resource links and from URLs inside error and status messages. Links that can't be parsed are replaced with `[URL_REDACTED]`. Inventory fields that are meant to hold addresses, hostnames, and MACs are kept, and attestation evidence and certificates are not changed. This removes URLs only; it doesn't detect other kinds of secrets in BMC text.
+
+## Host packages
+
+The experimental `fleetint-oob` host package runs the same three components as
+`fleetint-oob-collector`, `fleetint-nico-health`, and `fleetint-otel-gateway` systemd
+services, grouped by `fleetint-oob.target` for full-stack start and stop. The
+`run-nico` launcher replaces the Kubernetes init container and renders a private
+configuration under `/run/fleetint-nico-health`. These services run as the dedicated non-root `fleetint-oob` account with
+systemd sandboxing; the gateway
+listens only on loopback. Rust binaries are built statically with musl and the
+gateway with Go's CGO disabled; package builds verify no ELF interpreter or
+shared-library requirements remain. See the [host package prototype](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/packages/README.md)
+for installation, credentials, and validation limits.

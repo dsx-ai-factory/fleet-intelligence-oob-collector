@@ -29,7 +29,7 @@ bmc-inventory = { path = "crates/bmc-inventory" }
 futures = "0.3"
 http = "1"
 mac_address = "1.2.1"
-nv-redfish = { version = "0.18.1", features = [
+nv-redfish = { version = "0.22.0", features = [
     "bmc-http",
     "oem-nvidia",
     "chassis",
@@ -45,8 +45,8 @@ nv-redfish = { version = "0.18.1", features = [
     "pcie-devices",
     "update-service",
 ] }
-nv-redfish-bmc-mock = "0.18.1"
-nv-redfish-dispatcher = "0.18.1"
+nv-redfish-bmc-mock = "0.22.0"
+nv-redfish-dispatcher = "0.22.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "socks", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

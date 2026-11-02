@@ -37,7 +37,7 @@ contents:
   dst: /etc/fleetint-oob/config.toml
   type: config|noreplace
   file_info:
-    mode: 0600
+    mode: 0640
 - src: LICENSE
   dst: /usr/share/doc/fleetint-oob/copyright
   file_info:
@@ -91,6 +91,26 @@ contents:
   dst: /usr/lib/systemd/system/fleetint-oob.target
   file_info:
     mode: 0644
+- src: deployments/packages/run-service
+  dst: /usr/lib/fleetint-oob/run-service
+  file_info:
+    mode: 0755
+- src: deployments/packages/run-nico
+  dst: /usr/lib/fleetint-oob/run-nico
+  file_info:
+    mode: 0755
+- src: deployments/packages/sysusers/fleetint-oob.conf
+  dst: /usr/lib/sysusers.d/fleetint-oob.conf
+- src: deployments/packages/permissions.conf
+  dst: /usr/lib/fleetint-oob/permissions.conf
+- src: ${OOB_PACKAGE_INPUT}/collector-dependencies/
+  dst: /usr/share/doc/fleetint-oob/collector-dependencies
+  type: tree
+  expand: true
+- src: ${OOB_PACKAGE_INPUT}/nico-dependencies/
+  dst: /usr/share/doc/fleetint-oob/nico-dependencies
+  type: tree
+  expand: true
 overrides:
   deb:
     depends:
