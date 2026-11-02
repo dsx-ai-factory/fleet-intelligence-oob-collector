@@ -24,6 +24,7 @@ use serde::ser::{SerializeMap, Serializer};
 use url::Url;
 
 use crate::COLLECTOR_VERSION;
+use crate::config::NicoHealthSettings;
 use crate::models::NodeInventory;
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,7 +37,18 @@ pub struct CollectorConfig {
     pub otel_gateway: Option<OtelGatewayConfig>,
 }
 
-/// Configured NICo behavior; absent fields are unknown outside Helm.
+impl CollectorConfig {
+    /// Attach configured overrides from the same snapshot used for collection.
+    /// Component enablement stays unknown when no deployment metadata is available.
+    pub fn with_nico_health_settings(mut self, settings: NicoHealthSettings) -> Self {
+        if let Some(nico) = self.nico_health.as_mut() {
+            nico.settings = settings;
+        }
+        self
+    }
+}
+
+/// Configured NICo behavior; omitted overrides retain the bundled NICo defaults.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NicoHealthConfig {
@@ -45,6 +57,8 @@ pub struct NicoHealthConfig {
     pub log_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub telemetry_destination: Option<String>,
+    #[serde(flatten)]
+    pub settings: NicoHealthSettings,
 }
 
 /// Configured gateway behavior, independent of readiness.
@@ -507,6 +521,7 @@ mod tests {
             enabled: true,
             log_level: Some("debug".into()),
             telemetry_destination: Some("external".into()),
+            settings: Default::default(),
         });
         config.otel_gateway = Some(OtelGatewayConfig {
             enabled: false,
@@ -528,6 +543,52 @@ mod tests {
             serde_json::json!({"enabled": false, "logLevel": "warn"})
         );
         assert_eq!(reported.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn batch_reports_nico_overrides_from_the_shared_configuration() {
+        let settings = toml::from_str::<NicoHealthSettings>(include_str!(
+            "../../tests/fixtures/nico-health-settings.toml"
+        ))
+        .unwrap();
+        let mut expected = serde_json::to_value(&settings).unwrap();
+        expected["enabled"] = serde_json::json!(false);
+        expected["logLevel"] = serde_json::json!("debug");
+        expected["telemetryDestination"] = serde_json::json!("disabled");
+        let mut config = collector_config();
+        config.nico_health = Some(NicoHealthConfig {
+            enabled: false,
+            log_level: Some("debug".into()),
+            telemetry_destination: Some("disabled".into()),
+            ..Default::default()
+        });
+        let config = config.with_nico_health_settings(settings.clone());
+        let value = serde_json::to_value(build_batch_upsert_request(&[], &config)).unwrap();
+        let reported = &value["collector"]["config"]["nicoHealth"];
+        assert_eq!(reported, &expected);
+        assert_eq!(reported.as_object().unwrap().len(), 41);
+        for field in [
+            "image",
+            "resources",
+            "nodeSelector",
+            "tolerations",
+            "config",
+        ] {
+            assert!(reported.get(field).is_none(), "{field}");
+        }
+
+        // Reloading an input file refreshes configured overrides while preserving
+        // component metadata, including explicit disablement.
+        let config = config.with_nico_health_settings(NicoHealthSettings::default());
+        let value = serde_json::to_value(build_batch_upsert_request(&[], &config)).unwrap();
+        assert_eq!(
+            value["collector"]["config"]["nicoHealth"],
+            serde_json::json!({
+                "enabled": false, "logLevel": "debug", "telemetryDestination": "disabled"
+            })
+        );
+        let unknown = collector_config().with_nico_health_settings(settings);
+        assert!(unknown.nico_health.is_none());
     }
 
     #[test]

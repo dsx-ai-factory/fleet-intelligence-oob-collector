@@ -127,6 +127,8 @@ labels = { rack = "rack-12" }
 
 Unlike Helm, the TOML file accepts a MAC with mixed separators. The collector reports MACs as uppercase with colons and doesn't rewrite the file.
 
+Configure NICo with flat fields under `[nico_health]`, using snake_case equivalents of the Helm fields under `nicoHardwareHealth.config`. See [NICo collection controls](docs/configuration.md#nico-collection-controls) for supported fields, defaults, and validation. The shared settings model drives both `render-nico-config` and the camelCase `collector.config.nicoHealth` report. Regenerate the NICo file and restart NICo after editing.
+
 ### CLI reference
 
 The executable is `bmc-collector`. Add `--help` to any command to list its options.

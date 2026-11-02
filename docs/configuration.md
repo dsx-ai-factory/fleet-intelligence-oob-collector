@@ -173,7 +173,71 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 
 The gateway requires NICo.
 
-NICo's telemetry settings are fixed by the chart. NICo collects BMC logs from the Redfish event stream, so BMCs need EventService support for log collection; there is no polling fallback. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+NICo defaults to Redfish SSE log streaming. You can select periodic log polling or automatic SSE-to-polling fallback with `nicoHardwareHealth.config.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+
+### NICo collection controls
+
+Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omit a field or set it to `null` to retain the current behavior. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, reachability, and the iteration limiter require their corresponding `*Enabled: true` setting to start. Logs retain the bundle's SSE default.
+
+| Setting under `nicoHardwareHealth.config` | Default | Description |
+| --- | --- | --- |
+| `bmcRequestConcurrency` | `4` | Shared maximum concurrent Redfish operations per BMC. |
+| `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
+| `discoveryRefreshIntervalSeconds` | `300` | Interval between Redfish entity-tree discovery iterations. |
+| `discoveryConcurrency` | `4` | Concurrent endpoint identity resolutions. |
+| `sensorFetchIntervalSeconds` | `60` | Interval between sensor fetch iterations. |
+| `sensorsEnabled` | `true` | Collect sensor readings. |
+| `includeSensorThresholds` | `true` | Include thresholds in sensor attributes. |
+| `leakDetectorEnabled` | `true` | Query thermal-subsystem leak detectors. |
+| `leakDetectorPollIntervalSeconds` | `60` | Interval between leak-detector polls. |
+| `leakDetectorStateRefreshIntervalSeconds` | `1800` | Interval between leak-detector discovery refreshes. |
+| `logsEnabled` | `true` | Collect BMC logs. |
+| `logsMode` | `sse` | `sse`, `periodic`, or `auto` (SSE with per-endpoint polling fallback). |
+| `logsSseInitialBackoffSeconds` | `1` | Initial reconnect backoff, before jitter. |
+| `logsSseMaxBackoffSeconds` | `30` | Maximum reconnect backoff, before jitter. |
+| `logsCollectionIntervalSeconds` | `300` | Interval between log polls in periodic mode or auto fallback. |
+| `logsStateRefreshIntervalSeconds` | `1800` | Interval between log-service discovery refreshes. |
+| `logsExcludeServices` | `["Journal"]` | Skip LogServices whose resource IDs contain any listed substring; `[]` includes every service. |
+| `logsSkipInitialHistory` | `false` | Skip retained history on the first successful baseline without a checkpoint. |
+| `logsAutoSseNotAvailableThreshold` | `1` | Unsupported-SSE attempts before falling back to polling. |
+| `logsAutoConnectFailureWindowSeconds` | `300` | Window for counting SSE connection failures. |
+| `logsAutoConnectFailureThreshold` | `5` | Connection failures within that window before falling back. |
+| `logsAutoRetrySseAfterDowngrade` | `false` | Retry SSE after the fallback period instead of remaining in polling mode. |
+| `metricsEnabled` | `false` | Collect Redfish entity metrics. |
+| `metricsFetchIntervalSeconds` | `120` | Interval between entity-metric iterations. |
+| `telemetryEnabled` | `false` | Collect Redfish TelemetryService reports. |
+| `telemetryFetchIntervalSeconds` | `60` | Interval between report-fetch iterations. |
+| `firmwareEnabled` | `false` | Collect firmware inventory in NICo. |
+| `firmwareRefreshIntervalSeconds` | `7200` | Interval between firmware iterations. |
+| `managerEnabled` | `true` | Poll Manager status for NICo power-shelf endpoints. |
+| `managerPollIntervalSeconds` | `300` | Interval between eligible Manager polls. |
+| `reachabilityEnabled` | `false` | Probe eligible endpoint TCP ports. |
+| `reachabilityIntervalSeconds` | `30` | Interval between TCP probe cycles. |
+| `reachabilityTimeoutSeconds` | `3` | Timeout for one TCP connection attempt. |
+| `reachabilityLogMode` | `unreachable` | Log failed probes (`unreachable`) or every probe (`all`). |
+| `rateLimitEnabled` | `false` | Enable NICo's global collector-iteration token bucket. |
+| `rateLimitBucketBurst` | `100` | Collector iterations admitted in a burst. |
+| `rateLimitBucketReplenishMilliseconds` | `30` | Interval between token replenishments. |
+| `rateLimitMaxJitterMilliseconds` | `50` | Maximum token-bucket jitter; `0` disables this jitter. |
+
+For example:
+
+```yaml
+nicoHardwareHealth:
+  config:
+    sensorFetchIntervalSeconds: 120
+    bmcRequestConcurrency: 2
+    leakDetectorPollIntervalSeconds: 120
+    logsSseMaxBackoffSeconds: 60
+```
+
+Integer controls accept `1` through `4294967295`; `rateLimitMaxJitterMilliseconds` also accepts `0`. SSE maximum backoff must be at least its initial backoff. Explicit `false`, zero jitter, and empty exclusion arrays are preserved.
+
+Controls apply to all NICo targets, independently of inventory and attestation. Polling intervals are waits between iterations. Each collector runs independently, so disabling sensors leaves discovery for GPU identity and other enabled collectors active. Established SSE streams release their concurrency slot after the handshake. The global limiter counts collector iterations, not HTTP requests.
+
+Auto fallback uses the configured log-polling fields. Mode changes can replay or miss records when SSE and LogService histories differ; temporary checkpoints can be lost on pod replacement or native directory cleanup. Manager polling requires power-shelf metadata and stays inactive for the renderer's generic endpoints.
+
+Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` and restart `fleetint-nico-health.service` on native installations.
 
 ## Collection settings
 
@@ -198,6 +262,10 @@ Collector and NICo image tags default to the chart version. If you pull images t
 ## Reported collector behavior
 
 With each inventory upload, the collector reports its version and the settings it is running with, such as the collection interval, request limits, and which telemetry components are enabled. The report never includes secrets, credential references, or URLs. It describes configuration, not whether those components are healthy.
+
+`collector.config.nicoHealth` reports explicitly configured controls in camelCase from each cycle's `[nico_health]` snapshot. Omitted controls stay omitted. These are configured values; checking what NICo has loaded requires checking that service after a restart.
+
+NICo reports also include `enabled`, `logLevel`, and `telemetryDestination`. Pod settings such as image, resources, and scheduling stay in Helm. Component reports require explicit deployment metadata, supplied by Helm or native `service.conf`; a manually started collector without it omits those reports.
 
 ## Proxy and TLS
 

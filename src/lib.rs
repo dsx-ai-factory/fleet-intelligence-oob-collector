@@ -147,6 +147,7 @@ impl RuntimeOptions {
                 enabled,
                 log_level: nico_log,
                 telemetry_destination: destination,
+                settings: Default::default(),
             }),
             otel_gateway: gateway_enabled.map(|enabled| OtelGatewayConfig {
                 enabled,
@@ -307,14 +308,18 @@ async fn run_collection_cycle(
     let config::CollectorConfig {
         targets,
         credentials_file,
+        nico_health,
     } = target_config;
+    let collector_config = collector_config
+        .clone()
+        .with_nico_health_settings(nico_health);
     dispatcher.sync_endpoints(targets.iter().map(|target| target.mac.to_string()))?;
     // Each cycle reloads credentials, so give every BMC one fresh attempt.
     dispatcher.clear_credential_rejections();
     let attestation_targets = build_attestation_targets(&targets);
     match collect_and_upload_inventory(
         options.inventory.clone(),
-        collector_config.clone(),
+        collector_config,
         endpoints.oob_nodes_endpoint.clone(),
         session,
         targets,

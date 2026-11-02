@@ -9,6 +9,15 @@ node_group = "gb200-training"
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 
+# Optional NICo collection controls; omit fields to retain NICo's defaults.
+# [nico_health]
+# sensor_fetch_interval_seconds = 120
+# bmc_request_concurrency = 2
+# discovery_refresh_interval_seconds = 600
+# leak_detector_enabled = false
+# logs_sse_initial_backoff_seconds = 2
+# logs_sse_max_backoff_seconds = 60
+
 [[targets]]
 kind = "compute"
 credentials_profile = "bmc"

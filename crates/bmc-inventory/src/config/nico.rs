@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::IpAddr;
+use std::num::NonZeroU32;
 
 use serde::Serialize;
 
@@ -39,10 +40,12 @@ impl Default for NicoConfigOptions {
     }
 }
 
+/// Render shared targets and explicit NICo overrides without embedding credentials.
 pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
 ) -> Result<String, Box<dyn Error>> {
+    config.nico_health.validate()?;
     let otlp_endpoint = options.otlp_endpoint.trim();
     let metrics_endpoint = options.metrics_endpoint.trim();
     let metrics_prefix = options.metrics_prefix.trim();
@@ -69,20 +72,18 @@ pub fn render_nico_config(
         .collect();
 
     let nico_config = NicoConfig {
+        bmc_request_concurrency: config.nico_health.bmc_request_concurrency,
+        endpoint_discovery_interval: config
+            .nico_health
+            .endpoint_discovery_interval_seconds
+            .map(|n| format!("{n}s")),
+        rate_limit: config.nico_health.native_rate_limit(),
         endpoint_sources: NicoEndpointSources {
             nico_api: NicoEnabled { enabled: false },
             static_credentials_file: &config.credentials_file,
             static_bmc_endpoints,
         },
-        collectors: NicoCollectors {
-            logs: NicoLogsCollector {
-                enabled: true,
-                // "sse" streams BMC log entries over Redfish SSE without the
-                // LogService polling fallback "auto" applies per endpoint, so an
-                // endpoint that lacks /EventService emits no log records.
-                mode: "sse",
-            },
-        },
+        collectors: config.nico_health.native_collectors(),
         attributes: NicoAttributes { gpu_identity: true },
         sinks: NicoSinks {
             tracing: NicoEnabled { enabled: true },
@@ -114,8 +115,14 @@ pub fn render_nico_config(
 
 #[derive(Serialize)]
 struct NicoConfig<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bmc_request_concurrency: Option<NonZeroU32>,
     endpoint_sources: NicoEndpointSources<'a>,
-    collectors: NicoCollectors,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint_discovery_interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rate_limit: Option<toml::Table>,
+    collectors: toml::Table,
     attributes: NicoAttributes,
     sinks: NicoSinks<'a>,
     metrics: NicoMetrics<'a>,
@@ -156,19 +163,6 @@ struct NicoAttributes {
 }
 
 #[derive(Serialize)]
-struct NicoCollectors {
-    logs: NicoLogsCollector,
-}
-
-/// NICo leaves the logs collector disabled unless the section is present, so it
-/// must be rendered explicitly for BMC log entries to reach the OTLP sink.
-#[derive(Serialize)]
-struct NicoLogsCollector {
-    enabled: bool,
-    mode: &'static str,
-}
-
-#[derive(Serialize)]
 struct NicoSinks<'a> {
     /// NICo defaults this sink off, which leaves collected health results with
     /// no path to its own logs: the OTLP sink carries alert details only, so a
@@ -205,8 +199,7 @@ struct NicoOtlpTarget<'a> {
     /// off there because bodies are large and potentially sensitive; we accept
     /// both to get CPER off the BMC.
     include_diagnostics: bool,
-    /// Ignored by NICo builds that predate the flag, which do not reject
-    /// unknown OTLP target keys.
+    /// Include collected health-report alert details in OTLP logs.
     include_alert_details: bool,
     batch_size: usize,
     flush_interval: &'a str,
@@ -300,6 +293,111 @@ mod tests {
             rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
             Some(true)
         );
+        assert!(rendered.get("bmc_request_concurrency").is_none());
+        assert!(rendered["collectors"].get("sensors").is_none());
+    }
+
+    #[test]
+    fn renders_complete_collection_configuration_at_native_table_boundaries() {
+        let settings = include_str!("../../tests/fixtures/nico-health-settings.toml");
+        let settings = settings.replace("\n[", "\n[nico_health.");
+        let collector = parse_test_config(
+            &format!("[nico_health]\n{settings}\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'"),
+            "test.toml",
+        ).unwrap();
+        let native = render_nico_config(&collector, &NicoConfigOptions::default()).unwrap();
+        let native: toml::Value = toml::from_str(&native).unwrap();
+        assert_eq!(native["endpoint_discovery_interval"].as_str(), Some("240s"));
+        assert_eq!(native["bmc_request_concurrency"].as_integer(), Some(2));
+        assert_eq!(
+            native["rate_limit"]["bucket_replenish"].as_str(),
+            Some("100ms")
+        );
+        assert_eq!(
+            native["collectors"]["leak_detector"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            native["collectors"]["logs"]["auto"]["logs_collection_interval"].as_str(),
+            Some("600s")
+        );
+        assert!(
+            native["endpoint_sources"]
+                .get("endpoint_discovery_interval")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn renders_optional_collection_settings_independently() {
+        for (interval, concurrency) in [
+            (Some(120), Some(2)),
+            (Some(300), None),
+            (None, Some(1)),
+            (None, None),
+            (Some(u32::MAX), Some(4)),
+        ] {
+            let mut settings = String::from("[nico_health]\n");
+            if let Some(interval) = interval {
+                settings.push_str(&format!("sensor_fetch_interval_seconds = {interval}\n"));
+            }
+            if let Some(concurrency) = concurrency {
+                settings.push_str(&format!("bmc_request_concurrency = {concurrency}\n"));
+            }
+            let collector = parse_test_config(
+                &format!(
+                    "{settings}\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'"
+                ),
+                "test.toml",
+            ).expect("collector config");
+            let rendered =
+                render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
+            let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+            assert_eq!(
+                rendered
+                    .get("bmc_request_concurrency")
+                    .and_then(toml::Value::as_integer),
+                concurrency.map(i64::from),
+            );
+            let sensors = rendered["collectors"].get("sensors");
+            if let Some(interval) = interval {
+                let sensors = sensors.expect("sensor override");
+                assert_eq!(sensors["enabled"].as_bool(), Some(true));
+                assert_eq!(
+                    sensors["sensor_fetch_interval"].as_str(),
+                    Some(format!("{interval}s").as_str())
+                );
+                assert!(sensors.get("include_sensor_thresholds").is_none());
+            } else {
+                assert!(sensors.is_none());
+            }
+            assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
+            assert_eq!(rendered["attributes"]["gpu_identity"].as_bool(), Some(true));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_collection_settings_without_echoing_input() {
+        for setting in ["sensor_fetch_interval_seconds", "bmc_request_concurrency"] {
+            for value in ["0", "-1", "1.5", "4294967296", "true", "'sensitive-value'"] {
+                let input = format!(
+                    "[nico_health]\n{setting} = {value}\n[credentials]\nfile = 'unused.json'"
+                );
+                let error = parse_config(&input, "test.toml").unwrap_err().to_string();
+                assert!(
+                    error.contains("invalid TOML config"),
+                    "{setting} = {value}: {error}"
+                );
+                assert!(!error.contains("sensitive-value"));
+            }
+        }
+        let error = parse_config(
+            "[nico_health]\nsensor_fetch_intervl_seconds = 120\n[credentials]\nfile = 'unused.json'",
+            "test.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("invalid TOML config"));
     }
 
     #[test]

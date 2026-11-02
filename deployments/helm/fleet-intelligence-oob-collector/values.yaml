@@ -68,6 +68,46 @@ bmcCollector:
 
 nicoHardwareHealth:
   enabled: true
+  # Collection settings; pod settings remain alongside this block.
+  config:
+    sensorFetchIntervalSeconds: null
+    bmcRequestConcurrency: null
+    endpointDiscoveryIntervalSeconds: null
+    discoveryRefreshIntervalSeconds: null
+    discoveryConcurrency: null
+    sensorsEnabled: null
+    includeSensorThresholds: null
+    metricsEnabled: null
+    metricsFetchIntervalSeconds: null
+    telemetryEnabled: null
+    telemetryFetchIntervalSeconds: null
+    firmwareEnabled: null
+    firmwareRefreshIntervalSeconds: null
+    managerEnabled: null
+    managerPollIntervalSeconds: null
+    leakDetectorEnabled: null
+    leakDetectorPollIntervalSeconds: null
+    leakDetectorStateRefreshIntervalSeconds: null
+    logsEnabled: null
+    logsMode: null
+    logsSseInitialBackoffSeconds: null
+    logsSseMaxBackoffSeconds: null
+    logsCollectionIntervalSeconds: null
+    logsStateRefreshIntervalSeconds: null
+    logsExcludeServices: null
+    logsSkipInitialHistory: null
+    logsAutoSseNotAvailableThreshold: null
+    logsAutoConnectFailureWindowSeconds: null
+    logsAutoConnectFailureThreshold: null
+    logsAutoRetrySseAfterDowngrade: null
+    reachabilityEnabled: null
+    reachabilityIntervalSeconds: null
+    reachabilityTimeoutSeconds: null
+    reachabilityLogMode: null
+    rateLimitEnabled: null
+    rateLimitBucketBurst: null
+    rateLimitBucketReplenishMilliseconds: null
+    rateLimitMaxJitterMilliseconds: null
   image:
     repository: ghcr.io/dsx-ai-factory/nico-hardware-health
     # An empty tag uses the chart version.
