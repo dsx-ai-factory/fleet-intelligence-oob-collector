@@ -182,6 +182,8 @@ Set these optional values under `nicoHardwareHealth.config`. Workload settings s
 | Setting under `nicoHardwareHealth.config` | Default | Description |
 | --- | --- | --- |
 | `bmcRequestConcurrency` | `4` | Shared maximum concurrent Redfish operations per BMC. |
+| `bmcLatencyMetricsEnabled` | `false` | Expose outbound Redfish request latency histograms on NICo's `/metrics` endpoint. |
+| `bmcLatencyAttributes` | All supported attributes | Nonempty list of labels for BMC latency histograms; `all` selects every supported attribute. |
 | `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
 | `discoveryRefreshIntervalSeconds` | `300` | Interval between Redfish entity-tree discovery iterations. |
 | `discoveryConcurrency` | `4` | Concurrent endpoint identity resolutions. |
@@ -232,6 +234,23 @@ nicoHardwareHealth:
 ```
 
 Integer controls accept `1` through `4294967295`; `rateLimitMaxJitterMilliseconds` also accepts `0`. SSE maximum backoff must be at least its initial backoff. Explicit `false`, zero jitter, and empty exclusion arrays are preserved.
+
+To measure collection impact, set `bmcLatencyMetricsEnabled: true` and scrape NICo's `/metrics` endpoint on port 9009. With the default `fleetint` prefix, `fleetint_bmc_latency_ms` exposes histogram buckets, counts, and sums for outbound Redfish requests. This instrumentation is independent of `metricsEnabled`, which enables Redfish entity-metric collection, and is available through the metrics listener independently of OTLP telemetry export.
+
+Use `bmcLatencyAttributes` to limit the number of series; supported values are `http_response_status_code`, `http_request_method`, `http_path`, `server_address`, `url_scheme`, `bmc_vendor`, `bmc_model`, `entity_type`, `machine_id`, `rack_id`, and `all`. Omitting the list retains all attributes. A supplied list must contain at least one supported value, even when instrumentation is disabled. For comparisons by BMC and API:
+
+```yaml
+nicoHardwareHealth:
+  config:
+    bmcLatencyMetricsEnabled: true
+    bmcLatencyAttributes:
+      - server_address
+      - http_path
+      - http_request_method
+      - http_response_status_code
+```
+
+The request histogram measures the HTTP transport call; use component durations and sensor freshness to assess time spent waiting to collect.
 
 Controls apply to all NICo targets, independently of inventory and attestation. Polling intervals are waits between iterations. Each collector runs independently, so disabling sensors leaves discovery for GPU identity and other enabled collectors active. Established SSE streams release their concurrency slot after the handshake. The global limiter counts collector iterations, not HTTP requests.
 

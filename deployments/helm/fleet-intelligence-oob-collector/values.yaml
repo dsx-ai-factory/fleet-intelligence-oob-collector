@@ -72,6 +72,8 @@ nicoHardwareHealth:
   config:
     sensorFetchIntervalSeconds: null
     bmcRequestConcurrency: null
+    bmcLatencyMetricsEnabled: null
+    bmcLatencyAttributes: null
     endpointDiscoveryIntervalSeconds: null
     discoveryRefreshIntervalSeconds: null
     discoveryConcurrency: null

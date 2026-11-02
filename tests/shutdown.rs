@@ -168,6 +168,8 @@ async fn inventory_reports_nico_overrides_from_each_configuration_snapshot() {
         if let Some(interval) = interval {
             assert!(body.contains(&format!(r#""sensorFetchIntervalSeconds":{interval}"#)));
             assert!(body.contains(r#""bmcRequestConcurrency":2"#));
+            assert!(body.contains(r#""bmcLatencyMetricsEnabled":false"#));
+            assert!(body.contains(r#""bmcLatencyAttributes":["server_address","http_path"]"#));
             assert!(
                 body.contains(
                     r#""leakDetectorEnabled":false,"leakDetectorPollIntervalSeconds":180"#
@@ -177,12 +179,14 @@ async fn inventory_reports_nico_overrides_from_each_configuration_snapshot() {
         } else {
             assert!(!body.contains("sensorFetchIntervalSeconds"));
             assert!(!body.contains("bmcRequestConcurrency"));
+            assert!(!body.contains("bmcLatencyMetricsEnabled"));
+            assert!(!body.contains("bmcLatencyAttributes"));
             assert!(!body.contains("leakDetectorEnabled"));
             assert!(!body.contains("logsSseMaxBackoffSeconds"));
         }
         let next = if interval.is_none() {
             format!(
-                "[nico_health]\nsensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2\nleak_detector_enabled = false\nleak_detector_poll_interval_seconds = 180\nlogs_mode = 'sse'\nlogs_sse_max_backoff_seconds = 60\n{original}"
+                "[nico_health]\nsensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2\nbmc_latency_metrics_enabled = false\nbmc_latency_attributes = ['server_address', 'http_path']\nleak_detector_enabled = false\nleak_detector_poll_interval_seconds = 180\nlogs_mode = 'sse'\nlogs_sse_max_backoff_seconds = 60\n{original}"
             )
         } else {
             original.clone()
