@@ -28,7 +28,7 @@ target list + credentials file
 
 Each machine is identified by its BMC MAC address, from configuration through inventory, attestation, and telemetry.
 
-The shared OOB configuration also contains optional `[nico_health]` settings. Kubernetes uses Helm to write this file, and a NICo init container generates NICo's service configuration from it. Native installations use the same generator in the NICo systemd service's `ExecStartPre`. The collector reports the configured NICo overrides from each cycle's configuration snapshot. Generated configuration and the backend report describe intended settings; confirming what NICo has loaded requires checking that service after a restart.
+The shared OOB configuration also contains optional `[nico_health]` settings. Kubernetes uses Helm to write this file, and a NICo init container generates NICo's service configuration from it. Native installations use the same generator in the NICo service launcher before starting NICo. The collector reports the configured NICo overrides from each cycle's configuration snapshot. Generated configuration and the backend report describe intended settings; confirming what NICo has loaded requires checking that service after a restart.
 
 ## A collection cycle
 

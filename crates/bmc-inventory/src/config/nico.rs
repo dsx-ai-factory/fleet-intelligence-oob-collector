@@ -40,6 +40,7 @@ impl Default for NicoConfigOptions {
     }
 }
 
+/// Render shared targets and explicit NICo overrides without embedding credentials.
 pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,

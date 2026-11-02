@@ -63,6 +63,9 @@ done
 install -d -m750 -o root -g fleetint-oob "$conf/credentials"
 printf '%s\n' '{"profiles":{"bmc":{"username":"test-user","password":"test-password"}}}' > "$conf/credentials/credentials.json"
 cat > "$conf/config.toml" <<'CONFIG'
+[nico_health]
+sensor_fetch_interval_seconds = 120
+bmc_request_concurrency = 2
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 [[targets]]

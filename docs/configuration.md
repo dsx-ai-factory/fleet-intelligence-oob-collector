@@ -175,9 +175,9 @@ The gateway requires NICo.
 
 NICo collects BMC logs from the Redfish event stream, so BMCs need EventService support for log collection; there is no polling fallback. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
-### NICo BMC load
+### NICo collection controls
 
-You can tune NICo's sensor polling and per-BMC request concurrency to suit your BMCs. Both settings are optional; leave them unset or `null` to use the bundled NICo defaults.
+You can set NICo's sensor polling interval and per-BMC request concurrency independently. Both settings are optional; leave them unset or `null` to use the bundled NICo defaults.
 
 | Setting | NICo default | Description |
 | --- | --- | --- |
@@ -194,7 +194,7 @@ nicoHardwareHealth:
 
 Set each override to a positive integer no greater than `4294967295`. The overrides apply to all NICo targets and are independent of the inventory and attestation limits below. A longer interval reduces collection frequency and delays detection of sensor changes; lower concurrency limits simultaneous operations without setting a request rate. Neither setting changes the BMC log streaming mode or OTLP export interval.
 
-Apply changes with `helm upgrade`; the generated configuration checksum restarts the workloads so NICo loads the new settings. Use BMC management usability and continued request progress to decide whether tuning is needed; additional latency under collection load alone does not require a lower polling frequency.
+Apply changes with `helm upgrade`; the generated configuration checksum restarts the workloads so NICo loads the new settings.
 
 ## Collection settings
 

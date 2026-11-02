@@ -135,7 +135,7 @@ sensor_fetch_interval_seconds = 120
 bmc_request_concurrency = 2
 ```
 
-The fields map to `nicoHardwareHealth.sensorFetchIntervalSeconds` and `nicoHardwareHealth.bmcRequestConcurrency` in Helm. Both accept positive integers up to `4294967295`. Omit either field to retain its bundled NICo default. These values affect NICo only; see [NICo BMC load](docs/configuration.md#nico-bmc-load) for their behavior. Regenerate the NICo file and restart NICo after changing them.
+The fields map to `nicoHardwareHealth.sensorFetchIntervalSeconds` and `nicoHardwareHealth.bmcRequestConcurrency` in Helm. Both accept positive integers up to `4294967295`. Omit either field to retain its bundled NICo default. These values affect NICo only; see [NICo collection controls](docs/configuration.md#nico-collection-controls) for their behavior. Regenerate the NICo file and restart NICo after changing them.
 
 The shared `NicoHealthSettings` model drives both NICo configuration generation and the `collector.config.nicoHealth` backend report. Its TOML fields use snake_case and its reported JSON fields use camelCase. The `[nico]` section is accepted as an alias for `[nico_health]`; specifying both sections is rejected. Component enablement metadata remains explicit, and an unknown component is omitted from the report.
 

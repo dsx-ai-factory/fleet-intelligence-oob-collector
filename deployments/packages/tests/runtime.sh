@@ -71,6 +71,10 @@ directory=/run/fleetint-nico-health
 [[ $(stat -c %a "$directory") == 700 ]]
 configs=("$directory"/config.*/config.toml)
 [[ ${#configs[@]} == 1 ]]
+# The real NICo binary must accept the overrides produced by the shared renderer.
+grep -Fxq 'bmc_request_concurrency = 2' "${configs[0]}"
+grep -Fxq '[collectors.sensors]' "${configs[0]}"
+grep -Fxq 'sensor_fetch_interval = "120s"' "${configs[0]}"
 [[ $(stat -c %a "${configs[0]}") == 640 ]]
 [[ $(stat -c %u "${configs[0]}") == "$(id -u fleetint-oob)" ]]
 # NICo may handle TERM or use the default signal disposition.

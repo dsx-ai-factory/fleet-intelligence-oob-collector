@@ -1,7 +1,7 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify NICo load controls survive Helm rendering and trigger a rollout."""
+"""Verify NICo collection controls survive Helm rendering and trigger a rollout."""
 
 import json
 from pathlib import Path
@@ -17,6 +17,7 @@ CHART = ROOT / "deployments/helm/fleet-intelligence-oob-collector"
 
 
 def render(settings, template="configmap.yaml"):
+    """Render one chart template with explicit NICo setting overrides."""
     command = [
         "helm", "template", "test", str(CHART),
         "--values", str(CHART / "ci/test-values.yaml"),
@@ -29,6 +30,7 @@ def render(settings, template="configmap.yaml"):
 
 class NicoHelmTests(unittest.TestCase):
     def test_optional_settings_render_as_top_level_toml(self):
+        """Preserve independent overrides, defaults, and shared target configuration."""
         for interval, concurrency in [(None, None), (120, None), (None, 2), (300, 1), (4294967295, 4294967295)]:
             with self.subTest(interval=interval, concurrency=concurrency):
                 result = render({
@@ -51,6 +53,7 @@ class NicoHelmTests(unittest.TestCase):
                     self.assertNotIn("nico_health", config)
 
     def test_invalid_settings_fail_schema_validation(self):
+        """Reject invalid types and values before producing a ConfigMap."""
         for key in ["sensorFetchIntervalSeconds", "bmcRequestConcurrency"]:
             for value in [0, -1, 1.5, "120", True, 4294967296]:
                 with self.subTest(key=key, value=value):
@@ -59,6 +62,7 @@ class NicoHelmTests(unittest.TestCase):
                     self.assertIn(key, result.stderr)
 
     def test_either_setting_changes_nico_pod_checksum(self):
+        """Restart NICo when either collection setting changes."""
         checksums = []
         for settings in [{}, {"sensorFetchIntervalSeconds": 300}, {"bmcRequestConcurrency": 1}]:
             result = render(settings, "nico-hardware-health-deployment.yaml")
