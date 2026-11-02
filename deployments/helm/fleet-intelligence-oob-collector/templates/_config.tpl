@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 {{- $nico := dict -}}
+{{- $config := default dict .Values.nicoHardwareHealth.config -}}
 {{- range $key := list
     "sensorFetchIntervalSeconds"
     "bmcRequestConcurrency"
@@ -59,8 +60,8 @@ file = "/run/secrets/bmc/credentials.json"
     "rateLimitBucketReplenishMilliseconds"
     "rateLimitMaxJitterMilliseconds"
     -}}
-{{- $value := get $.Values.nicoHardwareHealth $key -}}
-{{- if and (hasKey $.Values.nicoHardwareHealth $key) (ne $value nil) -}}{{- $_ := set $nico $key $value -}}{{- end -}}
+{{- $value := get $config $key -}}
+{{- if and (hasKey $config $key) (ne $value nil) -}}{{- $_ := set $nico $key $value -}}{{- end -}}
 {{- end }}
 {{ if $nico }}
 [nico_health]

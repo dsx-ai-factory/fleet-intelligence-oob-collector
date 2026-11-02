@@ -107,6 +107,12 @@ affinity:
 {{- if and .Values.proxy.enabled (not (or .Values.proxy.httpProxy .Values.proxy.httpsProxy .Values.proxy.allProxy)) -}}
 {{- fail "proxy.enabled requires at least one proxy URL" -}}
 {{- end -}}
+{{- $config := default dict .Values.nicoHardwareHealth.config -}}
+{{- $initialBackoff := int64 (default 1 $config.logsSseInitialBackoffSeconds) -}}
+{{- $maxBackoff := int64 (default 30 $config.logsSseMaxBackoffSeconds) -}}
+{{- if gt $initialBackoff $maxBackoff -}}
+{{- fail "nicoHardwareHealth.config.logsSseMaxBackoffSeconds must be at least logsSseInitialBackoffSeconds" -}}
+{{- end -}}
 {{- $seen := dict -}}
 {{- range .Values.inventory.targets -}}
 {{- $mac := upper (replace "-" "" (replace ":" "" .mac)) -}}

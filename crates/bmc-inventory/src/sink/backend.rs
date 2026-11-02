@@ -547,33 +547,45 @@ mod tests {
 
     #[test]
     fn batch_reports_nico_overrides_from_the_shared_configuration() {
-        let settings = toml::from_str::<NicoHealthSettings>(
-            "sensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2",
-        )
+        let settings = toml::from_str::<NicoHealthSettings>(include_str!(
+            "../../tests/fixtures/nico-health-settings.toml"
+        ))
         .unwrap();
+        let mut expected = serde_json::to_value(&settings).unwrap();
+        expected["enabled"] = serde_json::json!(false);
+        expected["logLevel"] = serde_json::json!("debug");
+        expected["telemetryDestination"] = serde_json::json!("disabled");
         let mut config = collector_config();
         config.nico_health = Some(NicoHealthConfig {
-            enabled: true,
+            enabled: false,
+            log_level: Some("debug".into()),
+            telemetry_destination: Some("disabled".into()),
             ..Default::default()
         });
         let config = config.with_nico_health_settings(settings.clone());
         let value = serde_json::to_value(build_batch_upsert_request(&[], &config)).unwrap();
-        assert_eq!(
-            value["collector"]["config"]["nicoHealth"],
-            serde_json::json!({
-                "enabled": true,
-                "sensorFetchIntervalSeconds": 120,
-                "bmcRequestConcurrency": 2,
-            })
-        );
+        let reported = &value["collector"]["config"]["nicoHealth"];
+        assert_eq!(reported, &expected);
+        assert_eq!(reported.as_object().unwrap().len(), 41);
+        for field in [
+            "image",
+            "resources",
+            "nodeSelector",
+            "tolerations",
+            "config",
+        ] {
+            assert!(reported.get(field).is_none(), "{field}");
+        }
 
-        // Reloading an input file refreshes configured overrides; removing an
-        // override must not leave an earlier value in the report.
+        // Reloading an input file refreshes configured overrides while preserving
+        // component metadata, including explicit disablement.
         let config = config.with_nico_health_settings(NicoHealthSettings::default());
         let value = serde_json::to_value(build_batch_upsert_request(&[], &config)).unwrap();
         assert_eq!(
             value["collector"]["config"]["nicoHealth"],
-            serde_json::json!({"enabled": true})
+            serde_json::json!({
+                "enabled": false, "logLevel": "debug", "telemetryDestination": "disabled"
+            })
         );
         let unknown = collector_config().with_nico_health_settings(settings);
         assert!(unknown.nico_health.is_none());

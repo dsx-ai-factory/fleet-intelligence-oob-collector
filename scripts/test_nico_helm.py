@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "deployments/helm/fleet-intelligence-oob-collector"
 
 
-def render(settings, template="configmap.yaml"):
+def render(settings, template="configmap.yaml", workload=None):
     """Render one chart template with explicit NICo setting overrides."""
     command = [
         "helm", "template", "test", str(CHART),
@@ -24,6 +24,8 @@ def render(settings, template="configmap.yaml"):
         "--show-only", f"templates/{template}",
     ]
     for key, value in settings.items():
+        command.extend(["--set-json", f"nicoHardwareHealth.config.{key}={json.dumps(value)}"])
+    for key, value in (workload or {}).items():
         command.extend(["--set-json", f"nicoHardwareHealth.{key}={json.dumps(value)}"])
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
@@ -83,12 +85,44 @@ class NicoHelmTests(unittest.TestCase):
         ]:
             with self.subTest(key=key, value=value):
                 self.assertNotEqual(render({key: value}).returncode, 0)
+        for settings in [
+            {"logsSseInitialBackoffSeconds": 31},
+            {"logsSseInitialBackoffSeconds": 10, "logsSseMaxBackoffSeconds": 9},
+        ]:
+            result = render(settings)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("logsSseMaxBackoffSeconds must be at least", result.stderr)
+        for settings in [
+            {"logsSseMaxBackoffSeconds": 1},
+            {"logsSseInitialBackoffSeconds": 60, "logsSseMaxBackoffSeconds": 60},
+        ]:
+            result = render(settings)
+            self.assertEqual(result.returncode, 0, result.stderr)
         checksums = []
         for settings in [{}, {"leakDetectorEnabled": False}, {"logsSseMaxBackoffSeconds": 60}]:
             result = render(settings, "nico-hardware-health-deployment.yaml")
             self.assertEqual(result.returncode, 0, result.stderr)
             checksums.append(re.search(r"checksum/config: ([0-9a-f]{64})", result.stdout)[1])
         self.assertEqual(len(set(checksums)), 3)
+
+    def test_collection_settings_are_separate_from_workload_settings(self):
+        """Validate both boundaries and preserve component reporting metadata."""
+        self.assertNotEqual(render({"image": {"tag": "test"}}).returncode, 0)
+        self.assertNotEqual(render({}, workload={"logsMode": "sse"}).returncode, 0)
+        self.assertNotEqual(render({"enabled": False}).returncode, 0)
+        result = render({"logsMode": "sse"}, "nico-hardware-health-deployment.yaml",
+                        workload={"image.tag": "config-boundary-test", "logLevel": "debug"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nico-hardware-health:config-boundary-test", result.stdout)
+        self.assertIn('value: "debug"', result.stdout)
+        result = render({}, "bmc-collector-deployment.yaml")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ["FLEETINT_NICO_ENABLED", "FLEETINT_NICO_LOG_LEVEL", "FLEETINT_NICO_TELEMETRY_DESTINATION"]:
+            self.assertIn(name, result.stdout)
+        result = render({}, workload={"config": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
+        self.assertNotIn("nico_health", config)
 
     def test_invalid_settings_fail_schema_validation(self):
         """Reject invalid types and values before producing a ConfigMap."""

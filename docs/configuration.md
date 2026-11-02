@@ -173,13 +173,13 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 
 The gateway requires NICo.
 
-NICo defaults to Redfish SSE log streaming. You can select periodic log polling or automatic SSE-to-polling fallback with `nicoHardwareHealth.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+NICo defaults to Redfish SSE log streaming. You can select periodic log polling or automatic SSE-to-polling fallback with `nicoHardwareHealth.config.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
 ### NICo collection controls
 
-Set these optional values under `nicoHardwareHealth`. Omit a field or set it to `null` to retain the current behavior. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, reachability, and the iteration limiter require their corresponding `*Enabled: true` setting to start. Logs retain the bundle's SSE default.
+Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omit a field or set it to `null` to retain the current behavior. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, reachability, and the iteration limiter require their corresponding `*Enabled: true` setting to start. Logs retain the bundle's SSE default.
 
-| Setting under `nicoHardwareHealth` | Default | Description |
+| Setting under `nicoHardwareHealth.config` | Default | Description |
 | --- | --- | --- |
 | `bmcRequestConcurrency` | `4` | Shared maximum concurrent Redfish operations per BMC. |
 | `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
@@ -224,10 +224,11 @@ For example:
 
 ```yaml
 nicoHardwareHealth:
-  sensorFetchIntervalSeconds: 120
-  bmcRequestConcurrency: 2
-  leakDetectorPollIntervalSeconds: 120
-  logsSseMaxBackoffSeconds: 60
+  config:
+    sensorFetchIntervalSeconds: 120
+    bmcRequestConcurrency: 2
+    leakDetectorPollIntervalSeconds: 120
+    logsSseMaxBackoffSeconds: 60
 ```
 
 Integer controls accept `1` through `4294967295`; `rateLimitMaxJitterMilliseconds` also accepts `0`. SSE maximum backoff must be at least its initial backoff. Explicit `false`, zero jitter, and empty exclusion arrays are preserved.
@@ -264,7 +265,7 @@ With each inventory upload, the collector reports its version and the settings i
 
 `collector.config.nicoHealth` reports explicitly configured controls in camelCase from each cycle's `[nico_health]` snapshot. Omitted controls stay omitted. These are configured values; checking what NICo has loaded requires checking that service after a restart.
 
-Component reports require explicit deployment metadata. Helm and native packages supply it; a manually started collector without it omits those reports. Native package metadata is configured in `service.conf`.
+NICo reports also include `enabled`, `logLevel`, and `telemetryDestination`. Pod settings such as image, resources, and scheduling stay in Helm. Component reports require explicit deployment metadata, supplied by Helm or native `service.conf`; a manually started collector without it omits those reports.
 
 ## Proxy and TLS
 

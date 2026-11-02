@@ -67,8 +67,9 @@ bmcCollector:
     example.com/workload: bmcCollector
 nicoHardwareHealth:
   enabled: true
-  sensorFetchIntervalSeconds: 120
-  bmcRequestConcurrency: 2
+  config:
+    sensorFetchIntervalSeconds: 120
+    bmcRequestConcurrency: 2
   resources:
     requests:
       cpu: 100m
