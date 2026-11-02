@@ -25,7 +25,6 @@ data:
     bmc_request_concurrency = 2
     sensor_fetch_interval_seconds = 120
 
-
     [[targets]]
     kind = "compute"
     ip = "192.0.2.10"

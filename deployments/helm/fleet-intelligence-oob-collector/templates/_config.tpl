@@ -11,24 +11,6 @@ SPDX-License-Identifier: Apache-2.0
 {{- printf "labels = { %s }" (join ", " $entries) -}}
 {{- end -}}
 
-{{/* Only schema-validated NICo fields enter this recursive TOML writer.
-Use explicit nil checks: false, zero jitter, and empty exclusion arrays are overrides. */}}
-{{- define "fleet-intelligence-oob-collector.nicoToml" -}}
-[{{ .path }}]
-{{ range $key := keys .values | sortAlpha -}}
-{{- $value := get $.values $key -}}
-{{- if and (ne $value nil) (not (kindIs "map" $value)) -}}
-{{ regexReplaceAll "([A-Z])" $key "_${1}" | lower }} = {{ $value | toJson }}
-{{ end -}}
-{{- end -}}
-{{- range $key := keys .values | sortAlpha -}}
-{{- $value := get $.values $key -}}
-{{- if kindIs "map" $value }}
-{{ include "fleet-intelligence-oob-collector.nicoToml" (dict "path" (printf "%s.%s" $.path (regexReplaceAll "([A-Z])" $key "_${1}" | lower)) "values" $value) }}
-{{ end -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "fleet-intelligence-oob-collector.collectorConfig" -}}
 {{ with .Values.inventory.computeZone }}compute_zone = {{ trim . | toJson }}
 {{ end }}{{ with .Values.inventory.nodeGroup }}node_group = {{ trim . | toJson }}
@@ -37,12 +19,54 @@ Use explicit nil checks: false, zero jitter, and empty exclusion arrays are over
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 {{- $nico := dict -}}
-{{- range $key := list "sensorFetchIntervalSeconds" "bmcRequestConcurrency" "endpointDiscoveryIntervalSeconds" "discovery" "sensors" "metrics" "telemetry" "firmware" "manager" "leakDetector" "logs" "reachability" "rateLimit" -}}
+{{- range $key := list
+    "sensorFetchIntervalSeconds"
+    "bmcRequestConcurrency"
+    "endpointDiscoveryIntervalSeconds"
+    "discoveryRefreshIntervalSeconds"
+    "discoveryConcurrency"
+    "sensorsEnabled"
+    "includeSensorThresholds"
+    "metricsEnabled"
+    "metricsFetchIntervalSeconds"
+    "telemetryEnabled"
+    "telemetryFetchIntervalSeconds"
+    "firmwareEnabled"
+    "firmwareRefreshIntervalSeconds"
+    "managerEnabled"
+    "managerPollIntervalSeconds"
+    "leakDetectorEnabled"
+    "leakDetectorPollIntervalSeconds"
+    "leakDetectorStateRefreshIntervalSeconds"
+    "logsEnabled"
+    "logsMode"
+    "logsSseInitialBackoffSeconds"
+    "logsSseMaxBackoffSeconds"
+    "logsCollectionIntervalSeconds"
+    "logsStateRefreshIntervalSeconds"
+    "logsExcludeServices"
+    "logsSkipInitialHistory"
+    "logsAutoSseNotAvailableThreshold"
+    "logsAutoConnectFailureWindowSeconds"
+    "logsAutoConnectFailureThreshold"
+    "logsAutoRetrySseAfterDowngrade"
+    "reachabilityEnabled"
+    "reachabilityIntervalSeconds"
+    "reachabilityTimeoutSeconds"
+    "reachabilityLogMode"
+    "rateLimitEnabled"
+    "rateLimitBucketBurst"
+    "rateLimitBucketReplenishMilliseconds"
+    "rateLimitMaxJitterMilliseconds"
+    -}}
 {{- $value := get $.Values.nicoHardwareHealth $key -}}
 {{- if and (hasKey $.Values.nicoHardwareHealth $key) (ne $value nil) -}}{{- $_ := set $nico $key $value -}}{{- end -}}
 {{- end }}
 {{ if $nico }}
-{{ include "fleet-intelligence-oob-collector.nicoToml" (dict "path" "nico_health" "values" $nico) }}
+[nico_health]
+{{ range $key := keys $nico | sortAlpha -}}
+{{ regexReplaceAll "([A-Z])" $key "_${1}" | lower }} = {{ get $nico $key | toJson }}
+{{ end -}}
 {{ end -}}
 {{ range .Values.inventory.targets }}
 [[targets]]

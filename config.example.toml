@@ -13,13 +13,10 @@ file = "/run/secrets/bmc/credentials.json"
 # [nico_health]
 # sensor_fetch_interval_seconds = 120
 # bmc_request_concurrency = 2
-# [nico_health.discovery]
-# refresh_interval_seconds = 600
-# [nico_health.leak_detector]
-# enabled = false
-# [nico_health.logs.sse]
-# initial_backoff_seconds = 2
-# max_backoff_seconds = 60
+# discovery_refresh_interval_seconds = 600
+# leak_detector_enabled = false
+# logs_sse_initial_backoff_seconds = 2
+# logs_sse_max_backoff_seconds = 60
 
 [[targets]]
 kind = "compute"

@@ -1,15 +1,13 @@
 // Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Map typed collection controls to NICo-native TOML, preserving enablement defaults.
+//! Render flat operator settings into NICo's native TOML sections.
 
 use std::num::NonZeroU32;
 
 use toml::{Table, Value};
 
-use super::services::{
-    NicoHealthSettings, NicoLogMode, NicoPeriodicLogSettings, NicoReachabilityLogMode,
-};
+use super::services::{NicoHealthSettings, NicoLogMode, NicoReachabilityLogMode};
 
 fn set<T: Into<Value>>(table: &mut Table, key: &str, value: Option<T>) {
     if let Some(value) = value {
@@ -25,121 +23,138 @@ fn seconds(table: &mut Table, key: &str, value: Option<NonZeroU32>) {
     set(table, key, value.map(|n| format!("{n}s")));
 }
 
-fn enabled(value: Option<bool>, default: bool) -> Table {
-    let mut table = Table::new();
-    table.insert("enabled".into(), Value::Boolean(value.unwrap_or(default)));
-    table
-}
-
-fn periodic_logs(settings: &NicoPeriodicLogSettings) -> Table {
-    let mut table = Table::new();
-    seconds(
-        &mut table,
-        "logs_collection_interval",
-        settings.collection_interval_seconds,
-    );
-    seconds(
-        &mut table,
-        "state_refresh_interval",
-        settings.state_refresh_interval_seconds,
-    );
-    set(
-        &mut table,
-        "skip_initial_history",
-        settings.skip_initial_history,
-    );
-    set(
-        &mut table,
-        "exclude_services",
-        settings
-            .exclude_services
-            .as_ref()
-            .map(|services| Value::Array(services.iter().cloned().map(Value::String).collect())),
-    );
-    table
+/// Timing overrides alone must preserve each collector's existing enablement.
+fn add_group(collectors: &mut Table, name: &str, mut table: Table, default: Option<bool>) {
+    if table.is_empty() {
+        return;
+    }
+    if let Some(enabled) = default {
+        table.entry("enabled").or_insert(Value::Boolean(enabled));
+    }
+    collectors.insert(name.into(), table.into());
 }
 
 impl NicoHealthSettings {
-    /// Emit only explicitly selected groups, plus the existing SSE log defaults.
+    /// Build optional polling parameters shared by periodic mode and auto fallback.
+    fn native_periodic_logs(&self) -> Table {
+        let mut table = Table::new();
+        seconds(
+            &mut table,
+            "logs_collection_interval",
+            self.logs_collection_interval_seconds,
+        );
+        seconds(
+            &mut table,
+            "state_refresh_interval",
+            self.logs_state_refresh_interval_seconds,
+        );
+        set(
+            &mut table,
+            "skip_initial_history",
+            self.logs_skip_initial_history,
+        );
+        set(
+            &mut table,
+            "exclude_services",
+            self.logs_exclude_services.as_ref().map(|services| {
+                Value::Array(services.iter().cloned().map(Value::String).collect())
+            }),
+        );
+        table
+    }
+
+    /// Build NICo sections from flat fields, retaining the bundle's SSE default.
     pub(super) fn native_collectors(&self) -> Table {
         let mut collectors = Table::new();
-        if let Some(settings) = &self.discovery {
-            let mut table = Table::new();
-            seconds(
-                &mut table,
-                "refresh_interval",
-                settings.refresh_interval_seconds,
-            );
-            number(&mut table, "discovery_concurrency", settings.concurrency);
-            collectors.insert("discovery".into(), table.into());
-        }
-        if self.sensors.is_some() || self.sensor_fetch_interval_seconds.is_some() {
-            let settings = self.sensors.clone().unwrap_or_default();
-            let mut table = enabled(settings.enabled, true);
-            seconds(
-                &mut table,
-                "sensor_fetch_interval",
-                self.sensor_fetch_interval_seconds,
-            );
-            set(
-                &mut table,
-                "include_sensor_thresholds",
-                settings.include_sensor_thresholds,
-            );
-            collectors.insert("sensors".into(), table.into());
-        }
-        for (name, settings) in [("metrics", &self.metrics), ("telemetry", &self.telemetry)] {
-            if let Some(settings) = settings {
-                let mut table = enabled(settings.enabled, false);
-                seconds(
-                    &mut table,
-                    "fetch_interval",
-                    settings.fetch_interval_seconds,
-                );
-                collectors.insert(name.into(), table.into());
-            }
-        }
-        if let Some(settings) = &self.firmware {
-            let mut table = enabled(settings.enabled, false);
-            seconds(
-                &mut table,
-                "firmware_refresh_interval",
-                settings.refresh_interval_seconds,
-            );
-            collectors.insert("firmware".into(), table.into());
-        }
-        if let Some(settings) = &self.manager {
-            let mut table = enabled(settings.enabled, true);
-            seconds(&mut table, "poll_interval", settings.poll_interval_seconds);
-            collectors.insert("manager".into(), table.into());
-        }
-        if let Some(settings) = &self.leak_detector {
-            let mut table = enabled(settings.enabled, true);
-            seconds(&mut table, "poll_interval", settings.poll_interval_seconds);
-            seconds(
-                &mut table,
-                "state_refresh_interval",
-                settings.state_refresh_interval_seconds,
-            );
-            collectors.insert("leak_detector".into(), table.into());
-        }
-        if let Some(settings) = &self.reachability {
-            let mut table = enabled(settings.enabled, false);
-            seconds(&mut table, "interval", settings.interval_seconds);
-            seconds(&mut table, "timeout", settings.timeout_seconds);
-            set(
-                &mut table,
-                "log_mode",
-                settings.log_mode.map(|mode| match mode {
-                    NicoReachabilityLogMode::All => "all",
-                    NicoReachabilityLogMode::Unreachable => "unreachable",
-                }),
-            );
-            collectors.insert("reachability".into(), table.into());
-        }
-        let settings = self.logs.clone().unwrap_or_default();
-        let mut logs = enabled(settings.enabled, true);
-        let mode = settings.mode.unwrap_or(NicoLogMode::Sse);
+        let mut table = Table::new();
+        seconds(
+            &mut table,
+            "refresh_interval",
+            self.discovery_refresh_interval_seconds,
+        );
+        number(
+            &mut table,
+            "discovery_concurrency",
+            self.discovery_concurrency,
+        );
+        add_group(&mut collectors, "discovery", table, None);
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.sensors_enabled);
+        seconds(
+            &mut table,
+            "sensor_fetch_interval",
+            self.sensor_fetch_interval_seconds,
+        );
+        set(
+            &mut table,
+            "include_sensor_thresholds",
+            self.include_sensor_thresholds,
+        );
+        add_group(&mut collectors, "sensors", table, Some(true));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.metrics_enabled);
+        seconds(
+            &mut table,
+            "fetch_interval",
+            self.metrics_fetch_interval_seconds,
+        );
+        add_group(&mut collectors, "metrics", table, Some(false));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.telemetry_enabled);
+        seconds(
+            &mut table,
+            "fetch_interval",
+            self.telemetry_fetch_interval_seconds,
+        );
+        add_group(&mut collectors, "telemetry", table, Some(false));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.firmware_enabled);
+        seconds(
+            &mut table,
+            "firmware_refresh_interval",
+            self.firmware_refresh_interval_seconds,
+        );
+        add_group(&mut collectors, "firmware", table, Some(false));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.manager_enabled);
+        seconds(
+            &mut table,
+            "poll_interval",
+            self.manager_poll_interval_seconds,
+        );
+        add_group(&mut collectors, "manager", table, Some(true));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.leak_detector_enabled);
+        seconds(
+            &mut table,
+            "poll_interval",
+            self.leak_detector_poll_interval_seconds,
+        );
+        seconds(
+            &mut table,
+            "state_refresh_interval",
+            self.leak_detector_state_refresh_interval_seconds,
+        );
+        add_group(&mut collectors, "leak_detector", table, Some(true));
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.reachability_enabled);
+        seconds(&mut table, "interval", self.reachability_interval_seconds);
+        seconds(&mut table, "timeout", self.reachability_timeout_seconds);
+        set(
+            &mut table,
+            "log_mode",
+            self.reachability_log_mode.map(|mode| match mode {
+                NicoReachabilityLogMode::All => "all",
+                NicoReachabilityLogMode::Unreachable => "unreachable",
+            }),
+        );
+        add_group(&mut collectors, "reachability", table, Some(false));
+        let mut logs = Table::new();
+        logs.insert(
+            "enabled".into(),
+            Value::Boolean(self.logs_enabled.unwrap_or(true)),
+        );
+        let mode = self.logs_mode.unwrap_or(NicoLogMode::Sse);
         logs.insert(
             "mode".into(),
             Value::String(
@@ -151,66 +166,72 @@ impl NicoHealthSettings {
                 .into(),
             ),
         );
-        if let Some(sse) = &settings.sse {
-            let mut table = Table::new();
-            seconds(&mut table, "initial_backoff", sse.initial_backoff_seconds);
-            seconds(&mut table, "max_backoff", sse.max_backoff_seconds);
-            logs.insert("sse".into(), table.into());
+        let mut sse = Table::new();
+        seconds(
+            &mut sse,
+            "initial_backoff",
+            self.logs_sse_initial_backoff_seconds,
+        );
+        seconds(&mut sse, "max_backoff", self.logs_sse_max_backoff_seconds);
+        if !sse.is_empty() {
+            logs.insert("sse".into(), sse.into());
         }
-        let periodic = settings.periodic.as_ref().map(periodic_logs);
-        if periodic.is_some() || matches!(mode, NicoLogMode::Periodic) {
-            logs.insert(
-                "periodic".into(),
-                periodic.clone().unwrap_or_default().into(),
-            );
+        let periodic = self.native_periodic_logs();
+        if !periodic.is_empty() || matches!(mode, NicoLogMode::Periodic) {
+            logs.insert("periodic".into(), periodic.clone().into());
         }
-        if let Some(auto) = &settings.auto {
-            // NICo prefers the auto table's flattened polling settings over the
-            // periodic table. Copy explicit polling overrides to both paths.
-            let mut table = periodic.unwrap_or_default();
-            number(
-                &mut table,
-                "sse_not_available_threshold",
-                auto.sse_not_available_threshold,
-            );
-            seconds(
-                &mut table,
-                "connect_failure_window",
-                auto.connect_failure_window_seconds,
-            );
-            number(
-                &mut table,
-                "connect_failure_threshold",
-                auto.connect_failure_threshold,
-            );
-            set(
-                &mut table,
-                "retry_sse_after_downgrade",
-                auto.retry_sse_after_downgrade,
-            );
-            logs.insert("auto".into(), table.into());
+        let mut auto = Table::new();
+        number(
+            &mut auto,
+            "sse_not_available_threshold",
+            self.logs_auto_sse_not_available_threshold,
+        );
+        seconds(
+            &mut auto,
+            "connect_failure_window",
+            self.logs_auto_connect_failure_window_seconds,
+        );
+        number(
+            &mut auto,
+            "connect_failure_threshold",
+            self.logs_auto_connect_failure_threshold,
+        );
+        set(
+            &mut auto,
+            "retry_sse_after_downgrade",
+            self.logs_auto_retry_sse_after_downgrade,
+        );
+        if !auto.is_empty() {
+            // NICo prefers the auto table's flattened polling parameters, so
+            // carry the same explicit polling controls into its fallback path.
+            auto.extend(periodic);
+            logs.insert("auto".into(), auto.into());
         }
         collectors.insert("logs".into(), logs.into());
         collectors
     }
 
-    /// Interval limiter controls iterations, independently of per-BMC operation slots.
+    /// The global limiter admits iterations independently of per-BMC operation slots.
     pub(super) fn native_rate_limit(&self) -> Option<Table> {
-        let settings = self.rate_limit.as_ref()?;
-        let mut table = enabled(settings.enabled, false);
-        number(&mut table, "bucket_burst", settings.bucket_burst);
+        let mut table = Table::new();
+        set(&mut table, "enabled", self.rate_limit_enabled);
+        number(&mut table, "bucket_burst", self.rate_limit_bucket_burst);
         set(
             &mut table,
             "bucket_replenish",
-            settings
-                .bucket_replenish_milliseconds
+            self.rate_limit_bucket_replenish_milliseconds
                 .map(|n| format!("{n}ms")),
         );
         set(
             &mut table,
             "max_jitter",
-            settings.max_jitter_milliseconds.map(|n| format!("{n}ms")),
+            self.rate_limit_max_jitter_milliseconds
+                .map(|n| format!("{n}ms")),
         );
+        if table.is_empty() {
+            return None;
+        }
+        table.entry("enabled").or_insert(Value::Boolean(false));
         Some(table)
     }
 }
@@ -295,20 +316,13 @@ max_jitter = "0ms"
     fn tuning_alone_preserves_each_collector_enablement() {
         let settings: NicoHealthSettings = toml::from_str(
             r#"
-[metrics]
-fetch_interval_seconds = 180
-[telemetry]
-fetch_interval_seconds = 90
-[firmware]
-refresh_interval_seconds = 14400
-[reachability]
-interval_seconds = 60
-[manager]
-poll_interval_seconds = 600
-[leak_detector]
-poll_interval_seconds = 120
-[rate_limit]
-bucket_burst = 50
+metrics_fetch_interval_seconds = 180
+telemetry_fetch_interval_seconds = 90
+firmware_refresh_interval_seconds = 14400
+manager_poll_interval_seconds = 600
+leak_detector_poll_interval_seconds = 120
+reachability_interval_seconds = 60
+rate_limit_bucket_burst = 50
 "#,
         )
         .unwrap();
@@ -327,11 +341,11 @@ bucket_burst = 50
 
     #[test]
     fn periodic_mode_generates_required_settings_without_extra_overrides() {
-        let settings: NicoHealthSettings = toml::from_str("[logs]\nmode = 'periodic'").unwrap();
+        let settings: NicoHealthSettings = toml::from_str("logs_mode = 'periodic'").unwrap();
         let collectors = settings.native_collectors();
         assert_eq!(collectors["logs"]["periodic"].as_table().unwrap().len(), 0);
         assert!(collectors["logs"].get("sse").is_none());
-        let settings: NicoHealthSettings = toml::from_str("[logs]\nenabled = false").unwrap();
+        let settings: NicoHealthSettings = toml::from_str("logs_enabled = false").unwrap();
         assert_eq!(
             settings.native_collectors()["logs"]["enabled"].as_bool(),
             Some(false)

@@ -8,7 +8,8 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
+/// Flat NICo controls shared by Helm/native configuration and backend reporting.
+/// Omitted fields preserve existing behavior.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct NicoHealthSettings {
@@ -19,169 +20,75 @@ pub struct NicoHealthSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_discovery_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub discovery: Option<NicoDiscoverySettings>,
+    pub discovery_refresh_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sensors: Option<NicoSensorSettings>,
+    pub discovery_concurrency: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<NicoFetchSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub telemetry: Option<NicoFetchSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub firmware: Option<NicoFirmwareSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manager: Option<NicoPollSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub leak_detector: Option<NicoLeakDetectorSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logs: Option<NicoLogSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reachability: Option<NicoReachabilitySettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rate_limit: Option<NicoRateLimitSettings>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoDiscoverySettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_interval_seconds: Option<NonZeroU32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub concurrency: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoSensorSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub sensors_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_sensor_thresholds: Option<bool>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoFetchSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub metrics_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fetch_interval_seconds: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoFirmwareSettings {
+    pub metrics_fetch_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub telemetry_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_interval_seconds: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoPollSettings {
+    pub telemetry_fetch_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub firmware_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub poll_interval_seconds: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoLeakDetectorSettings {
+    pub firmware_refresh_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub manager_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub poll_interval_seconds: Option<NonZeroU32>,
+    pub manager_poll_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub state_refresh_interval_seconds: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoLogSettings {
+    pub leak_detector_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub leak_detector_poll_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<NicoLogMode>,
+    pub leak_detector_state_refresh_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sse: Option<NicoSseSettings>,
+    pub logs_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub periodic: Option<NicoPeriodicLogSettings>,
+    pub logs_mode: Option<NicoLogMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto: Option<NicoAutoLogSettings>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoSseSettings {
+    pub logs_sse_initial_backoff_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_backoff_seconds: Option<NonZeroU32>,
+    pub logs_sse_max_backoff_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_backoff_seconds: Option<NonZeroU32>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoPeriodicLogSettings {
+    pub logs_collection_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub collection_interval_seconds: Option<NonZeroU32>,
+    pub logs_state_refresh_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub state_refresh_interval_seconds: Option<NonZeroU32>,
+    pub logs_exclude_services: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclude_services: Option<Vec<String>>,
+    pub logs_skip_initial_history: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub skip_initial_history: Option<bool>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoAutoLogSettings {
+    pub logs_auto_sse_not_available_threshold: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sse_not_available_threshold: Option<NonZeroU32>,
+    pub logs_auto_connect_failure_window_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connect_failure_window_seconds: Option<NonZeroU32>,
+    pub logs_auto_connect_failure_threshold: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connect_failure_threshold: Option<NonZeroU32>,
+    pub logs_auto_retry_sse_after_downgrade: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_sse_after_downgrade: Option<bool>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoReachabilitySettings {
+    pub reachability_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub reachability_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interval_seconds: Option<NonZeroU32>,
+    pub reachability_timeout_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<NonZeroU32>,
+    pub reachability_log_mode: Option<NicoReachabilityLogMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub log_mode: Option<NicoReachabilityLogMode>,
-}
-
-/// Explicit overrides; omitted fields retain the existing NICo behavior.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct NicoRateLimitSettings {
+    pub rate_limit_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub rate_limit_bucket_burst: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bucket_burst: Option<NonZeroU32>,
+    pub rate_limit_bucket_replenish_milliseconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bucket_replenish_milliseconds: Option<NonZeroU32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_jitter_milliseconds: Option<u32>,
+    pub rate_limit_max_jitter_milliseconds: Option<u32>,
 }
 
 /// Supported NICo collection mode.
@@ -211,14 +118,14 @@ impl NicoHealthSettings {
                 "nico_health.bmc_request_concurrency exceeds NICo's semaphore limit".into(),
             );
         }
-        if let Some(sse) = self.logs.as_ref().and_then(|logs| logs.sse.as_ref())
-            && sse.max_backoff_seconds.map_or(30, NonZeroU32::get)
-                < sse.initial_backoff_seconds.map_or(1, NonZeroU32::get)
+        if self
+            .logs_sse_max_backoff_seconds
+            .map_or(30, NonZeroU32::get)
+            < self
+                .logs_sse_initial_backoff_seconds
+                .map_or(1, NonZeroU32::get)
         {
-            return Err(
-                "nico_health.logs.sse.max_backoff_seconds must be at least initial_backoff_seconds"
-                    .into(),
-            );
+            return Err("nico_health.logs_sse_max_backoff_seconds must be at least logs_sse_initial_backoff_seconds".into());
         }
         Ok(())
     }
@@ -229,20 +136,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reject_invalid_nested_types_values_modes_and_unknown_fields() {
+    fn reject_invalid_flat_types_values_modes_and_unknown_fields() {
         for input in [
-            "[leak_detector]\npoll_interval_seconds = 0",
-            "[discovery]\nconcurrency = -1",
-            "[logs.sse]\nmax_backoff_seconds = 4294967296",
-            "[metrics]\nenabled = 'false'",
-            "[logs]\nmode = 'invalid'",
-            "[logs.auto]\nconnect_failure_threshold = 0",
-            "[reachability]\nlog_mode = 'invalid'",
-            "[reachability]\ntimeout_seconds = 1.5",
-            "[rate_limit]\nmax_jitter_milliseconds = -1",
-            "[logs.periodic]\nexclude_services = [false]",
-            "[leak_detector]\npoll_intervl_seconds = 60",
-            "[logs.sse]\npassword = 'never-report-this'",
+            "leak_detector_poll_interval_seconds = 0",
+            "discovery_concurrency = -1",
+            "logs_sse_max_backoff_seconds = 4294967296",
+            "metrics_enabled = 'false'",
+            "logs_mode = 'invalid'",
+            "logs_auto_connect_failure_threshold = 0",
+            "reachability_log_mode = 'invalid'",
+            "reachability_timeout_seconds = 1.5",
+            "rate_limit_max_jitter_milliseconds = -1",
+            "logs_exclude_services = [false]",
+            "leak_detector_poll_intervl_seconds = 60",
+            "password = 'never-report-this'",
         ] {
             assert!(
                 toml::from_str::<NicoHealthSettings>(input).is_err(),
@@ -250,8 +157,8 @@ mod tests {
             );
         }
         for input in [
-            "[logs.sse]\ninitial_backoff_seconds = 31",
-            "[logs.sse]\ninitial_backoff_seconds = 10\nmax_backoff_seconds = 9",
+            "logs_sse_initial_backoff_seconds = 31",
+            "logs_sse_initial_backoff_seconds = 10\nlogs_sse_max_backoff_seconds = 9",
         ] {
             let settings: NicoHealthSettings = toml::from_str(input).unwrap();
             assert!(settings.validate().is_err());
@@ -259,20 +166,17 @@ mod tests {
     }
 
     #[test]
-    fn nested_reports_preserve_explicit_false_zero_and_empty_arrays() {
+    fn flat_reports_preserve_explicit_false_zero_and_empty_arrays() {
         let settings: NicoHealthSettings = toml::from_str(include_str!(
             "../../tests/fixtures/nico-health-settings.toml"
         ))
         .unwrap();
         let json = serde_json::to_value(settings).unwrap();
-        assert_eq!(json["leakDetector"]["enabled"], false);
-        assert_eq!(
-            json["logs"]["periodic"]["excludeServices"],
-            serde_json::json!([])
-        );
-        assert_eq!(json["rateLimit"]["maxJitterMilliseconds"], 0);
-        assert_eq!(json["discovery"]["refreshIntervalSeconds"], 600);
-        assert_eq!(json["logs"]["auto"]["retrySseAfterDowngrade"], false);
+        assert_eq!(json["leakDetectorEnabled"], false);
+        assert_eq!(json["logsExcludeServices"], serde_json::json!([]));
+        assert_eq!(json["rateLimitMaxJitterMilliseconds"], 0);
+        assert_eq!(json["discoveryRefreshIntervalSeconds"], 600);
+        assert_eq!(json["logsAutoRetrySseAfterDowngrade"], false);
         assert_eq!(
             serde_json::to_value(NicoHealthSettings::default()).unwrap(),
             serde_json::json!({})

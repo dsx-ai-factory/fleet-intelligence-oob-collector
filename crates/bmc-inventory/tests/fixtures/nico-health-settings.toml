@@ -3,52 +3,38 @@
 sensor_fetch_interval_seconds = 120
 bmc_request_concurrency = 2
 endpoint_discovery_interval_seconds = 240
-
-[discovery]
-refresh_interval_seconds = 600
-concurrency = 8
-[sensors]
-enabled = false
+discovery_refresh_interval_seconds = 600
+discovery_concurrency = 8
+sensors_enabled = false
 include_sensor_thresholds = false
-[metrics]
-enabled = true
-fetch_interval_seconds = 180
-[telemetry]
-enabled = true
-fetch_interval_seconds = 90
-[firmware]
-enabled = true
-refresh_interval_seconds = 14400
-[manager]
-enabled = false
-poll_interval_seconds = 600
-[leak_detector]
-enabled = false
-poll_interval_seconds = 120
-state_refresh_interval_seconds = 3600
-[logs]
-enabled = true
-mode = "auto"
-[logs.sse]
-initial_backoff_seconds = 2
-max_backoff_seconds = 60
-[logs.periodic]
-collection_interval_seconds = 600
-state_refresh_interval_seconds = 3600
-exclude_services = []
-skip_initial_history = true
-[logs.auto]
-sse_not_available_threshold = 2
-connect_failure_window_seconds = 600
-connect_failure_threshold = 8
-retry_sse_after_downgrade = false
-[reachability]
-enabled = true
-interval_seconds = 60
-timeout_seconds = 2
-log_mode = "all"
-[rate_limit]
-enabled = true
-bucket_burst = 50
-bucket_replenish_milliseconds = 100
-max_jitter_milliseconds = 0
+metrics_enabled = true
+metrics_fetch_interval_seconds = 180
+telemetry_enabled = true
+telemetry_fetch_interval_seconds = 90
+firmware_enabled = true
+firmware_refresh_interval_seconds = 14400
+manager_enabled = false
+manager_poll_interval_seconds = 600
+leak_detector_enabled = false
+leak_detector_poll_interval_seconds = 120
+leak_detector_state_refresh_interval_seconds = 3600
+logs_enabled = true
+logs_mode = "auto"
+logs_sse_initial_backoff_seconds = 2
+logs_sse_max_backoff_seconds = 60
+logs_collection_interval_seconds = 600
+logs_state_refresh_interval_seconds = 3600
+logs_exclude_services = []
+logs_skip_initial_history = true
+logs_auto_sse_not_available_threshold = 2
+logs_auto_connect_failure_window_seconds = 600
+logs_auto_connect_failure_threshold = 8
+logs_auto_retry_sse_after_downgrade = false
+reachability_enabled = true
+reachability_interval_seconds = 60
+reachability_timeout_seconds = 2
+reachability_log_mode = "all"
+rate_limit_enabled = true
+rate_limit_bucket_burst = 50
+rate_limit_bucket_replenish_milliseconds = 100
+rate_limit_max_jitter_milliseconds = 0

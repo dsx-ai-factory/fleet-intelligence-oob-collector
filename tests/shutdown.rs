@@ -168,17 +168,21 @@ async fn inventory_reports_nico_overrides_from_each_configuration_snapshot() {
         if let Some(interval) = interval {
             assert!(body.contains(&format!(r#""sensorFetchIntervalSeconds":{interval}"#)));
             assert!(body.contains(r#""bmcRequestConcurrency":2"#));
-            assert!(body.contains(r#""leakDetector":{"enabled":false,"pollIntervalSeconds":180}"#));
-            assert!(body.contains(r#""logs":{"mode":"sse","sse":{"maxBackoffSeconds":60}}"#));
+            assert!(
+                body.contains(
+                    r#""leakDetectorEnabled":false,"leakDetectorPollIntervalSeconds":180"#
+                )
+            );
+            assert!(body.contains(r#""logsMode":"sse","logsSseMaxBackoffSeconds":60"#));
         } else {
             assert!(!body.contains("sensorFetchIntervalSeconds"));
             assert!(!body.contains("bmcRequestConcurrency"));
-            assert!(!body.contains("leakDetector"));
-            assert!(!body.contains("maxBackoffSeconds"));
+            assert!(!body.contains("leakDetectorEnabled"));
+            assert!(!body.contains("logsSseMaxBackoffSeconds"));
         }
         let next = if interval.is_none() {
             format!(
-                "[nico_health]\nsensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2\n[nico_health.leak_detector]\nenabled = false\npoll_interval_seconds = 180\n[nico_health.logs]\nmode = 'sse'\n[nico_health.logs.sse]\nmax_backoff_seconds = 60\n{original}"
+                "[nico_health]\nsensor_fetch_interval_seconds = 120\nbmc_request_concurrency = 2\nleak_detector_enabled = false\nleak_detector_poll_interval_seconds = 180\nlogs_mode = 'sse'\nlogs_sse_max_backoff_seconds = 60\n{original}"
             )
         } else {
             original.clone()
