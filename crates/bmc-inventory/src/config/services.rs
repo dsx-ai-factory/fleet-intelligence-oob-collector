@@ -18,10 +18,6 @@ pub struct NicoHealthSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bmc_request_concurrency: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bmc_latency_metrics_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bmc_latency_attributes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_discovery_interval_seconds: Option<NonZeroU32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovery_refresh_interval_seconds: Option<NonZeroU32>,
@@ -124,28 +120,6 @@ impl NicoHealthSettings {
         {
             return Err("nico_health.logs_sse_max_backoff_seconds must be at least logs_sse_initial_backoff_seconds".into());
         }
-        if let Some(attributes) = &self.bmc_latency_attributes {
-            const ALLOWED: &[&str] = &[
-                "all",
-                "http_response_status_code",
-                "http_request_method",
-                "http_path",
-                "server_address",
-                "url_scheme",
-                "bmc_vendor",
-                "bmc_model",
-                "entity_type",
-                "machine_id",
-                "rack_id",
-            ];
-            if attributes.is_empty()
-                || attributes
-                    .iter()
-                    .any(|attribute| !ALLOWED.contains(&attribute.as_str()))
-            {
-                return Err("nico_health.bmc_latency_attributes must contain at least one supported BMC latency attribute".into());
-            }
-        }
         Ok(())
     }
 }
@@ -161,8 +135,6 @@ mod tests {
             "discovery_concurrency = -1",
             "logs_sse_max_backoff_seconds = 4294967296",
             "metrics_enabled = 'false'",
-            "bmc_latency_metrics_enabled = 'true'",
-            "bmc_latency_attributes = [false]",
             "logs_mode = 'invalid'",
             "logs_auto_connect_failure_threshold = 0",
             "reachability_log_mode = 'invalid'",
@@ -180,10 +152,6 @@ mod tests {
         for input in [
             "logs_sse_initial_backoff_seconds = 31",
             "logs_sse_initial_backoff_seconds = 10\nlogs_sse_max_backoff_seconds = 9",
-            "bmc_latency_attributes = []",
-            "bmc_latency_metrics_enabled = false\nbmc_latency_attributes = []",
-            "bmc_latency_attributes = ['unsupported']",
-            "bmc_latency_attributes = ['all', 'unsupported']",
         ] {
             let settings: NicoHealthSettings = toml::from_str(input).unwrap();
             assert!(settings.validate().is_err());
@@ -198,7 +166,6 @@ mod tests {
         .unwrap();
         let json = serde_json::to_value(settings).unwrap();
         assert_eq!(json["leakDetectorEnabled"], false);
-        assert_eq!(json["bmcLatencyMetricsEnabled"], false);
         assert_eq!(json["logsExcludeServices"], serde_json::json!([]));
         assert_eq!(json["rateLimitMaxJitterMilliseconds"], 0);
         assert_eq!(json["discoveryRefreshIntervalSeconds"], 600);

@@ -106,8 +106,6 @@ pub fn render_nico_config(
         metrics: NicoMetrics {
             endpoint: metrics_endpoint,
             prefix: metrics_prefix,
-            enable_bmc_latency_metrics: config.nico_health.bmc_latency_metrics_enabled,
-            bmc_latency_attributes: config.nico_health.bmc_latency_attributes.as_deref(),
         },
     };
 
@@ -211,10 +209,6 @@ struct NicoOtlpTarget<'a> {
 struct NicoMetrics<'a> {
     endpoint: &'a str,
     prefix: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    enable_bmc_latency_metrics: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bmc_latency_attributes: Option<&'a [String]>,
 }
 
 #[cfg(test)]
@@ -301,12 +295,6 @@ mod tests {
         );
         assert!(rendered.get("bmc_request_concurrency").is_none());
         assert!(rendered["collectors"].get("sensors").is_none());
-        assert!(
-            rendered["metrics"]
-                .get("enable_bmc_latency_metrics")
-                .is_none()
-        );
-        assert!(rendered["metrics"].get("bmc_latency_attributes").is_none());
     }
 
     #[test]
@@ -321,22 +309,6 @@ mod tests {
         let native: toml::Value = toml::from_str(&native).unwrap();
         assert_eq!(native["endpoint_discovery_interval"].as_str(), Some("240s"));
         assert_eq!(native["bmc_request_concurrency"].as_integer(), Some(2));
-        assert_eq!(
-            native["metrics"]["enable_bmc_latency_metrics"].as_bool(),
-            Some(false)
-        );
-        assert_eq!(
-            native["metrics"]["bmc_latency_attributes"]
-                .as_array()
-                .unwrap(),
-            &[
-                "server_address",
-                "http_path",
-                "http_request_method",
-                "http_response_status_code"
-            ]
-            .map(toml::Value::from),
-        );
         assert_eq!(
             native["rate_limit"]["bucket_replenish"].as_str(),
             Some("100ms")
@@ -354,55 +326,6 @@ mod tests {
                 .get("endpoint_discovery_interval")
                 .is_none()
         );
-    }
-
-    #[test]
-    fn renders_latency_instrumentation_independently_of_entity_metrics() {
-        for enabled in [None, Some(false), Some(true)] {
-            for attributes in [
-                None,
-                Some(vec!["all".to_string()]),
-                Some(vec!["server_address".to_string()]),
-            ] {
-                let mut collector = parse_test_config(
-                    "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'",
-                    "test.toml",
-                ).unwrap();
-                collector.nico_health.bmc_latency_metrics_enabled = enabled;
-                collector.nico_health.bmc_latency_attributes = attributes.clone();
-                let rendered =
-                    render_nico_config(&collector, &NicoConfigOptions::default()).unwrap();
-                let native: toml::Value = toml::from_str(&rendered).unwrap();
-                assert_eq!(
-                    native["metrics"]
-                        .get("enable_bmc_latency_metrics")
-                        .and_then(toml::Value::as_bool),
-                    enabled
-                );
-                assert_eq!(
-                    native["metrics"].get("bmc_latency_attributes"),
-                    attributes
-                        .as_ref()
-                        .map(|values| toml::Value::try_from(values).unwrap())
-                        .as_ref(),
-                );
-                assert!(native["collectors"].get("metrics").is_none());
-                let report = serde_json::to_value(&collector.nico_health).unwrap();
-                assert_eq!(
-                    report
-                        .get("bmcLatencyMetricsEnabled")
-                        .and_then(serde_json::Value::as_bool),
-                    enabled
-                );
-                assert_eq!(
-                    report.get("bmcLatencyAttributes"),
-                    attributes
-                        .as_ref()
-                        .map(|values| serde_json::json!(values))
-                        .as_ref()
-                );
-            }
-        }
     }
 
     #[test]

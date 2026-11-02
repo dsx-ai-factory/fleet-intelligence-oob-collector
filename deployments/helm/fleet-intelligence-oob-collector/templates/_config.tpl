@@ -23,8 +23,6 @@ file = "/run/secrets/bmc/credentials.json"
 {{- range $key := list
     "sensorFetchIntervalSeconds"
     "bmcRequestConcurrency"
-    "bmcLatencyMetricsEnabled"
-    "bmcLatencyAttributes"
     "endpointDiscoveryIntervalSeconds"
     "discoveryRefreshIntervalSeconds"
     "discoveryConcurrency"

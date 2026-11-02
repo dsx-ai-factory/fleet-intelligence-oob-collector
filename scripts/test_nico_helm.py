@@ -73,11 +73,6 @@ class NicoHelmTests(unittest.TestCase):
         """Reject invalid flat settings and roll NICo after a flat control edit."""
         for key, value in [
             ("leakDetectorEnabled", "false"),
-            ("bmcLatencyMetricsEnabled", "true"),
-            ("bmcLatencyAttributes", []),
-            ("bmcLatencyAttributes", [False]),
-            ("bmcLatencyAttributes", ["unsupported"]),
-            ("bmcLatencyAttributes", ["all", "unsupported"]),
             ("leakDetectorPollIntervalSeconds", 0),
             ("logsMode", "unsupported"),
             ("logsSseInitialBackoffSeconds", -1),
@@ -109,33 +104,6 @@ class NicoHelmTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             checksums.append(re.search(r"checksum/config: ([0-9a-f]{64})", result.stdout)[1])
         self.assertEqual(len(set(checksums)), 3)
-
-    def test_latency_metrics_preserve_optional_values_and_trigger_rollout(self):
-        """Keep latency instrumentation separate from entity-metric collection."""
-        checksums = []
-        for settings in [
-            {},
-            {"bmcLatencyMetricsEnabled": False},
-            {"bmcLatencyMetricsEnabled": True},
-            {"bmcLatencyAttributes": ["all"]},
-            {"bmcLatencyMetricsEnabled": True, "bmcLatencyAttributes": ["server_address", "http_path"]},
-        ]:
-            with self.subTest(settings=settings):
-                result = render(settings)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
-                nico = config.get("nico_health", {})
-                for key in ["bmcLatencyMetricsEnabled", "bmcLatencyAttributes"]:
-                    native_key = re.sub(r"_?([A-Z])", lambda match: "_" + match[1].lower(), key)
-                    if key in settings:
-                        self.assertEqual(nico[native_key], settings[key])
-                    else:
-                        self.assertNotIn(native_key, nico)
-                self.assertNotIn("metrics_enabled", nico)
-                result = render(settings, "nico-hardware-health-deployment.yaml")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                checksums.append(re.search(r"checksum/config: ([0-9a-f]{64})", result.stdout)[1])
-        self.assertEqual(len(set(checksums)), len(checksums))
 
     def test_collection_settings_are_separate_from_workload_settings(self):
         """Validate both boundaries and preserve component reporting metadata."""

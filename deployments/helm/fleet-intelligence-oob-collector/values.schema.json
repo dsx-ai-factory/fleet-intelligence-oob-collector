@@ -154,8 +154,6 @@
             "endpointDiscoveryIntervalSeconds": {"type": ["integer", "null"], "minimum": 1, "maximum": 4294967295},
             "discoveryRefreshIntervalSeconds": {"type": ["integer", "null"], "minimum": 1, "maximum": 4294967295},
             "discoveryConcurrency": {"type": ["integer", "null"], "minimum": 1, "maximum": 4294967295},
-            "bmcLatencyMetricsEnabled": {"type": ["boolean", "null"]},
-            "bmcLatencyAttributes": {"type": ["array", "null"], "minItems": 1, "items": {"type": "string", "enum": ["all", "http_response_status_code", "http_request_method", "http_path", "server_address", "url_scheme", "bmc_vendor", "bmc_model", "entity_type", "machine_id", "rack_id"]}},
             "sensorsEnabled": {"type": ["boolean", "null"]},
             "includeSensorThresholds": {"type": ["boolean", "null"]},
             "metricsEnabled": {"type": ["boolean", "null"]},

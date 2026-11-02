@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 sensor_fetch_interval_seconds = 120
 bmc_request_concurrency = 2
-bmc_latency_metrics_enabled = false
-bmc_latency_attributes = ["server_address", "http_path", "http_request_method", "http_response_status_code"]
 endpoint_discovery_interval_seconds = 240
 discovery_refresh_interval_seconds = 600
 discovery_concurrency = 8

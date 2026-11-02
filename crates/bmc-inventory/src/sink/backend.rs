@@ -566,7 +566,7 @@ mod tests {
         let value = serde_json::to_value(build_batch_upsert_request(&[], &config)).unwrap();
         let reported = &value["collector"]["config"]["nicoHealth"];
         assert_eq!(reported, &expected);
-        assert_eq!(reported.as_object().unwrap().len(), 43);
+        assert_eq!(reported.as_object().unwrap().len(), 41);
         for field in [
             "image",
             "resources",
