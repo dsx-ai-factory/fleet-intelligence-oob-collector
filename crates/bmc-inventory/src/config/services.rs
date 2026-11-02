@@ -100,7 +100,7 @@ pub enum NicoLogMode {
     Auto,
 }
 
-/// Supported NICo collection mode.
+/// Reachability probe logging mode.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NicoReachabilityLogMode {
@@ -111,13 +111,6 @@ pub enum NicoReachabilityLogMode {
 impl NicoHealthSettings {
     /// Validate cross-field constraints before rendering or reporting settings.
     pub(super) fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if let Some(concurrency) = self.bmc_request_concurrency
-            && u64::from(concurrency.get()) > tokio::sync::Semaphore::MAX_PERMITS as u64
-        {
-            return Err(
-                "nico_health.bmc_request_concurrency exceeds NICo's semaphore limit".into(),
-            );
-        }
         if self
             .logs_sse_max_backoff_seconds
             .map_or(30, NonZeroU32::get)

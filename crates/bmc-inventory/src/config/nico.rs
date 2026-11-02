@@ -402,28 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_nico_section_is_an_alias_and_conflicting_sections_fail() {
-        let suffix = "\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'";
-        let legacy = parse_test_config(
-            &format!("[nico]\nsensor_fetch_interval_seconds = 120{suffix}"),
-            "test.toml",
-        )
-        .unwrap();
-        assert_eq!(
-            legacy
-                .nico_health
-                .sensor_fetch_interval_seconds
-                .unwrap()
-                .get(),
-            120
-        );
-        assert!(parse_test_config(
-            &format!("[nico]\nsensor_fetch_interval_seconds = 120\n[nico_health]\nsensor_fetch_interval_seconds = 300{suffix}"),
-            "test.toml",
-        ).is_err());
-    }
-
-    #[test]
     fn renders_all_target_kinds_as_generic_static_endpoints() {
         let collector = parse_test_config(
             r#"

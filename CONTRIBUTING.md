@@ -141,7 +141,7 @@ logs_sse_max_backoff_seconds = 60
 
 Fields map to the camelCase names under `nicoHardwareHealth` in Helm. Integer controls accept positive values up to `4294967295`; `rate_limit_max_jitter_milliseconds` also accepts zero. Omit fields to retain existing behavior. Timing overrides alone preserve each collector's enabled state, and logs retain the bundle's SSE default. These values affect NICo only; see [NICo collection controls](docs/configuration.md#nico-collection-controls) for their behavior. Regenerate the NICo file and restart NICo after changing them.
 
-The shared `NicoHealthSettings` model drives both NICo configuration generation and the `collector.config.nicoHealth` backend report. Its TOML fields use snake_case and its reported JSON fields use camelCase. The `[nico]` section is accepted as an alias for `[nico_health]`; specifying both sections is rejected. Component enablement metadata remains explicit, and an unknown component is omitted from the report.
+The shared `NicoHealthSettings` model drives both NICo configuration generation and the `collector.config.nicoHealth` backend report. Its TOML fields use snake_case and its reported JSON fields use camelCase. Component enablement metadata remains explicit, and an unknown component is omitted from the report.
 
 ### CLI reference
 
