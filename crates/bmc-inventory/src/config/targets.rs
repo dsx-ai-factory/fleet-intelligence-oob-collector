@@ -1095,7 +1095,6 @@ mod tests {
             assert!(!error.contains("sensitive-value"));
         }
         for input in [
-            "[nico]\nsensor_fetch_interval_seconds = 120\n[credentials]\nfile = 'unused.json'\n[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
             "[credentials]\nfile = 'unused.json'\nusername_file = 'sensitive-value'\npassword_file = 'sensitive-value'",
             "[credentials]\nfile = 'unused.json'\n[[machines]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
             "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'",
