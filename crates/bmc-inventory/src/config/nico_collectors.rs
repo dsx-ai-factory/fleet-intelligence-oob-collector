@@ -70,7 +70,8 @@ impl NicoHealthSettings {
         seconds(
             &mut table,
             "refresh_interval",
-            self.discovery_refresh_interval_seconds,
+            self.discovery_refresh_interval_seconds
+                .or(NonZeroU32::new(3600)),
         );
         number(
             &mut table,
@@ -83,7 +84,7 @@ impl NicoHealthSettings {
         seconds(
             &mut table,
             "sensor_fetch_interval",
-            self.sensor_fetch_interval_seconds,
+            self.sensor_fetch_interval_seconds.or(NonZeroU32::new(60)),
         );
         set(
             &mut table,
@@ -138,7 +139,11 @@ impl NicoHealthSettings {
         add_group(&mut collectors, "leak_detector", table, Some(true));
         let mut table = Table::new();
         set(&mut table, "enabled", self.reachability_enabled);
-        seconds(&mut table, "interval", self.reachability_interval_seconds);
+        seconds(
+            &mut table,
+            "interval",
+            self.reachability_interval_seconds.or(NonZeroU32::new(60)),
+        );
         seconds(&mut table, "timeout", self.reachability_timeout_seconds);
         set(
             &mut table,
@@ -148,7 +153,7 @@ impl NicoHealthSettings {
                 NicoReachabilityLogMode::Unreachable => "unreachable",
             }),
         );
-        add_group(&mut collectors, "reachability", table, Some(false));
+        add_group(&mut collectors, "reachability", table, Some(true));
         let mut logs = Table::new();
         logs.insert(
             "enabled".into(),
@@ -327,10 +332,10 @@ rate_limit_bucket_burst = 50
         )
         .unwrap();
         let collectors = settings.native_collectors();
-        for name in ["metrics", "telemetry", "firmware", "reachability"] {
+        for name in ["metrics", "telemetry", "firmware"] {
             assert_eq!(collectors[name]["enabled"].as_bool(), Some(false), "{name}");
         }
-        for name in ["manager", "leak_detector", "logs"] {
+        for name in ["manager", "leak_detector", "logs", "reachability"] {
             assert_eq!(collectors[name]["enabled"].as_bool(), Some(true), "{name}");
         }
         assert_eq!(

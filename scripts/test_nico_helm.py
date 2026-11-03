@@ -14,15 +14,26 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "deployments/helm/fleet-intelligence-oob-collector"
+DEFAULT_NICO_SETTINGS = {
+    "bmc_request_concurrency": 2,
+    "sensor_fetch_interval_seconds": 60,
+    "discovery_refresh_interval_seconds": 3600,
+    "reachability_enabled": True,
+    "reachability_interval_seconds": 60,
+}
 
 
-def render(settings, template="configmap.yaml", workload=None):
+def render(settings, template="configmap.yaml", workload=None, *, use_ci_values=True):
     """Render one chart template with explicit NICo setting overrides."""
     command = [
         "helm", "template", "test", str(CHART),
-        "--values", str(CHART / "ci/test-values.yaml"),
         "--show-only", f"templates/{template}",
     ]
+    if use_ci_values:
+        command.extend(["--values", str(CHART / "ci/test-values.yaml")])
+    else:
+        targets = [{"address": "192.0.2.10", "mac": "02:00:00:00:00:01"}]
+        command.extend(["--set-json", f"inventory.targets={json.dumps(targets)}"])
     for key, value in settings.items():
         command.extend(["--set-json", f"nicoHardwareHealth.config.{key}={json.dumps(value)}"])
     for key, value in (workload or {}).items():
@@ -31,6 +42,15 @@ def render(settings, template="configmap.yaml", workload=None):
 
 
 class NicoHelmTests(unittest.TestCase):
+    def test_bundle_defaults_without_collection_overrides(self):
+        result = render({}, use_ci_values=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
+        self.assertEqual(config["nico_health"], DEFAULT_NICO_SETTINGS)
+        result = render({}, "bmc-collector-deployment.yaml", use_ci_values=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r'- --bmc-max-in-flight\s+- "2"')
+
     def test_optional_settings_render_as_top_level_toml(self):
         """Preserve independent overrides, defaults, and shared target configuration."""
         for interval, concurrency in [(None, None), (120, None), (None, 2), (300, 1), (4294967295, 4294967295)]:
@@ -42,7 +62,10 @@ class NicoHelmTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 contents = textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1])
                 config = tomllib.loads(contents)
-                expected = {}
+                expected = {
+                    key: value for key, value in DEFAULT_NICO_SETTINGS.items()
+                    if key not in ("sensor_fetch_interval_seconds", "bmc_request_concurrency")
+                }
                 if interval is not None:
                     expected["sensor_fetch_interval_seconds"] = interval
                 if concurrency is not None:
@@ -51,8 +74,6 @@ class NicoHelmTests(unittest.TestCase):
                 self.assertEqual(len(config["targets"]), 3)
                 self.assertEqual(config["targets"][0]["credentials_profile"], "bmc")
                 self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
-                if not expected:
-                    self.assertNotIn("nico_health", config)
 
     def test_all_flat_controls_preserve_names_values_and_placement(self):
         """Pass every typed setting through Helm, including false, zero, and []."""

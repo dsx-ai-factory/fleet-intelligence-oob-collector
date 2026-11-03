@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use serde::{Deserialize, Serialize};
 
 /// Flat NICo controls shared by Helm/native configuration and backend reporting.
-/// Omitted fields preserve existing behavior.
+/// Omitted fields use the bundle defaults when rendered and remain absent from reports.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
 pub struct NicoHealthSettings {

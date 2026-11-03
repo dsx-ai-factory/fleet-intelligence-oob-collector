@@ -177,13 +177,13 @@ NICo defaults to Redfish SSE log streaming. You can select periodic log polling 
 
 ### NICo collection controls
 
-Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omit a field or set it to `null` to retain the current behavior. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, reachability, and the iteration limiter require their corresponding `*Enabled: true` setting to start. Logs retain the bundle's SSE default.
+Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omitted or `null` settings use the defaults below, including on native installations without a `[nico_health]` section. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, and the iteration limiter require their corresponding `*Enabled: true` setting to start. TCP reachability checks are enabled by default; set `reachabilityEnabled: false` to disable them. Logs retain the bundle's SSE default.
 
 | Setting under `nicoHardwareHealth.config` | Default | Description |
 | --- | --- | --- |
-| `bmcRequestConcurrency` | `4` | Shared maximum concurrent Redfish operations per BMC. |
+| `bmcRequestConcurrency` | `2` | Shared maximum concurrent Redfish operations per BMC. |
 | `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
-| `discoveryRefreshIntervalSeconds` | `300` | Interval between Redfish entity-tree discovery iterations. |
+| `discoveryRefreshIntervalSeconds` | `3600` | Interval between Redfish entity-tree discovery iterations. |
 | `discoveryConcurrency` | `4` | Concurrent endpoint identity resolutions. |
 | `sensorFetchIntervalSeconds` | `60` | Interval between sensor fetch iterations. |
 | `sensorsEnabled` | `true` | Collect sensor readings. |
@@ -211,8 +211,8 @@ Set these optional values under `nicoHardwareHealth.config`. Workload settings s
 | `firmwareRefreshIntervalSeconds` | `7200` | Interval between firmware iterations. |
 | `managerEnabled` | `true` | Poll Manager status for NICo power-shelf endpoints. |
 | `managerPollIntervalSeconds` | `300` | Interval between eligible Manager polls. |
-| `reachabilityEnabled` | `false` | Probe eligible endpoint TCP ports. |
-| `reachabilityIntervalSeconds` | `30` | Interval between TCP probe cycles. |
+| `reachabilityEnabled` | `true` | Probe eligible endpoint TCP ports. |
+| `reachabilityIntervalSeconds` | `60` | Interval between TCP probe cycles. |
 | `reachabilityTimeoutSeconds` | `3` | Timeout for one TCP connection attempt. |
 | `reachabilityLogMode` | `unreachable` | Log failed probes (`unreachable`) or every probe (`all`). |
 | `rateLimitEnabled` | `false` | Enable NICo's global collector-iteration token bucket. |
@@ -245,13 +245,13 @@ Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` a
 | --- | --- | --- |
 | `bmcCollector.intervalSeconds` | `86400` | Wait time after one collection cycle ends before the next starts (24 hours). |
 | `bmcCollector.targetConcurrency` | `64` | Number of BMCs collected at the same time. |
-| `bmcCollector.redfish.maxInFlight` | `4` | Maximum simultaneous requests to one BMC. |
+| `bmcCollector.redfish.maxInFlight` | `2` | Maximum simultaneous requests to one BMC. |
 | `bmcCollector.redfish.requestsPerSecond` | `10` | Maximum request rate to one BMC. Short bursts up to the same number are allowed. |
 | `bmcCollector.redfish.timeoutSeconds` | `30` | Redfish request timeout. |
 | `bmcCollector.redfish.insecureTls` | `false` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
 | `bmcCollector.latencyProbe.enabled` | `true` | Measure network latency to each BMC. |
 
-These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. See [request limits](architecture.md#request-limits) for how they work together.
+These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. The two concurrency limits are independent, so inventory and NICo can each issue two requests to the same BMC at once with the defaults. See [request limits](architecture.md#request-limits) for how they work together.
 
 ## Workload settings
 

@@ -9,11 +9,14 @@ node_group = "gb200-training"
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 
-# Optional NICo collection controls; omit fields to retain NICo's defaults.
+# Optional NICo collection controls; omit fields to use the bundle defaults below.
 # [nico_health]
-# sensor_fetch_interval_seconds = 120
+# sensor_fetch_interval_seconds = 60
 # bmc_request_concurrency = 2
-# discovery_refresh_interval_seconds = 600
+# discovery_refresh_interval_seconds = 3600
+# reachability_enabled = true
+# reachability_interval_seconds = 60
+# Additional overrides:
 # leak_detector_enabled = false
 # logs_sse_initial_backoff_seconds = 2
 # logs_sse_max_backoff_seconds = 60

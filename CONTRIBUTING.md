@@ -145,7 +145,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 | --- | --- | --- |
 | `--config` | `config.toml` | Path to the collector TOML file. |
 | `--target-concurrency` | `64` | Number of BMCs collected at the same time. |
-| `--bmc-max-in-flight` | `4` | Maximum simultaneous Redfish requests to one BMC. |
+| `--bmc-max-in-flight` | `2` | Maximum simultaneous Redfish requests to one BMC. |
 | `--bmc-requests-per-second` | `10` | Maximum request rate to one BMC. |
 | `--bmc-burst` | `10` | Requests allowed in a short burst above that rate. Helm sets it equal to the request rate. |
 | `--timeout-seconds` | `30` | Redfish request timeout. |
