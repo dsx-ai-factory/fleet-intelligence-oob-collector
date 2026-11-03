@@ -309,6 +309,11 @@ mod tests {
         );
         assert_eq!(collectors["reachability"]["enabled"].as_bool(), Some(true));
         assert_eq!(collectors["reachability"]["interval"].as_str(), Some("60s"));
+        assert_eq!(collectors["logs"]["mode"].as_str(), Some("auto"));
+        assert_eq!(
+            collectors["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
@@ -321,6 +326,8 @@ mod tests {
             discovery_refresh_interval_seconds = 86400
             reachability_enabled = false
             reachability_interval_seconds = 90
+            logs_mode = "sse"
+            logs_auto_retry_sse_after_downgrade = false
 
             [[targets]]
             credentials_profile = "bmc"
@@ -344,6 +351,11 @@ mod tests {
         );
         assert_eq!(collectors["reachability"]["enabled"].as_bool(), Some(false));
         assert_eq!(collectors["reachability"]["interval"].as_str(), Some("90s"));
+        assert_eq!(collectors["logs"]["mode"].as_str(), Some("sse"));
+        assert_eq!(
+            collectors["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(false)
+        );
     }
 
     #[test]
@@ -415,7 +427,10 @@ mod tests {
                 Some(format!("{}s", interval.unwrap_or(60)).as_str())
             );
             assert!(sensors.get("include_sensor_thresholds").is_none());
-            assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
+            assert_eq!(
+                rendered["collectors"]["logs"]["mode"].as_str(),
+                Some("auto")
+            );
             assert_eq!(rendered["attributes"]["gpu_identity"].as_bool(), Some(true));
         }
     }
@@ -514,7 +529,14 @@ mod tests {
             rendered["collectors"]["logs"]["enabled"].as_bool(),
             Some(true)
         );
-        assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
+        assert_eq!(
+            rendered["collectors"]["logs"]["mode"].as_str(),
+            Some("auto")
+        );
+        assert_eq!(
+            rendered["collectors"]["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]

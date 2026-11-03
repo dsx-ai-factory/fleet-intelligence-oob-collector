@@ -14,6 +14,8 @@ file = "/run/secrets/bmc/credentials.json"
 # sensor_fetch_interval_seconds = 60
 # bmc_request_concurrency = 2
 # discovery_refresh_interval_seconds = 3600
+# logs_mode = "auto"
+# logs_auto_retry_sse_after_downgrade = true
 # reachability_enabled = true
 # reachability_interval_seconds = 60
 # Additional overrides:

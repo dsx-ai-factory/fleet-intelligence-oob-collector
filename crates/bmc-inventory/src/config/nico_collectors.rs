@@ -63,7 +63,7 @@ impl NicoHealthSettings {
         table
     }
 
-    /// Build NICo sections from flat fields, retaining the bundle's SSE default.
+    /// Build NICo sections from flat fields, defaulting to auto logs with SSE recovery.
     pub(super) fn native_collectors(&self) -> Table {
         let mut collectors = Table::new();
         let mut table = Table::new();
@@ -159,7 +159,7 @@ impl NicoHealthSettings {
             "enabled".into(),
             Value::Boolean(self.logs_enabled.unwrap_or(true)),
         );
-        let mode = self.logs_mode.unwrap_or(NicoLogMode::Sse);
+        let mode = self.logs_mode.unwrap_or(NicoLogMode::Auto);
         logs.insert(
             "mode".into(),
             Value::String(
@@ -204,7 +204,7 @@ impl NicoHealthSettings {
         set(
             &mut auto,
             "retry_sse_after_downgrade",
-            self.logs_auto_retry_sse_after_downgrade,
+            self.logs_auto_retry_sse_after_downgrade.or(Some(true)),
         );
         if !auto.is_empty() {
             // NICo prefers the auto table's flattened polling parameters, so
@@ -342,6 +342,25 @@ rate_limit_bucket_burst = 50
             settings.native_rate_limit().unwrap()["enabled"].as_bool(),
             Some(false)
         );
+    }
+
+    #[test]
+    fn log_mode_and_recovery_defaults_preserve_independent_overrides() {
+        for (input, mode, recovery) in [
+            ("", "auto", true),
+            ("logs_mode = 'sse'", "sse", true),
+            ("logs_mode = 'periodic'", "periodic", true),
+            ("logs_auto_retry_sse_after_downgrade = false", "auto", false),
+        ] {
+            let settings: NicoHealthSettings = toml::from_str(input).unwrap();
+            let collectors = settings.native_collectors();
+            assert_eq!(collectors["logs"]["mode"].as_str(), Some(mode), "{input}");
+            assert_eq!(
+                collectors["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+                Some(recovery),
+                "{input}"
+            );
+        }
     }
 
     #[test]

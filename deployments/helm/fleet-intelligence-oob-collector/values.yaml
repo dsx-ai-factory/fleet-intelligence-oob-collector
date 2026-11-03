@@ -89,7 +89,7 @@ nicoHardwareHealth:
     leakDetectorPollIntervalSeconds: null
     leakDetectorStateRefreshIntervalSeconds: null
     logsEnabled: null
-    logsMode: null
+    logsMode: auto
     logsSseInitialBackoffSeconds: null
     logsSseMaxBackoffSeconds: null
     logsCollectionIntervalSeconds: null
@@ -99,7 +99,7 @@ nicoHardwareHealth:
     logsAutoSseNotAvailableThreshold: null
     logsAutoConnectFailureWindowSeconds: null
     logsAutoConnectFailureThreshold: null
-    logsAutoRetrySseAfterDowngrade: null
+    logsAutoRetrySseAfterDowngrade: true
     reachabilityEnabled: true
     reachabilityIntervalSeconds: 60
     reachabilityTimeoutSeconds: null
@@ -118,7 +118,7 @@ nicoHardwareHealth:
   tolerations: []
   affinity: {}
   podAnnotations: {}
-  logLevel: info
+  logLevel: warn
 
 otelGateway:
   enabled: true

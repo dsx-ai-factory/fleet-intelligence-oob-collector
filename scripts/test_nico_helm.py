@@ -18,6 +18,8 @@ DEFAULT_NICO_SETTINGS = {
     "bmc_request_concurrency": 2,
     "sensor_fetch_interval_seconds": 60,
     "discovery_refresh_interval_seconds": 3600,
+    "logs_mode": "auto",
+    "logs_auto_retry_sse_after_downgrade": True,
     "reachability_enabled": True,
     "reachability_interval_seconds": 60,
 }
@@ -50,6 +52,10 @@ class NicoHelmTests(unittest.TestCase):
         result = render({}, "bmc-collector-deployment.yaml", use_ci_values=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stdout, r'- --bmc-max-in-flight\s+- "2"')
+        self.assertRegex(result.stdout, r'- name: FLEETINT_NICO_LOG_LEVEL\s+value: "warn"')
+        result = render({}, "nico-hardware-health-deployment.yaml", use_ci_values=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r'- name: RUST_LOG\s+value: "warn"')
 
     def test_optional_settings_render_as_top_level_toml(self):
         """Preserve independent overrides, defaults, and shared target configuration."""
@@ -90,6 +96,24 @@ class NicoHelmTests(unittest.TestCase):
         self.assertEqual(len(config["targets"]), 3)
         self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
 
+    def test_log_mode_and_recovery_overrides(self):
+        """Preserve explicit modes and false recovery; null delegates to native defaults."""
+        for mode, recovery in [("sse", False), ("periodic", True), ("auto", False), (None, None)]:
+            with self.subTest(mode=mode, recovery=recovery):
+                result = render({
+                    "logsMode": mode,
+                    "logsAutoRetrySseAfterDowngrade": recovery,
+                })
+                self.assertEqual(result.returncode, 0, result.stderr)
+                config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
+                settings = config["nico_health"]
+                if mode is None:
+                    self.assertNotIn("logs_mode", settings)
+                    self.assertNotIn("logs_auto_retry_sse_after_downgrade", settings)
+                else:
+                    self.assertEqual(settings["logs_mode"], mode)
+                    self.assertEqual(settings["logs_auto_retry_sse_after_downgrade"], recovery)
+
     def test_flat_validation_and_rollout(self):
         """Reject invalid flat settings and roll NICo after a flat control edit."""
         for key, value in [
@@ -120,11 +144,14 @@ class NicoHelmTests(unittest.TestCase):
             result = render(settings)
             self.assertEqual(result.returncode, 0, result.stderr)
         checksums = []
-        for settings in [{}, {"leakDetectorEnabled": False}, {"logsSseMaxBackoffSeconds": 60}]:
+        for settings in [
+            {}, {"leakDetectorEnabled": False}, {"logsSseMaxBackoffSeconds": 60},
+            {"logsMode": "sse"}, {"logsAutoRetrySseAfterDowngrade": False},
+        ]:
             result = render(settings, "nico-hardware-health-deployment.yaml")
             self.assertEqual(result.returncode, 0, result.stderr)
             checksums.append(re.search(r"checksum/config: ([0-9a-f]{64})", result.stdout)[1])
-        self.assertEqual(len(set(checksums)), 3)
+        self.assertEqual(len(set(checksums)), 5)
 
     def test_collection_settings_are_separate_from_workload_settings(self):
         """Validate both boundaries and preserve component reporting metadata."""
