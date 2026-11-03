@@ -40,7 +40,7 @@ impl Default for NicoConfigOptions {
     }
 }
 
-/// Render shared targets and explicit NICo overrides without embedding credentials.
+/// Render shared targets and NICo defaults with explicit overrides, without embedding credentials.
 pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
@@ -72,7 +72,10 @@ pub fn render_nico_config(
         .collect();
 
     let nico_config = NicoConfig {
-        bmc_request_concurrency: config.nico_health.bmc_request_concurrency,
+        bmc_request_concurrency: config
+            .nico_health
+            .bmc_request_concurrency
+            .or(NonZeroU32::new(2)),
         endpoint_discovery_interval: config
             .nico_health
             .endpoint_discovery_interval_seconds
@@ -293,8 +296,66 @@ mod tests {
             rendered["sinks"]["otlp"]["targets"][0]["include_diagnostics"].as_bool(),
             Some(true)
         );
-        assert!(rendered.get("bmc_request_concurrency").is_none());
-        assert!(rendered["collectors"].get("sensors").is_none());
+        assert_eq!(rendered["bmc_request_concurrency"].as_integer(), Some(2));
+        let collectors = &rendered["collectors"];
+        assert_eq!(collectors["sensors"]["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            collectors["sensors"]["sensor_fetch_interval"].as_str(),
+            Some("60s")
+        );
+        assert_eq!(
+            collectors["discovery"]["refresh_interval"].as_str(),
+            Some("3600s")
+        );
+        assert_eq!(collectors["reachability"]["enabled"].as_bool(), Some(true));
+        assert_eq!(collectors["reachability"]["interval"].as_str(), Some("60s"));
+        assert_eq!(collectors["logs"]["mode"].as_str(), Some("auto"));
+        assert_eq!(
+            collectors["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn explicit_settings_override_bundle_collection_defaults() {
+        let collector = parse_test_config(
+            r#"
+            [nico_health]
+            bmc_request_concurrency = 1
+            sensor_fetch_interval_seconds = 120
+            discovery_refresh_interval_seconds = 86400
+            reachability_enabled = false
+            reachability_interval_seconds = 90
+            logs_mode = "sse"
+            logs_auto_retry_sse_after_downgrade = false
+
+            [[targets]]
+            credentials_profile = "bmc"
+            ip = "192.0.2.10"
+            mac = "02:00:00:00:00:01"
+            "#,
+            "test.toml",
+        )
+        .unwrap();
+        let rendered = render_nico_config(&collector, &NicoConfigOptions::default()).unwrap();
+        let rendered: toml::Value = toml::from_str(&rendered).unwrap();
+        assert_eq!(rendered["bmc_request_concurrency"].as_integer(), Some(1));
+        let collectors = &rendered["collectors"];
+        assert_eq!(
+            collectors["sensors"]["sensor_fetch_interval"].as_str(),
+            Some("120s")
+        );
+        assert_eq!(
+            collectors["discovery"]["refresh_interval"].as_str(),
+            Some("86400s")
+        );
+        assert_eq!(collectors["reachability"]["enabled"].as_bool(), Some(false));
+        assert_eq!(collectors["reachability"]["interval"].as_str(), Some("90s"));
+        assert_eq!(collectors["logs"]["mode"].as_str(), Some("sse"));
+        assert_eq!(
+            collectors["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(false)
+        );
     }
 
     #[test]
@@ -357,21 +418,19 @@ mod tests {
                 rendered
                     .get("bmc_request_concurrency")
                     .and_then(toml::Value::as_integer),
-                concurrency.map(i64::from),
+                Some(i64::from(concurrency.unwrap_or(2))),
             );
-            let sensors = rendered["collectors"].get("sensors");
-            if let Some(interval) = interval {
-                let sensors = sensors.expect("sensor override");
-                assert_eq!(sensors["enabled"].as_bool(), Some(true));
-                assert_eq!(
-                    sensors["sensor_fetch_interval"].as_str(),
-                    Some(format!("{interval}s").as_str())
-                );
-                assert!(sensors.get("include_sensor_thresholds").is_none());
-            } else {
-                assert!(sensors.is_none());
-            }
-            assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
+            let sensors = &rendered["collectors"]["sensors"];
+            assert_eq!(sensors["enabled"].as_bool(), Some(true));
+            assert_eq!(
+                sensors["sensor_fetch_interval"].as_str(),
+                Some(format!("{}s", interval.unwrap_or(60)).as_str())
+            );
+            assert!(sensors.get("include_sensor_thresholds").is_none());
+            assert_eq!(
+                rendered["collectors"]["logs"]["mode"].as_str(),
+                Some("auto")
+            );
             assert_eq!(rendered["attributes"]["gpu_identity"].as_bool(), Some(true));
         }
     }
@@ -470,7 +529,14 @@ mod tests {
             rendered["collectors"]["logs"]["enabled"].as_bool(),
             Some(true)
         );
-        assert_eq!(rendered["collectors"]["logs"]["mode"].as_str(), Some("sse"));
+        assert_eq!(
+            rendered["collectors"]["logs"]["mode"].as_str(),
+            Some("auto")
+        );
+        assert_eq!(
+            rendered["collectors"]["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]

@@ -173,17 +173,17 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 
 The gateway requires NICo.
 
-NICo defaults to Redfish SSE log streaming. You can select periodic log polling or automatic SSE-to-polling fallback with `nicoHardwareHealth.config.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+NICo defaults to automatic log collection: it starts with Redfish SSE streaming, falls back to periodic polling when SSE is unavailable or keeps failing, and retries SSE after 30 minutes of polling. You can select fixed SSE streaming or periodic polling with `nicoHardwareHealth.config.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
 ### NICo collection controls
 
-Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omit a field or set it to `null` to retain the current behavior. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, reachability, and the iteration limiter require their corresponding `*Enabled: true` setting to start. Logs retain the bundle's SSE default.
+Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omitted or `null` settings use the defaults below, including on native installations without a `[nico_health]` section. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, and the iteration limiter require their corresponding `*Enabled: true` setting to start. TCP reachability checks are enabled by default; set `reachabilityEnabled: false` to disable them. Logs default to auto mode with SSE recovery enabled.
 
 | Setting under `nicoHardwareHealth.config` | Default | Description |
 | --- | --- | --- |
-| `bmcRequestConcurrency` | `4` | Shared maximum concurrent Redfish operations per BMC. |
+| `bmcRequestConcurrency` | `2` | Shared maximum concurrent Redfish operations per BMC. |
 | `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
-| `discoveryRefreshIntervalSeconds` | `300` | Interval between Redfish entity-tree discovery iterations. |
+| `discoveryRefreshIntervalSeconds` | `3600` | Interval between Redfish entity-tree discovery iterations. |
 | `discoveryConcurrency` | `4` | Concurrent endpoint identity resolutions. |
 | `sensorFetchIntervalSeconds` | `60` | Interval between sensor fetch iterations. |
 | `sensorsEnabled` | `true` | Collect sensor readings. |
@@ -192,7 +192,7 @@ Set these optional values under `nicoHardwareHealth.config`. Workload settings s
 | `leakDetectorPollIntervalSeconds` | `60` | Interval between leak-detector polls. |
 | `leakDetectorStateRefreshIntervalSeconds` | `1800` | Interval between leak-detector discovery refreshes. |
 | `logsEnabled` | `true` | Collect BMC logs. |
-| `logsMode` | `sse` | `sse`, `periodic`, or `auto` (SSE with per-endpoint polling fallback). |
+| `logsMode` | `auto` | `sse`, `periodic`, or `auto` (SSE with per-endpoint polling fallback). |
 | `logsSseInitialBackoffSeconds` | `1` | Initial reconnect backoff, before jitter. |
 | `logsSseMaxBackoffSeconds` | `30` | Maximum reconnect backoff, before jitter. |
 | `logsCollectionIntervalSeconds` | `300` | Interval between log polls in periodic mode or auto fallback. |
@@ -202,7 +202,7 @@ Set these optional values under `nicoHardwareHealth.config`. Workload settings s
 | `logsAutoSseNotAvailableThreshold` | `1` | Unsupported-SSE attempts before falling back to polling. |
 | `logsAutoConnectFailureWindowSeconds` | `300` | Window for counting SSE connection failures. |
 | `logsAutoConnectFailureThreshold` | `5` | Connection failures within that window before falling back. |
-| `logsAutoRetrySseAfterDowngrade` | `false` | Retry SSE after the fallback period instead of remaining in polling mode. |
+| `logsAutoRetrySseAfterDowngrade` | `true` | In auto mode, retry SSE after 30 minutes of polling fallback. Set `false` to remain in polling mode. |
 | `metricsEnabled` | `false` | Collect Redfish entity metrics. |
 | `metricsFetchIntervalSeconds` | `120` | Interval between entity-metric iterations. |
 | `telemetryEnabled` | `false` | Collect Redfish TelemetryService reports. |
@@ -211,8 +211,8 @@ Set these optional values under `nicoHardwareHealth.config`. Workload settings s
 | `firmwareRefreshIntervalSeconds` | `7200` | Interval between firmware iterations. |
 | `managerEnabled` | `true` | Poll Manager status for NICo power-shelf endpoints. |
 | `managerPollIntervalSeconds` | `300` | Interval between eligible Manager polls. |
-| `reachabilityEnabled` | `false` | Probe eligible endpoint TCP ports. |
-| `reachabilityIntervalSeconds` | `30` | Interval between TCP probe cycles. |
+| `reachabilityEnabled` | `true` | Probe eligible endpoint TCP ports. |
+| `reachabilityIntervalSeconds` | `60` | Interval between TCP probe cycles. |
 | `reachabilityTimeoutSeconds` | `3` | Timeout for one TCP connection attempt. |
 | `reachabilityLogMode` | `unreachable` | Log failed probes (`unreachable`) or every probe (`all`). |
 | `rateLimitEnabled` | `false` | Enable NICo's global collector-iteration token bucket. |
@@ -245,17 +245,19 @@ Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` a
 | --- | --- | --- |
 | `bmcCollector.intervalSeconds` | `86400` | Wait time after one collection cycle ends before the next starts (24 hours). |
 | `bmcCollector.targetConcurrency` | `64` | Number of BMCs collected at the same time. |
-| `bmcCollector.redfish.maxInFlight` | `4` | Maximum simultaneous requests to one BMC. |
+| `bmcCollector.redfish.maxInFlight` | `2` | Maximum simultaneous requests to one BMC. |
 | `bmcCollector.redfish.requestsPerSecond` | `10` | Maximum request rate to one BMC. Short bursts up to the same number are allowed. |
 | `bmcCollector.redfish.timeoutSeconds` | `30` | Redfish request timeout. |
 | `bmcCollector.redfish.insecureTls` | `false` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
 | `bmcCollector.latencyProbe.enabled` | `true` | Measure network latency to each BMC. |
 
-These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. See [request limits](architecture.md#request-limits) for how they work together.
+These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. The two concurrency limits are independent, so inventory and NICo can each issue two requests to the same BMC at once with the defaults. See [request limits](architecture.md#request-limits) for how they work together.
 
 ## Workload settings
 
 Every workload (`bmcCollector`, `nicoHardwareHealth`, and `otelGateway`) accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. `otelGateway.replicas` sets the number of gateway replicas.
+
+NICo application logging defaults to `warn` to suppress routine per-reading messages. Set `nicoHardwareHealth.logLevel` to `info` or `debug` when investigating collection. This setting controls application log verbosity; BMC event log collection and telemetry export continue independently.
 
 Collector and NICo image tags default to the chart version. If you pull images through a private registry mirror, set `imagePullSecrets`.
 

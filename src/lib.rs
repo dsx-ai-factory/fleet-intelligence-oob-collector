@@ -46,7 +46,7 @@ use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backen
 
 pub const DEFAULT_REDFISH_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_TARGET_CONCURRENCY: usize = 64;
-pub const DEFAULT_BMC_MAX_IN_FLIGHT: u32 = 4;
+pub const DEFAULT_BMC_MAX_IN_FLIGHT: u32 = 2;
 pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
 pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;

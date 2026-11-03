@@ -55,7 +55,7 @@ The collector keeps whatever it could collect, and reports failures node by node
 
 ## Request limits
 
-The collector protects BMCs from overload. By default, it reads 64 BMCs at a time, sends at most 4 simultaneous requests and 10 requests per second to any one BMC, and allows short bursts of up to 10 requests. At most 64 × 4 = 256 requests are in flight in total.
+The collector protects BMCs from overload. By default, it reads 64 BMCs at a time, sends at most 2 simultaneous requests and 10 requests per second to any one BMC, and allows short bursts of up to 10 requests. At most 64 × 2 = 128 requests are in flight in total.
 
 Inventory and attestation share these limits. The scheduler takes turns between BMCs and between inventory and attestation, so one slow BMC or one busy workflow can't hold up the others. NICo schedules its own requests separately, and these limits don't cover it.
 

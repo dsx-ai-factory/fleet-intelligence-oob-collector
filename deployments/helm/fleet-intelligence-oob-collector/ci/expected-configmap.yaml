@@ -23,6 +23,11 @@ data:
 
     [nico_health]
     bmc_request_concurrency = 2
+    discovery_refresh_interval_seconds = 3600
+    logs_auto_retry_sse_after_downgrade = true
+    logs_mode = "auto"
+    reachability_enabled = true
+    reachability_interval_seconds = 60
     sensor_fetch_interval_seconds = 120
 
     [[targets]]

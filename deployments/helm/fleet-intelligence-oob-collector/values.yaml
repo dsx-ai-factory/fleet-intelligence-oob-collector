@@ -58,7 +58,7 @@ bmcCollector:
   intervalSeconds: 86400
   targetConcurrency: 64
   redfish:
-    maxInFlight: 4
+    maxInFlight: 2
     requestsPerSecond: 10
     timeoutSeconds: 30
     # Disables verification and permits interception; collector only; NICo does not verify BMC certificates.
@@ -70,10 +70,10 @@ nicoHardwareHealth:
   enabled: true
   # Collection settings; pod settings remain alongside this block.
   config:
-    sensorFetchIntervalSeconds: null
-    bmcRequestConcurrency: null
+    sensorFetchIntervalSeconds: 60
+    bmcRequestConcurrency: 2
     endpointDiscoveryIntervalSeconds: null
-    discoveryRefreshIntervalSeconds: null
+    discoveryRefreshIntervalSeconds: 3600
     discoveryConcurrency: null
     sensorsEnabled: null
     includeSensorThresholds: null
@@ -89,7 +89,7 @@ nicoHardwareHealth:
     leakDetectorPollIntervalSeconds: null
     leakDetectorStateRefreshIntervalSeconds: null
     logsEnabled: null
-    logsMode: null
+    logsMode: auto
     logsSseInitialBackoffSeconds: null
     logsSseMaxBackoffSeconds: null
     logsCollectionIntervalSeconds: null
@@ -99,9 +99,9 @@ nicoHardwareHealth:
     logsAutoSseNotAvailableThreshold: null
     logsAutoConnectFailureWindowSeconds: null
     logsAutoConnectFailureThreshold: null
-    logsAutoRetrySseAfterDowngrade: null
-    reachabilityEnabled: null
-    reachabilityIntervalSeconds: null
+    logsAutoRetrySseAfterDowngrade: true
+    reachabilityEnabled: true
+    reachabilityIntervalSeconds: 60
     reachabilityTimeoutSeconds: null
     reachabilityLogMode: null
     rateLimitEnabled: null
@@ -118,7 +118,7 @@ nicoHardwareHealth:
   tolerations: []
   affinity: {}
   podAnnotations: {}
-  logLevel: info
+  logLevel: warn
 
 otelGateway:
   enabled: true
