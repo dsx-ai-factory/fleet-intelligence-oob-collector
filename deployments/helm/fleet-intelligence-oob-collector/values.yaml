@@ -119,6 +119,9 @@ nicoHardwareHealth:
   affinity: {}
   podAnnotations: {}
   logLevel: warn
+  resourceStatus:
+    enabled: true
+    firmwarePollIntervalSeconds: 1800
 
 otelGateway:
   enabled: true

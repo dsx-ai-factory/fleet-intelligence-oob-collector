@@ -123,6 +123,14 @@ struct RenderNicoConfigArgs {
 
     #[arg(long, default_value = "fleetint")]
     metrics_prefix: String,
+
+    /// Seconds between NICo FirmwareInventory status polls.
+    #[arg(long, default_value_t = 1_800)]
+    resource_status_firmware_poll_interval_seconds: u64,
+
+    /// Disable periodic Redfish resource status OTLP logs from NICo.
+    #[arg(long)]
+    disable_resource_status_collection: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -208,6 +216,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     otlp_endpoint: args.otlp_endpoint,
                     metrics_endpoint: args.metrics_endpoint,
                     metrics_prefix: args.metrics_prefix,
+                    resource_status_collection: !args.disable_resource_status_collection,
+                    resource_status_firmware_poll_interval_seconds: args
+                        .resource_status_firmware_poll_interval_seconds,
                 },
             )?;
             write_private_file(&args.output, &rendered)?;
