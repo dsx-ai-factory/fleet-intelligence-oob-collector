@@ -39,6 +39,7 @@ use bmc_inventory::sink::{
     InventorySink, JsonSink, NicoHealthConfig, OtelGatewayConfig, RuntimeConfig, TableSink,
 };
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
+use bmc_session::{SessionManager, api};
 use futures::stream::{self, Stream, StreamExt};
 use tokio::sync::watch;
 
@@ -88,6 +89,9 @@ pub struct RuntimeOptions {
     /// skips the retry pass.
     pub target_retry_delay: Option<Duration>,
     pub log_level: String,
+    /// Unix socket for the inventory API that NICo health reads; `None`
+    /// disables the API and session management.
+    pub inventory_api_socket: Option<std::path::PathBuf>,
 }
 
 impl RuntimeOptions {
@@ -226,15 +230,73 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
 }
 
 async fn run_runtime_until_shutdown(
-    mut options: RuntimeOptions,
-    mut shutdown: Shutdown,
+    options: RuntimeOptions,
+    shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
-    let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
+    // Fail on invalid collector environment before starting anything.
+    options.collector_config_from_env(|name| std::env::var(name))?;
     let target_config = config::load_config(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
     )?);
+    let sessions = start_inventory_api(&options, &dispatcher, &target_config, &shutdown)?;
+    let result = run_cycles(
+        options,
+        shutdown,
+        dispatcher,
+        sessions.clone(),
+        target_config,
+    )
+    .await;
+    if let Some(sessions) = sessions {
+        sessions.logout_all().await;
+    }
+    result
+}
+
+/// Start the inventory API when a socket is configured. The server stops when
+/// shutdown is requested.
+fn start_inventory_api(
+    options: &RuntimeOptions,
+    dispatcher: &Arc<Dispatcher>,
+    target_config: &config::CollectorConfig,
+    shutdown: &Shutdown,
+) -> Result<Option<Arc<SessionManager>>, Box<dyn Error>> {
+    let Some(socket) = options.inventory_api_socket.clone() else {
+        return Ok(None);
+    };
+    let sessions = Arc::new(SessionManager::new(
+        options.inventory.insecure_tls,
+        Duration::from_secs(options.inventory.timeout_seconds.max(1)),
+        Arc::clone(dispatcher),
+    )?);
+    sessions.update_targets(&target_config.targets);
+    let listener = api::bind(&socket).map_err(|error| {
+        format!(
+            "failed to bind inventory API socket {}: {error}",
+            socket.display()
+        )
+    })?;
+    tracing::info!(socket = %socket.display(), "serving inventory API");
+    let mut stop = shutdown.clone();
+    let server = Arc::clone(&sessions);
+    tokio::spawn(async move {
+        if let Err(error) = api::serve(listener, server, async move { stop.wait().await }).await {
+            tracing::error!(%error, "inventory API stopped");
+        }
+    });
+    Ok(Some(sessions))
+}
+
+async fn run_cycles(
+    mut options: RuntimeOptions,
+    mut shutdown: Shutdown,
+    dispatcher: Arc<Dispatcher>,
+    sessions: Option<Arc<SessionManager>>,
+    target_config: config::CollectorConfig,
+) -> Result<(), Box<dyn Error>> {
+    let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let agent_token = required_backend_option(options.agent_token.take(), "agent token")?;
@@ -259,6 +321,11 @@ async fn run_runtime_until_shutdown(
                 Some(config) => config,
                 None => config::load_config(&options.inventory.config)?,
             };
+            // NICo health sees this cycle's targets; a new target can be
+            // listed a moment before its dispatcher endpoint exists.
+            if let Some(sessions) = &sessions {
+                sessions.update_targets(&target_config.targets);
+            }
             run_collection_cycle(
                 &options,
                 &collector_config,
@@ -1511,6 +1578,7 @@ mod tests {
             interval_seconds: 0,
             target_retry_delay: None,
             log_level: "info".to_string(),
+            inventory_api_socket: None,
         }
     }
 

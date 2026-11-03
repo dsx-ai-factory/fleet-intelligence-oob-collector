@@ -105,6 +105,10 @@ struct RuntimeArgs {
     /// more in the same cycle; 0 skips the retry. Hidden: for tests.
     #[arg(long, hide = true, default_value_t = DEFAULT_TARGET_RETRY_DELAY_SECONDS)]
     target_retry_delay_seconds: u64,
+
+    /// Serve BMC targets and session tokens to NICo health on this Unix socket.
+    #[arg(long, env = "FLEETINT_INVENTORY_API_SOCKET")]
+    inventory_api_socket: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -123,6 +127,11 @@ struct RenderNicoConfigArgs {
 
     #[arg(long, default_value = "fleetint")]
     metrics_prefix: String,
+
+    /// Point NICo at the collector's inventory API on this Unix socket
+    /// instead of rendering static endpoints.
+    #[arg(long, env = "FLEETINT_INVENTORY_API_SOCKET")]
+    inventory_api_socket: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -197,6 +206,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 target_retry_delay: (args.target_retry_delay_seconds > 0)
                     .then(|| std::time::Duration::from_secs(args.target_retry_delay_seconds)),
                 log_level,
+                inventory_api_socket: args.inventory_api_socket,
             })
             .await?
         }
@@ -208,6 +218,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     otlp_endpoint: args.otlp_endpoint,
                     metrics_endpoint: args.metrics_endpoint,
                     metrics_prefix: args.metrics_prefix,
+                    inventory_api_socket: args.inventory_api_socket,
                 },
             )?;
             write_private_file(&args.output, &rendered)?;

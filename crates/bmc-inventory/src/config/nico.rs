@@ -28,6 +28,9 @@ pub struct NicoConfigOptions {
     pub otlp_endpoint: String,
     pub metrics_endpoint: String,
     pub metrics_prefix: String,
+    /// When set, NICo reads targets and session tokens from the collector's
+    /// inventory API on this socket instead of static endpoints.
+    pub inventory_api_socket: Option<std::path::PathBuf>,
 }
 
 impl Default for NicoConfigOptions {
@@ -36,6 +39,7 @@ impl Default for NicoConfigOptions {
             otlp_endpoint: "http://localhost:4317".to_string(),
             metrics_endpoint: "0.0.0.0:9009".to_string(),
             metrics_prefix: "fleetint".to_string(),
+            inventory_api_socket: None,
         }
     }
 }
@@ -59,17 +63,27 @@ pub fn render_nico_config(
         return Err("NICo metrics prefix cannot be empty".into());
     }
 
-    let static_bmc_endpoints = config
-        .targets
-        .iter()
-        .map(|target| NicoStaticBmcEndpoint {
-            ip: target.ip,
-            port: target.port,
-            mac: target.mac.to_string(),
-            credentials_profile: target.credentials_profile.as_deref(),
-            labels: target.labels.clone(),
-        })
-        .collect();
+    let endpoint_sources = match &options.inventory_api_socket {
+        Some(socket_path) => NicoEndpointSources::Http {
+            nico_api: NicoEnabled { enabled: false },
+            http: NicoHttpSource { socket_path },
+        },
+        None => NicoEndpointSources::Static {
+            nico_api: NicoEnabled { enabled: false },
+            static_credentials_file: &config.credentials_file,
+            static_bmc_endpoints: config
+                .targets
+                .iter()
+                .map(|target| NicoStaticBmcEndpoint {
+                    ip: target.ip,
+                    port: target.port,
+                    mac: target.mac.to_string(),
+                    credentials_profile: target.credentials_profile.as_deref(),
+                    labels: target.labels.clone(),
+                })
+                .collect(),
+        },
+    };
 
     let nico_config = NicoConfig {
         bmc_request_concurrency: config.nico_health.bmc_request_concurrency,
@@ -78,11 +92,7 @@ pub fn render_nico_config(
             .endpoint_discovery_interval_seconds
             .map(|n| format!("{n}s")),
         rate_limit: config.nico_health.native_rate_limit(),
-        endpoint_sources: NicoEndpointSources {
-            nico_api: NicoEnabled { enabled: false },
-            static_credentials_file: &config.credentials_file,
-            static_bmc_endpoints,
-        },
+        endpoint_sources,
         collectors: config.nico_health.native_collectors(),
         attributes: NicoAttributes { gpu_identity: true },
         sinks: NicoSinks {
@@ -129,10 +139,22 @@ struct NicoConfig<'a> {
 }
 
 #[derive(Serialize)]
-struct NicoEndpointSources<'a> {
-    nico_api: NicoEnabled,
-    static_credentials_file: &'a std::path::Path,
-    static_bmc_endpoints: Vec<NicoStaticBmcEndpoint<'a>>,
+#[serde(untagged)]
+enum NicoEndpointSources<'a> {
+    Static {
+        nico_api: NicoEnabled,
+        static_credentials_file: &'a std::path::Path,
+        static_bmc_endpoints: Vec<NicoStaticBmcEndpoint<'a>>,
+    },
+    Http {
+        nico_api: NicoEnabled,
+        http: NicoHttpSource<'a>,
+    },
+}
+
+#[derive(Serialize)]
+struct NicoHttpSource<'a> {
+    socket_path: &'a std::path::Path,
 }
 
 #[derive(Serialize)]
@@ -535,6 +557,7 @@ mod tests {
                 otlp_endpoint: "  http://localhost:4317  ".to_string(),
                 metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
                 metrics_prefix: "  fleetint  ".to_string(),
+                inventory_api_socket: None,
             },
         )
         .expect("NICo config");
@@ -549,6 +572,38 @@ mod tests {
             Some("0.0.0.0:9009")
         );
         assert_eq!(rendered["metrics"]["prefix"].as_str(), Some("fleetint"));
+    }
+
+    #[test]
+    fn inventory_api_socket_replaces_static_endpoints_and_credentials() {
+        let collector = parse_test_config(
+            r#"
+            [[targets]]
+            credentials_profile = "bmc"
+            ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                inventory_api_socket: Some("/run/fleetint-oob/inventory.sock".into()),
+                ..NicoConfigOptions::default()
+            },
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+        let sources = rendered["endpoint_sources"].as_table().expect("sources");
+
+        assert_eq!(
+            sources["http"]["socket_path"].as_str(),
+            Some("/run/fleetint-oob/inventory.sock")
+        );
+        assert_eq!(sources["nico_api"]["enabled"].as_bool(), Some(false));
+        assert!(!sources.contains_key("static_bmc_endpoints"));
+        assert!(!sources.contains_key("static_credentials_file"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ members = [
     "crates/bmc-dispatch",
     "crates/bmc-error",
     "crates/bmc-inventory",
+    "crates/bmc-session",
 ]
 resolver = "3"
 
@@ -19,6 +20,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 bmc-attestation = { path = "crates/bmc-attestation" }
@@ -26,6 +28,7 @@ backend-client = { path = "crates/backend-client" }
 bmc-dispatch = { path = "crates/bmc-dispatch" }
 bmc-error = { path = "crates/bmc-error" }
 bmc-inventory = { path = "crates/bmc-inventory" }
+bmc-session = { path = "crates/bmc-session" }
 futures = "0.3"
 http = "1"
 mac_address = "1.2.1"
@@ -75,6 +78,7 @@ clap.workspace = true
 bmc-attestation.workspace = true
 bmc-dispatch.workspace = true
 bmc-inventory.workspace = true
+bmc-session.workspace = true
 futures.workspace = true
 tokio.workspace = true
 tracing.workspace = true
