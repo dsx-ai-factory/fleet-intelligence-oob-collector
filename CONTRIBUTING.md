@@ -232,6 +232,8 @@ The **Contribution conventions / PR title** GitHub Actions check validates PR ti
 
 Pushing a semantic version tag such as `v0.1.0` runs the release validation, publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are supported and do not update the collector image's `latest` tag.
 
+Configure the repository or organization Actions secret `NGC_API_KEY` with an NGC API key that can pull `nvcr.io/nvidia/base/ubuntu`. Both image-build jobs use this secret to authenticate to NVCR before building.
+
 ## Developer Certificate of Origin (DCO)
 
 ```text
