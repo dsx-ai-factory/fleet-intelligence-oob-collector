@@ -5,7 +5,7 @@
 
 # Build context: a versioned checkout of NVIDIA/infra-controller. The release
 # workflow supplies VERSION and REVISION from the Fleet Intelligence release.
-FROM --platform=$TARGETPLATFORM rust:1.96.0-slim-bookworm AS builder
+FROM --platform=$TARGETPLATFORM rust:1.97.1-alpine AS builder
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -15,16 +15,9 @@ ENV VERSION=$VERSION \
     FORGE_VERSION_AVOID_REBUILD=1
 
 WORKDIR /src
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential \
-      clang \
-      cmake \
-      libprotobuf-dev \
-      libssl-dev \
-      pkg-config \
-      protobuf-compiler && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache \
+      build-base clang cmake perl protobuf-dev protobuf pkgconf \
+      openssl-dev openssl-libs-static linux-headers file
 
 COPY . .
 
@@ -33,9 +26,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target \
     cargo build --locked --release -p carbide-health --bin forge-hw-health && \
     cp target/release/forge-hw-health /nico-hardware-health && \
-    strip /nico-hardware-health
+    strip /nico-hardware-health && \
+    file /nico-hardware-health | tee /tmp/nico-hardware-health.file && \
+    grep -Eq "statically linked|static-pie linked" /tmp/nico-hardware-health.file
 
-FROM nvcr.io/nvidia/base/ubuntu:24.04
+FROM nvcr.io/nvidia/distroless/static:v4.1.6
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -46,10 +41,6 @@ LABEL org.opencontainers.image.title="NICo Hardware Health" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
       org.opencontainers.image.licenses="Apache-2.0"
-
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /nico-hardware-health /opt/nico/nico-hardware-health
 COPY --from=builder /src/LICENSE /src/THIRD-PARTY-LICENSES /licenses/

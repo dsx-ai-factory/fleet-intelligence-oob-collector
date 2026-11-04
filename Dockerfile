@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     file /bmc-collector | tee /tmp/bmc-collector.file && \
     grep -Eq "statically linked|static-pie linked" /tmp/bmc-collector.file
 
-FROM nvcr.io/nvidia/base/ubuntu:24.04
+FROM nvcr.io/nvidia/distroless/static:v4.1.6
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -33,10 +33,6 @@ LABEL org.opencontainers.image.title="Fleet Intelligence OOB Collector" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
       org.opencontainers.image.licenses="Apache-2.0"
-
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /bmc-collector /bmc-collector
 COPY LICENSE /LICENSE
