@@ -17,7 +17,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
@@ -29,10 +29,10 @@ jobs:
     name: Validate packaging
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
       - name: Lint Helm chart
         run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
       - name: Render Helm chart
@@ -46,9 +46,9 @@ jobs:
             --show-only templates/configmap.yaml > "$RUNNER_TEMP/fleetint-configmap.yaml"
           diff -u deployments/helm/fleet-intelligence-oob-collector/ci/expected-configmap.yaml \
             "$RUNNER_TEMP/fleetint-configmap.yaml"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build container image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: false
