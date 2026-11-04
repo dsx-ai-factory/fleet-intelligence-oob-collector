@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     file /bmc-collector | tee /tmp/bmc-collector.file && \
     grep -Eq "statically linked|static-pie linked" /tmp/bmc-collector.file
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM nvcr.io/nvidia/distroless/static:v4.1.4
 
 ARG VERSION=dev
 ARG REVISION=unknown

@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cp target/release/forge-hw-health /nico-hardware-health && \
     strip /nico-hardware-health
 
-FROM debian:12-slim
+FROM nvcr.io/nvidia/distroless/cc:v4.1.4
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -46,10 +46,6 @@ LABEL org.opencontainers.image.title="NICo Hardware Health" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
       org.opencontainers.image.licenses="Apache-2.0"
-
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /nico-hardware-health /opt/nico/nico-hardware-health
 COPY --from=builder /src/LICENSE /src/THIRD-PARTY-LICENSES /licenses/
