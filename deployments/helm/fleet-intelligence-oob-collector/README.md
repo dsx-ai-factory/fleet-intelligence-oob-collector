@@ -1,6 +1,8 @@
-# Fleet Intelligence OOB Collector
+# fleet-intelligence-oob Helm chart
 
 This chart deploys the OOB inventory and attestation collector, NICo hardware health, and a telemetry gateway. Follow the [installation guide](../../../docs/installation.md) to install it.
+
+The chart is distributed as `fleet-intelligence-oob` from `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence`. Its public images are `nvcr.io/nvidia/fleet-intelligence/oob-collector`, `nvcr.io/nvidia/fleet-intelligence/nico-hardware-health`, and the shared `nvcr.io/nvidia/fleet-intelligence/otel-gateway`. See the [release process](../../../RELEASE.md) for publishing ownership and review.
 
 ## Minimal values
 
@@ -43,8 +45,6 @@ The chart turns `inventory` and optional NICo collection settings into a collect
 Set optional flat fields under `nicoHardwareHealth.config` to configure NICo collection. See [NICo collection controls](../../../docs/configuration.md#nico-collection-controls) for supported fields and defaults.
 
 Every workload accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo image tags default to the chart version, and `imagePullSecrets` sets registry credentials.
-
-The NGC release workflow packages a copy of this chart with the final public NGC collector and NICo image repositories. The telemetry gateway has its own image repository and version. See the [release process](../../../RELEASE.md) for staging, approval, and promotion.
 
 Helm checks value types, label key syntax, MAC uniqueness, and component combinations when you install. The collector checks the remaining rules, such as reserved label names, label counts, and value lengths, when it loads the configuration, including in NICo's init container.
 
