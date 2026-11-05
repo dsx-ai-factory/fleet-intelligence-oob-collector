@@ -20,4 +20,4 @@ gh workflow run release.yml --ref v0.2.0 -f version=v0.2.0
 
 Publishing requires a tag ref matching the version input and the `ngc-publish` GitHub environment. Configure that environment to allow only release tags, require reviewer approval with self-review and administrator bypass disabled, and store `NGC_API_KEY` only as an environment secret. Restrict release tag creation, updates, and deletion to authorized maintainers through a tag ruleset.
 
-Successful stable releases automatically run **Publish Fern Docs** after the images and chart are published. Versioned documentation is built from release tags. Prereleases do not trigger docs publishing.
+After the workflow succeeds, verify that the public NGC images and chart for that version are downloadable and match the built image digests and chart checksum. Then manually create and publish a GitHub release for the existing tag. Publishing a stable GitHub release automatically runs **Publish Fern Docs**, which builds versioned documentation from release tags. Tag pushes and draft releases do not publish docs. Mark RC releases as prereleases; they do not publish docs.
