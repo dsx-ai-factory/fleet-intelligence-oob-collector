@@ -5,7 +5,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "fleet-intelligence-oob-collector.fullname" . }}
+  name: {{ include "fleet-intelligence-oob-collector.collectorName" . }}
   labels:
     {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
 spec:

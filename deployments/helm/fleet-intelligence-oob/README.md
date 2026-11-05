@@ -40,6 +40,8 @@ The gateway requires NICo. NICo's init container uses the collector image even w
 
 ## How it works
 
+With release name `fleet-intelligence-oob`, the workloads are named `fleet-intelligence-oob-collector`, `nico-hardware-health`, and `fleet-intelligence-oob-otel-gateway`.
+
 The chart turns `inventory` and optional NICo collection settings into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
 
 Set optional flat fields under `nicoHardwareHealth.config` to configure NICo collection. See [NICo collection controls](../../../docs/configuration.md#nico-collection-controls) for supported fields and defaults.

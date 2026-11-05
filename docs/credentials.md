@@ -212,7 +212,7 @@ What happens next depends on what changed:
 Restart after a token change:
 
 ```bash
-kubectl rollout restart deployment/fleet-intelligence-oob \
+kubectl rollout restart deployment/fleet-intelligence-oob-collector \
   --namespace "$NAMESPACE"
 kubectl rollout restart deployment/fleet-intelligence-oob-otel-gateway \
   --namespace "$NAMESPACE"
