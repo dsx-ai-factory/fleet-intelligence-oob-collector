@@ -19,12 +19,6 @@ Do not report security vulnerabilities through GitHub issues. Follow [SECURITY.m
 
 For non-trivial changes, open an issue first so maintainers can discuss the problem, scope, and expected design. This is especially important for changes to Fleet Intelligence data models, backend API behavior, Redfish traversal, or collector runtime semantics.
 
-### Maintainer and release roles
-
-Contributions from NVIDIA employees and external contributors are welcome. Maintainers review contributions and coordinate project changes. See [GOVERNANCE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/GOVERNANCE.md) for project roles and maintainer eligibility.
-
-Official releases currently require an authorized NVIDIA employee. Maintainer status alone does not grant release publishing access. See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for release ownership, automation, and artifact publication.
-
 ## Contribution Workflow
 
 1. Fork this repository on GitHub.
@@ -236,7 +230,7 @@ The **Contribution conventions / PR title** GitHub Actions check validates PR ti
 
 ## Release Process
 
-See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for the release process and the requirements for official artifact publication.
+Maintainers publish collector and NICo images and the `fleet-intelligence-oob` Helm chart through the Release workflow. See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for artifact locations.
 
 ## Developer Certificate of Origin (DCO)
 

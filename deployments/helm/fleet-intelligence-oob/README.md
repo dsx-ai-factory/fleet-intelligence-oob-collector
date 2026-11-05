@@ -2,7 +2,7 @@
 
 This chart deploys the OOB inventory and attestation collector, NICo hardware health, and a telemetry gateway. Follow the [installation guide](../../../docs/installation.md) to install it.
 
-The chart is distributed as `fleet-intelligence-oob` from `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence`. Its public images are `nvcr.io/nvidia/fleet-intelligence/oob-collector`, `nvcr.io/nvidia/fleet-intelligence/nico-hardware-health`, and the shared `nvcr.io/nvidia/fleet-intelligence/otel-gateway`. See the [release process](../../../RELEASE.md) for publishing ownership and review.
+The chart is published as `fleet-intelligence-oob` at `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence`.
 
 ## Minimal values
 
