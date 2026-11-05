@@ -62,15 +62,6 @@ inventory:
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
-bmcCollector:
-  image:
-    repository: nvcr.io/nvidia/fleet-intelligence/oob-collector
-nicoHardwareHealth:
-  image:
-    repository: nvcr.io/nvidia/fleet-intelligence/nico-hardware-health
-otelGateway:
-  image:
-    repository: nvcr.io/nvidia/fleet-intelligence/otel-gateway
 backend:
   agentToken:
     existingSecret: fleet-intelligence-oob-collector-agent-token

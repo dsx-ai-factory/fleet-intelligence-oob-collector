@@ -24,9 +24,15 @@ Use semantic versions such as `v0.1.0` or `v0.2.0-rc.1`. Image tags, chart versi
 
 ## Publishing access
 
-The authorized release maintainer needs membership in the NGC `dsx-ai-factory` staging organization and publishing access to its `fleet-intelligence` team. Configure the GitHub environment `ngc-publish` with the environment secret `NGC_API_KEY`, selected release branch rules, and any required reviewers. API key authentication is used until the required OIDC publishing support is available.
+The authorized release maintainer needs membership in the NGC `dsx-ai-factory` staging organization and publishing access to its `fleet-intelligence` team. Configure the GitHub environment `ngc-publish` with the environment secret `NGC_API_KEY`, environment variable `NGC_ORG` containing the private staging organization identifier, selected release branch rules such as `release-*`, and any required reviewers. The staging team is fixed to `fleet-intelligence`; CI rejects `nvidia` as the staging organization. API key authentication is used until the required OIDC publishing support is available.
 
 Keep keys in GitHub secrets and internal operational records. Detailed access, security review, and promotion instructions remain in NVIDIA's internal records.
+
+## Stage a candidate
+
+Run **Stage NGC release** manually on the reviewed release branch with the final version, such as `v0.2.0` or `v0.2.0-rc.1`. The workflow runs workspace tests and chart lint, builds both image architectures, creates versioned multi-platform image indexes, and uploads the images and chart to private NGC staging. It retains image digests, signed provenance, the chart checksum, and source revisions as review artifacts for 90 days; save them to the internal release record before they expire.
+
+Staging does not publish to GHCR, update a `latest` tag, create a source tag, or publish documentation. The **Publish Fern Docs** workflow runs when the GitHub release is published after approval and public promotion. The shared gateway version selected in the chart must also be available in public NGC before installation.
 
 ## Prepare and review artifacts
 
