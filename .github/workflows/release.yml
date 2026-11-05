@@ -59,7 +59,7 @@ jobs:
           cache: false
       - run: cargo test --workspace --locked
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
-      - run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
+      - run: helm lint deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
 
   build-image:
     needs: validate
@@ -363,9 +363,9 @@ jobs:
       - name: Package chart with final public image references
         run: |
           set -euo pipefail
-          cp LICENSE deployments/helm/fleet-intelligence-oob-collector/LICENSE
-          helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
-          helm package deployments/helm/fleet-intelligence-oob-collector --version "$VERSION" --app-version "$VERSION" --destination dist
+          cp LICENSE deployments/helm/fleet-intelligence-oob/LICENSE
+          helm lint deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
+          helm package deployments/helm/fleet-intelligence-oob --version "$VERSION" --app-version "$VERSION" --destination dist
           cd dist
           sha256sum "fleet-intelligence-oob-${VERSION}.tgz" > chart.sha256
           sha256sum --check chart.sha256

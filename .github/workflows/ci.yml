@@ -34,19 +34,19 @@ jobs:
           persist-credentials: false
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
       - name: Lint Helm chart
-        run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
+        run: helm lint deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
       - name: Render Helm chart
-        run: helm template test deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml > /dev/null
+        run: helm template test deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml > /dev/null
       - name: Test NICo configuration overrides
         run: python3 -m unittest discover -s scripts -p 'test_nico_helm.py'
       - name: Test NGC release configuration and packaged chart
         run: python3 -m unittest discover -s scripts -p 'test_release_config.py'
       - name: Check generated configuration snapshot
         run: |
-          helm template test deployments/helm/fleet-intelligence-oob-collector \
-            --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml \
+          helm template test deployments/helm/fleet-intelligence-oob \
+            --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml \
             --show-only templates/configmap.yaml > "$RUNNER_TEMP/fleetint-configmap.yaml"
-          diff -u deployments/helm/fleet-intelligence-oob-collector/ci/expected-configmap.yaml \
+          diff -u deployments/helm/fleet-intelligence-oob/ci/expected-configmap.yaml \
             "$RUNNER_TEMP/fleetint-configmap.yaml"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build container image

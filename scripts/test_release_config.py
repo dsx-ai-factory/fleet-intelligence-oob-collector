@@ -44,11 +44,11 @@ class ReleaseConfigTests(unittest.TestCase):
 class ReleaseChartTests(unittest.TestCase):
     def test_package_name_version_and_public_images(self):
         with tempfile.TemporaryDirectory() as directory:
-            subprocess.run(["helm", "package", str(ROOT / "deployments/helm/fleet-intelligence-oob-collector"), "--version", "1.2.3-rc.1", "--app-version", "1.2.3-rc.1", "--destination", directory], check=True, capture_output=True, text=True)
+            subprocess.run(["helm", "package", str(ROOT / "deployments/helm/fleet-intelligence-oob"), "--version", "1.2.3-rc.1", "--app-version", "1.2.3-rc.1", "--destination", directory], check=True, capture_output=True, text=True)
             package = Path(directory) / "fleet-intelligence-oob-1.2.3-rc.1.tgz"
             self.assertTrue(package.is_file())
             command = ["helm", "template", "fleet-intelligence-oob", str(package)]
-            command += ["--values", str(ROOT / "deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml")]
+            command += ["--values", str(ROOT / "deployments/helm/fleet-intelligence-oob/ci/test-values.yaml")]
             rendered = subprocess.run(command, check=True, capture_output=True, text=True).stdout
             self.assertIn("nvcr.io/nvidia/fleet-intelligence/oob-collector:1.2.3-rc.1", rendered)
             self.assertIn("nvcr.io/nvidia/fleet-intelligence/nico-hardware-health:1.2.3-rc.1", rendered)

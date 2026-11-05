@@ -166,12 +166,12 @@ nico-container-build:
 		--tag nico-hardware-health:dev "$${NICO_SOURCE:?set NICO_SOURCE to the infra-controller checkout}"
 
 chart-lint:
-	helm lint deployments/helm/fleet-intelligence-oob-collector \
-		--values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
+	helm lint deployments/helm/fleet-intelligence-oob \
+		--values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
 
 chart-template:
-	helm template fleet-intelligence-oob-collector deployments/helm/fleet-intelligence-oob-collector \
-		--values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
+	helm template fleet-intelligence-oob deployments/helm/fleet-intelligence-oob \
+		--values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
 
 coverage:
 	@cargo llvm-cov --version >/dev/null 2>&1 || { \

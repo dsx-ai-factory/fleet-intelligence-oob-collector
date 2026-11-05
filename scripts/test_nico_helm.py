@@ -13,7 +13,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHART = ROOT / "deployments/helm/fleet-intelligence-oob-collector"
+CHART = ROOT / "deployments/helm/fleet-intelligence-oob"
 DEFAULT_NICO_SETTINGS = {
     "bmc_request_concurrency": 2,
     "sensor_fetch_interval_seconds": 60,
