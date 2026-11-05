@@ -50,6 +50,8 @@ Component references cover [inventory collection](https://github.com/dsx-ai-fact
 
 See [CONTRIBUTING.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md) for development setup and guidelines.
 
+See [GOVERNANCE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/GOVERNANCE.md) for project roles and [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for official release ownership and artifact publication.
+
 ## Security
 
 Do not report vulnerabilities in public issues. Follow the [security policy](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/SECURITY.md) for private reporting instructions.
