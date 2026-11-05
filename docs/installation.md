@@ -87,7 +87,7 @@ Choose a published chart version from the repository [releases](https://github.c
 export OOB_CHART_VERSION='<chart-version>'
 
 helm upgrade --install fleet-intelligence-oob \
-  fleet-intelligence-oob \
+  oob-collector \
   --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
   --version "$OOB_CHART_VERSION" \
   --values /path/to/collector-values.yaml \
