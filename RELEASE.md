@@ -12,4 +12,12 @@ Maintainers publish release artifacts through the **Release** workflow using a s
 
 New images and charts are published only to NGC. The gateway image is provided by Fleet Intelligence Agent. See [Installation](docs/installation.md) for installation and verification commands.
 
-After publishing the artifacts, push the matching release tag from the commit used by the **Release** workflow. Stable `vMAJOR.MINOR.PATCH` tag pushes automatically run **Publish Fern Docs**, which builds versioned documentation from release tags. Prerelease tags do not trigger docs publishing.
+Push the release tag from the reviewed release commit, then dispatch **Release** using that same tag and version:
+
+```bash
+gh workflow run release.yml --ref v0.2.0 -f version=v0.2.0
+```
+
+Publishing requires a tag ref matching the version input and the `ngc-publish` GitHub environment. Configure that environment to allow only release tags, require reviewer approval with self-review and administrator bypass disabled, and store `NGC_API_KEY` only as an environment secret. Restrict release tag creation, updates, and deletion to authorized maintainers through a tag ruleset.
+
+Stable `vMAJOR.MINOR.PATCH` tag pushes automatically run **Publish Fern Docs**, which builds versioned documentation from release tags. Prerelease tags do not trigger docs publishing.

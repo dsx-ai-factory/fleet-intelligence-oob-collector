@@ -30,6 +30,7 @@ env:
 
 jobs:
   validate:
+    if: ${{ github.ref_type == 'tag' }}
     name: Validate release
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -42,14 +43,16 @@ jobs:
         id: version
         env:
           VERSION: ${{ env.VERSION_TAG }}
-          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
         run: |
+          if [[ "$VERSION" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::Release version must match the selected tag"
+            exit 1
+          fi
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "release tag must be a semantic version such as v0.1.0 or v0.2.0-rc.1" >&2
             exit 1
           fi
           : "${NGC_NAMESPACE:?NGC_NAMESPACE is required}"
-          : "${NGC_API_KEY:?NGC_API_KEY is required}"
           printf 'version=%s\n' "${VERSION#v}" >> "$GITHUB_OUTPUT"
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
@@ -60,6 +63,8 @@ jobs:
       - run: helm lint deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
 
   build-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     needs: validate
     name: Build image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -123,6 +128,8 @@ jobs:
           retention-days: 1
 
   publish-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish image
     needs: [validate, build-image]
     runs-on: ubuntu-24.04
@@ -169,6 +176,8 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:$VERSION"
 
   build-nico-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     needs: validate
     name: Build NICo health image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -240,6 +249,8 @@ jobs:
           retention-days: 1
 
   publish-nico-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish NICo health image
     needs: [validate, build-nico-image]
     runs-on: ubuntu-24.04
@@ -287,6 +298,8 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:$VERSION"
 
   publish-chart:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish Helm chart
     needs: [validate, publish-image, publish-nico-image]
     runs-on: ubuntu-latest
