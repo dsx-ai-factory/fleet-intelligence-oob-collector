@@ -1,45 +1,61 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-name: Release
+name: Stage NGC release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Candidate version, for example v0.2.0-rc.1 (no public promotion)'
+        type: string
+        required: true
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: ngc-release-publication
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
-  NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   # Includes BMC credential-rejection suppression from
   # dsx-ai-factory/infra-controller#8323.
   NICO_SOURCE_REF: 92c64e5099c0496ae7d6e5291555d9cbebc45976
-  CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-latest
+    environment: ngc-publish
+    outputs:
+      tag: ${{ steps.config.outputs.tag }}
+      version: ${{ steps.config.outputs.version }}
+      image: ${{ steps.config.outputs.image }}
+      nico_image: ${{ steps.config.outputs.nico_image }}
+      chart_target: ${{ steps.config.outputs.chart_target }}
+      public_image_prefix: ${{ steps.config.outputs.public_image_prefix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Validate release version
+      - name: Validate NGC release configuration
+        id: config
         env:
-          VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NGC_ORG: ${{ vars.NGC_ORG }}
+          NGC_TEAM: ${{ vars.NGC_TEAM }}
+          NGC_PUBLIC_IMAGE_PREFIX: ${{ vars.NGC_PUBLIC_IMAGE_PREFIX }}
+          NGC_API_KEY: ${{ secrets.NGC_API_KEY }}
         run: |
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "release tag must be a semantic version such as v0.1.0 or v0.2.0-rc.1" >&2
-            exit 1
-          fi
+          set -euo pipefail
+          test -n "$NGC_API_KEY" || { echo "::error::NGC_API_KEY is required in ngc-publish"; exit 1; }
+          python3 scripts/prepare-ngc-release.py
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
           toolchain: 1.95.0
@@ -52,9 +68,9 @@ jobs:
     needs: validate
     name: Build image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    environment: ngc-publish
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -76,31 +92,25 @@ jobs:
           registry: nvcr.io
           username: '$oauthtoken'
           password: ${{ secrets.NGC_API_KEY }}
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ env.IMAGE }}
-          flavor: latest=auto
+          images: ${{ needs.validate.outputs.image }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ needs.validate.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ needs.validate.outputs.tag }}
             REVISION=${{ github.sha }}
-          provenance: mode=max
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Export image digest
@@ -120,11 +130,15 @@ jobs:
 
   publish-image:
     name: Publish image
-    needs: build-image
+    needs: [validate, build-image]
     runs-on: ubuntu-24.04
+    environment: ngc-publish
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
     permissions:
+      id-token: write
+      attestations: write
       contents: read
-      packages: write
     steps:
       - name: Download image digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -133,23 +147,25 @@ jobs:
           path: /tmp/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Log in to GHCR
+      - name: Log in to NVCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: nvcr.io
+          username: '$oauthtoken'
+          password: ${{ secrets.NGC_API_KEY }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ env.IMAGE }}
-          flavor: latest=auto
+          images: ${{ needs.validate.outputs.image }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - name: Create multi-platform image
+        id: manifest
         working-directory: /tmp/digests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE: ${{ needs.validate.outputs.image }}
         run: |
           tag_args=()
           while IFS= read -r tag; do
@@ -161,16 +177,36 @@ jobs:
             image_args+=("$IMAGE@sha256:$digest")
           done
 
-          docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}"
-          docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}" --metadata-file "$RUNNER_TEMP/image-metadata.json"
+          digest=$(jq -er '."containerimage.descriptor".digest' "$RUNNER_TEMP/image-metadata.json")
+          docker buildx imagetools inspect "$IMAGE@$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest multi-platform image
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ needs.validate.outputs.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Retain image metadata and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: collector-ngc-release-record
+          path: |
+            ${{ runner.temp }}/image-metadata.json
+            ${{ steps.provenance.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 90
 
   build-nico-image:
     needs: validate
     name: Build NICo health image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    environment: ngc-publish
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -199,19 +235,13 @@ jobs:
           registry: nvcr.io
           username: '$oauthtoken'
           password: ${{ secrets.NGC_API_KEY }}
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ env.NICO_IMAGE }}
-          flavor: latest=auto
+          images: ${{ needs.validate.outputs.nico_image }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -219,12 +249,12 @@ jobs:
           file: ./Dockerfile.nico-hardware-health
           platforms: ${{ matrix.platform }}
           push: true
-          outputs: type=image,name=${{ env.NICO_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ needs.validate.outputs.nico_image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ needs.validate.outputs.tag }}
             REVISION=${{ env.NICO_SOURCE_REF }}
-          provenance: mode=max
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Export image digest
@@ -244,11 +274,15 @@ jobs:
 
   publish-nico-image:
     name: Publish NICo health image
-    needs: build-nico-image
+    needs: [validate, build-nico-image]
     runs-on: ubuntu-24.04
+    environment: ngc-publish
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
     permissions:
+      id-token: write
+      attestations: write
       contents: read
-      packages: write
     steps:
       - name: Download image digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -257,24 +291,25 @@ jobs:
           path: /tmp/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Log in to GHCR
+      - name: Log in to NVCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: nvcr.io
+          username: '$oauthtoken'
+          password: ${{ secrets.NGC_API_KEY }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ env.NICO_IMAGE }}
-          flavor: latest=auto
+          images: ${{ needs.validate.outputs.nico_image }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - name: Create multi-platform image
+        id: manifest
         working-directory: /tmp/digests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
-          IMAGE: ${{ env.NICO_IMAGE }}
+          IMAGE: ${{ needs.validate.outputs.nico_image }}
         run: |
           tag_args=()
           while IFS= read -r tag; do
@@ -286,43 +321,120 @@ jobs:
             image_args+=("$IMAGE@sha256:$digest")
           done
 
-          docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}"
-          docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}" --metadata-file "$RUNNER_TEMP/image-metadata.json"
+          digest=$(jq -er '."containerimage.descriptor".digest' "$RUNNER_TEMP/image-metadata.json")
+          docker buildx imagetools inspect "$IMAGE@$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest multi-platform image
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ needs.validate.outputs.nico_image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Retain image metadata and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nico-ngc-release-record
+          path: |
+            ${{ runner.temp }}/image-metadata.json
+            ${{ steps.provenance.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 90
 
   publish-chart:
-    name: Publish Helm chart
-    needs:
-      - publish-image
-      - publish-nico-image
+    name: Stage Helm chart in NGC
+    needs: [validate, publish-image, publish-nico-image]
     runs-on: ubuntu-latest
+    environment: ngc-publish
     permissions:
       contents: read
-      packages: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      NGC_PUBLIC_IMAGE_PREFIX: ${{ needs.validate.outputs.public_image_prefix }}
+      CHART_TARGET: ${{ needs.validate.outputs.chart_target }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
-      - name: Log in to GHCR
-        env:
-          HELM_REGISTRY_USERNAME: ${{ github.actor }}
-          HELM_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$HELM_REGISTRY_PASSWORD" | helm registry login ghcr.io --username "$HELM_REGISTRY_USERNAME" --password-stdin
-      - name: Package and publish chart
-        env:
-          VERSION: ${{ github.ref_name }}
+        with:
+          version: v3.17.3
+      - name: Package chart with final public image references
         run: |
-          VERSION="${VERSION#v}"
-          cp LICENSE deployments/helm/fleet-intelligence-oob-collector/LICENSE
-          helm package deployments/helm/fleet-intelligence-oob-collector \
-            --version "$VERSION" \
-            --app-version "$VERSION" \
-            --destination dist
-          helm push "dist/fleet-intelligence-oob-collector-${VERSION}.tgz" "$CHART_REGISTRY"
-
-  publish-docs:
-    name: Publish Fern docs
-    needs: publish-chart
-    uses: ./.github/workflows/publish-fern-docs.yml
-    secrets:
-      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          set -euo pipefail
+          python3 scripts/prepare-ngc-release.py --chart-dir "$RUNNER_TEMP/release-chart"
+          helm lint "$RUNNER_TEMP/release-chart" --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
+          helm package "$RUNNER_TEMP/release-chart" --version "$VERSION" --app-version "$VERSION" --destination dist
+          cd dist
+          sha256sum "fleet-intelligence-oob-collector-${VERSION}.tgz" > chart.sha256
+          sha256sum --check chart.sha256
+      - name: Generate chart provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/fleet-intelligence-oob-collector-${{ needs.validate.outputs.version }}.tgz
+      - name: Record candidate for internal review
+        env:
+          COLLECTOR_IMAGE: ${{ needs.validate.outputs.image }}
+          COLLECTOR_DIGEST: ${{ needs.publish-image.outputs.digest }}
+          NICO_IMAGE: ${{ needs.validate.outputs.nico_image }}
+          NICO_DIGEST: ${{ needs.publish-nico-image.outputs.digest }}
+          NICO_REF: ${{ env.NICO_SOURCE_REF }}
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" dist/chart.sigstore.json
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          keys = ("VERSION", "COLLECTOR_IMAGE", "COLLECTOR_DIGEST", "NICO_IMAGE", "NICO_DIGEST", "NICO_REF", "CHART_TARGET", "NGC_PUBLIC_IMAGE_PREFIX", "GITHUB_SHA", "GITHUB_RUN_ID")
+          Path("dist/release-record.json").write_text(json.dumps({key: os.environ[key] for key in keys}, indent=2) + "\n")
+          PYTHON
+          cat dist/release-record.json >> "$GITHUB_STEP_SUMMARY"
+          cat dist/chart.sha256 >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain chart, checksum, provenance, and release record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ngc-release-candidate-${{ needs.validate.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install pinned NGC CLI
+        env:
+          NGC_CLI_VERSION: '4.36.6'
+          NGC_CLI_SHA256: '2972dbe54e80cedae18e82923a9a67a60aef23d041c5790336f8f4b51752bab6'
+        run: |
+          set -euo pipefail
+          ngc_dir=$(mktemp -d "$RUNNER_TEMP/ngc-cli.XXXXXX")
+          ngc_home=$(mktemp -d "$RUNNER_TEMP/ngc-home.XXXXXX")
+          printf 'NGC_CLI_HOME=%s\n' "$ngc_home" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+            -o "$ngc_dir/ngccli_linux.zip" \
+            "https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/${NGC_CLI_VERSION}/files/ngccli_linux.zip"
+          printf '%s  %s\n' "$NGC_CLI_SHA256" "$ngc_dir/ngccli_linux.zip" | sha256sum --check -
+          unzip -q "$ngc_dir/ngccli_linux.zip" -d "$ngc_dir"
+          chmod +x "$ngc_dir/ngc-cli/ngc"
+          printf '%s\n' "$ngc_dir/ngc-cli" >> "$GITHUB_PATH"
+          NGC_CLI_HOME="$ngc_home" "$ngc_dir/ngc-cli/ngc" --version
+      - name: Publish chart to private NGC staging
+        env:
+          NGC_CLI_API_KEY: ${{ secrets.NGC_API_KEY }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check chart.sha256
+          if ! ngc registry chart info "$CHART_TARGET"; then
+            ngc registry chart create "$CHART_TARGET" --short-desc "Fleet Intelligence out-of-band collector"
+          fi
+          ngc registry chart push "$CHART_TARGET:$VERSION"
+      - name: Remove NGC CLI state
+        if: always()
+        run: |
+          if [[ -n "${NGC_CLI_HOME:-}" ]]; then
+            rm -rf "$NGC_CLI_HOME"
+          fi

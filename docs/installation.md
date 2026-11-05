@@ -72,14 +72,13 @@ backend:
 
 ## Install
 
-Choose a published chart version from the repository [releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases) and replace `<chart-version>` below:
+Choose the public NGC chart download URL for your version from the repository [releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases) and replace `<public-chart-url>` below. The URL identifies the versioned chart package:
 
 ```bash
-export OOB_CHART_VERSION='<chart-version>'
+export OOB_CHART_URL='<public-chart-url>'
 
 helm upgrade --install fleet-intelligence-oob-collector \
-  oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
-  --version "$OOB_CHART_VERSION" \
+  "$OOB_CHART_URL" \
   --values /path/to/collector-values.yaml \
   --namespace "$NAMESPACE" \
   --create-namespace \

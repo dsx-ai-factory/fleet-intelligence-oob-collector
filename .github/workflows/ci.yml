@@ -39,6 +39,8 @@ jobs:
         run: helm template test deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml > /dev/null
       - name: Test NICo configuration overrides
         run: python3 -m unittest discover -s scripts -p 'test_nico_helm.py'
+      - name: Test NGC release configuration and packaged chart
+        run: python3 -m unittest discover -s scripts -p 'test_ngc_release.py'
       - name: Check generated configuration snapshot
         run: |
           helm template test deployments/helm/fleet-intelligence-oob-collector \

@@ -44,6 +44,8 @@ Set optional flat fields under `nicoHardwareHealth.config` to configure NICo col
 
 Every workload accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. Collector and NICo image tags default to the chart version, and `imagePullSecrets` sets registry credentials.
 
+The NGC release workflow packages a copy of this chart with the final public NGC collector and NICo image repositories. The telemetry gateway has its own image repository and version. See the [release process](../../../RELEASE.md) for staging, approval, and promotion.
+
 Helm checks value types, label key syntax, MAC uniqueness, and component combinations when you install. The collector checks the remaining rules, such as reserved label names, label counts, and value lengths, when it loads the configuration, including in NICo's init container.
 
 After you change values, run `helm upgrade`. See [rotation and ownership](../../../docs/credentials.md#rotation-and-ownership) for what restarts automatically and what doesn't, and [values.yaml](values.yaml) and the [configuration reference](../../../docs/configuration.md) for every setting.

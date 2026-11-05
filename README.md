@@ -9,7 +9,7 @@ The Fleet Intelligence out-of-band (OOB) collector gathers hardware inventory an
 - Per-BMC concurrency and rate limiting shared by inventory and attestation.
 - [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) from the `infra-controller` health crate for metrics and BMC log collection.
 - An authenticated OpenTelemetry gateway for telemetry export.
-- An OCI Helm chart for Kubernetes deployment.
+- A Helm chart for Kubernetes deployment.
 
 ## How it works
 
