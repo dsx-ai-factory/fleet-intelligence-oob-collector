@@ -124,7 +124,7 @@ otelGateway:
   enabled: true
   image:
     repository: nvcr.io/nvidia/fleet-intelligence/otel-gateway
-    tag: 1.5.1 # Required; independent of the chart version.
+    tag: 1.6.0 # Required; independent of the chart version.
     pullPolicy: IfNotPresent
   resources:
     limits:
