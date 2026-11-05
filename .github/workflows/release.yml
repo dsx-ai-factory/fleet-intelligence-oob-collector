@@ -4,6 +4,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
@@ -19,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VERSION_TAG: ${{ inputs.version }}
+  VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
   NGC_NAMESPACE: ${{ vars.NGC_NAMESPACE }}
   IMAGE: nvcr.io/${{ vars.NGC_NAMESPACE }}/oob-collector
   NICO_IMAGE: nvcr.io/${{ vars.NGC_NAMESPACE }}/nico-hardware-health
@@ -350,3 +353,12 @@ jobs:
           if [[ -n "${NGC_CLI_HOME:-}" ]]; then
             rm -rf "$NGC_CLI_HOME"
           fi
+
+  publish-docs:
+    needs: publish-chart
+    if: ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/publish-fern-docs.yml
+    with:
+      include_rc: false
+    secrets:
+      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
