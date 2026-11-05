@@ -72,7 +72,7 @@ backend:
 
 ## Install
 
-Choose a published chart version from the repository [releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases) and replace `<chart-version>` below:
+Choose a published chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob) and replace `<chart-version>` below:
 
 ```bash
 export OOB_CHART_VERSION='<chart-version>'

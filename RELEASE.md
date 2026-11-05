@@ -11,3 +11,5 @@ Maintainers publish release artifacts through the **Release** workflow using a s
 | Helm repository | `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence` |
 
 New images and charts are published only to NGC. The gateway image is provided by Fleet Intelligence Agent. See [Installation](docs/installation.md) for installation and verification commands.
+
+After publishing the artifacts, push the matching release tag from the commit used by the **Release** workflow. Stable `vMAJOR.MINOR.PATCH` tag pushes automatically run **Publish Fern Docs**, which builds versioned documentation from release tags. Prerelease tags do not trigger docs publishing.
