@@ -23,9 +23,8 @@ concurrency:
 
 env:
   VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-  NGC_NAMESPACE: ${{ vars.NGC_NAMESPACE }}
-  IMAGE: nvcr.io/${{ vars.NGC_NAMESPACE }}/oob-collector
-  NICO_IMAGE: nvcr.io/${{ vars.NGC_NAMESPACE }}/nico-hardware-health
+  IMAGE: nvcr.io/1070195845945670/fleet-intelligence/oob-collector
+  NICO_IMAGE: nvcr.io/1070195845945670/fleet-intelligence/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   # Includes BMC credential-rejection suppression from
   # dsx-ai-factory/infra-controller#8323.
@@ -55,7 +54,6 @@ jobs:
             echo "release tag must be a semantic version such as v0.1.0 or v0.2.0-rc.1" >&2
             exit 1
           fi
-          : "${NGC_NAMESPACE:?NGC_NAMESPACE is required}"
           printf 'version=%s\n' "${VERSION#v}" >> "$GITHUB_OUTPUT"
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
@@ -339,7 +337,7 @@ jobs:
       - name: Publish chart
         env:
           NGC_CLI_API_KEY: ${{ secrets.NGC_API_KEY }}
-          CHART_TARGET: ${{ vars.NGC_NAMESPACE }}/fleet-intelligence-oob
+          CHART_TARGET: 1070195845945670/fleet-intelligence/fleet-intelligence-oob
         run: |
           set -euo pipefail
           cd dist
