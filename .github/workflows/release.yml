@@ -6,40 +6,55 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v0.2.0 or v0.2.0-rc.1'
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-artifacts-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
-  NICO_IMAGE: ghcr.io/dsx-ai-factory/nico-hardware-health
+  VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  IMAGE: nvcr.io/1070195845945670/fleet-intelligence/oob-collector
+  NICO_IMAGE: nvcr.io/1070195845945670/fleet-intelligence/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   # Includes BMC credential-rejection suppression from
   # dsx-ai-factory/infra-controller#8323.
   NICO_SOURCE_REF: 92c64e5099c0496ae7d6e5291555d9cbebc45976
-  CHART_REGISTRY: oci://ghcr.io/dsx-ai-factory/charts
 
 jobs:
   validate:
+    if: ${{ github.ref_type == 'tag' }}
     name: Validate release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Validate release version
+      - name: Set release version
+        id: version
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ env.VERSION_TAG }}
         run: |
+          if [[ "$VERSION" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::Release version must match the selected tag"
+            exit 1
+          fi
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "release tag must be a semantic version such as v0.1.0 or v0.2.0-rc.1" >&2
             exit 1
           fi
+          printf 'version=%s\n' "${VERSION#v}" >> "$GITHUB_OUTPUT"
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
         with:
           toolchain: 1.95.0
@@ -49,12 +64,13 @@ jobs:
       - run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
 
   build-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     needs: validate
     name: Build image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -76,19 +92,13 @@ jobs:
           registry: nvcr.io
           username: '$oauthtoken'
           password: ${{ secrets.NGC_API_KEY }}
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -98,7 +108,7 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ github.sha }}
           provenance: mode=max
           sbom: true
@@ -119,12 +129,13 @@ jobs:
           retention-days: 1
 
   publish-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish image
-    needs: build-image
+    needs: [validate, build-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Download image digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -133,23 +144,24 @@ jobs:
           path: /tmp/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Log in to GHCR
+      - name: Log in to NVCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: nvcr.io
+          username: '$oauthtoken'
+          password: ${{ secrets.NGC_API_KEY }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - name: Create multi-platform image
         working-directory: /tmp/digests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           tag_args=()
           while IFS= read -r tag; do
@@ -162,15 +174,16 @@ jobs:
           done
 
           docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}"
-          docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
 
   build-nico-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     needs: validate
     name: Build NICo health image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -199,19 +212,13 @@ jobs:
           registry: nvcr.io
           username: '$oauthtoken'
           password: ${{ secrets.NGC_API_KEY }}
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.NICO_IMAGE }}
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -222,7 +229,7 @@ jobs:
           outputs: type=image,name=${{ env.NICO_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ env.NICO_SOURCE_REF }}
           provenance: mode=max
           sbom: true
@@ -243,12 +250,13 @@ jobs:
           retention-days: 1
 
   publish-nico-image:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish NICo health image
-    needs: build-nico-image
+    needs: [validate, build-nico-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Download image digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -257,23 +265,24 @@ jobs:
           path: /tmp/digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Log in to GHCR
+      - name: Log in to NVCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: nvcr.io
+          username: '$oauthtoken'
+          password: ${{ secrets.NGC_API_KEY }}
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.NICO_IMAGE }}
-          flavor: latest=auto
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.validate.outputs.version }}
       - name: Create multi-platform image
         working-directory: /tmp/digests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          VERSION: ${{ needs.validate.outputs.version }}
           IMAGE: ${{ env.NICO_IMAGE }}
         run: |
           tag_args=()
@@ -287,42 +296,58 @@ jobs:
           done
 
           docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}"
-          docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
 
   publish-chart:
+    if: ${{ github.ref_type == 'tag' }}
+    environment: ngc-publish
     name: Publish Helm chart
-    needs:
-      - publish-image
-      - publish-nico-image
+    needs: [validate, publish-image, publish-nico-image]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
-      - name: Log in to GHCR
-        env:
-          HELM_REGISTRY_USERNAME: ${{ github.actor }}
-          HELM_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$HELM_REGISTRY_PASSWORD" | helm registry login ghcr.io --username "$HELM_REGISTRY_USERNAME" --password-stdin
-      - name: Package and publish chart
-        env:
-          VERSION: ${{ github.ref_name }}
+        with:
+          version: v3.17.3
+      - name: Package chart
         run: |
-          VERSION="${VERSION#v}"
           cp LICENSE deployments/helm/fleet-intelligence-oob-collector/LICENSE
-          helm package deployments/helm/fleet-intelligence-oob-collector \
-            --version "$VERSION" \
-            --app-version "$VERSION" \
-            --destination dist
-          helm push "dist/fleet-intelligence-oob-collector-${VERSION}.tgz" "$CHART_REGISTRY"
-
-  publish-docs:
-    name: Publish Fern docs
-    needs: publish-chart
-    uses: ./.github/workflows/publish-fern-docs.yml
-    secrets:
-      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          helm package deployments/helm/fleet-intelligence-oob-collector --version "$VERSION" --app-version "$VERSION" --destination dist
+      - name: Install pinned NGC CLI
+        env:
+          NGC_CLI_VERSION: '4.36.6'
+          NGC_CLI_SHA256: '2972dbe54e80cedae18e82923a9a67a60aef23d041c5790336f8f4b51752bab6'
+        run: |
+          set -euo pipefail
+          ngc_dir=$(mktemp -d "$RUNNER_TEMP/ngc-cli.XXXXXX")
+          ngc_home=$(mktemp -d "$RUNNER_TEMP/ngc-home.XXXXXX")
+          printf 'NGC_CLI_HOME=%s\n' "$ngc_home" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+            -o "$ngc_dir/ngccli_linux.zip" \
+            "https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/${NGC_CLI_VERSION}/files/ngccli_linux.zip"
+          printf '%s  %s\n' "$NGC_CLI_SHA256" "$ngc_dir/ngccli_linux.zip" | sha256sum --check -
+          unzip -q "$ngc_dir/ngccli_linux.zip" -d "$ngc_dir"
+          chmod +x "$ngc_dir/ngc-cli/ngc"
+          printf '%s\n' "$ngc_dir/ngc-cli" >> "$GITHUB_PATH"
+          NGC_CLI_HOME="$ngc_home" "$ngc_dir/ngc-cli/ngc" --version
+      - name: Publish chart
+        env:
+          NGC_CLI_API_KEY: ${{ secrets.NGC_API_KEY }}
+          CHART_TARGET: 1070195845945670/fleet-intelligence/fleet-intelligence-oob-collector
+        run: |
+          set -euo pipefail
+          cd dist
+          if ! ngc registry chart info --org 1070195845945670 --team fleet-intelligence "$CHART_TARGET"; then
+            ngc registry chart create --org 1070195845945670 --team fleet-intelligence "$CHART_TARGET" --short-desc "Fleet Intelligence out-of-band collector"
+          fi
+          ngc registry chart push --org 1070195845945670 --team fleet-intelligence "$CHART_TARGET:$VERSION"
+      - name: Remove NGC CLI state
+        if: always()
+        run: |
+          if [[ -n "${NGC_CLI_HOME:-}" ]]; then
+            rm -rf "$NGC_CLI_HOME"
+          fi

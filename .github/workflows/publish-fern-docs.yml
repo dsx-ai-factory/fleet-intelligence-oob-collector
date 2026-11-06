@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Publishes the Fern documentation site on GitHub Release or manual dispatch.
+# Publishes the Fern documentation site on stable GitHub releases or manual dispatch.
 #
 # Version content is fetched from release tags at publish time by
 # scripts/docs-fetch-versions.py, which reads fern/kept-versions.json to
@@ -28,16 +28,6 @@ name: Publish Fern Docs
 on:
   release:
     types: [published]
-  workflow_call:
-    inputs:
-      include_rc:
-        description: >
-          Fall back to RC tags for version groups with no stable release yet.
-        type: boolean
-        default: true
-    secrets:
-      DOCS_FERN_TOKEN:
-        required: true
   workflow_dispatch:
     inputs:
       include_rc:
@@ -57,14 +47,14 @@ concurrency:
 
 jobs:
   publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-tags: true
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js

@@ -1,6 +1,8 @@
-# Fleet Intelligence OOB Collector
+# fleet-intelligence-oob-collector Helm chart
 
 This chart deploys the OOB inventory and attestation collector, NICo hardware health, and a telemetry gateway. Follow the [installation guide](../../../docs/installation.md) to install it.
+
+The chart is published as `fleet-intelligence-oob-collector` at `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence`.
 
 ## Minimal values
 
@@ -37,6 +39,8 @@ The two Secrets hold the [BMC credentials file](../../../credentials.example.jso
 The gateway requires NICo. NICo's init container uses the collector image even when the collector is disabled.
 
 ## How it works
+
+With release name `fleet-intelligence-oob-collector`, the workloads are named `fleet-intelligence-oob-collector`, `nico-hardware-health`, and `fleet-intelligence-oob-collector-otel-gateway`.
 
 The chart turns `inventory` and optional NICo collection settings into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
 
