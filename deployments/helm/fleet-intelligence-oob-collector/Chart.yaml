@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 apiVersion: v2
-name: fleet-intelligence-oob
+name: fleet-intelligence-oob-collector
 description: Fleet Intelligence out-of-band collector
 type: application
 version: 0.1.0

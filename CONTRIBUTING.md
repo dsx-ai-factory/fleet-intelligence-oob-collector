@@ -230,7 +230,7 @@ The **Contribution conventions / PR title** GitHub Actions check validates PR ti
 
 ## Release Process
 
-Maintainers publish collector and NICo images and the `fleet-intelligence-oob` Helm chart through the Release workflow. See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for artifact locations.
+Maintainers publish collector and NICo images and the `fleet-intelligence-oob-collector` Helm chart through the Release workflow. See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for artifact locations.
 
 ## Developer Certificate of Origin (DCO)
 

@@ -1,6 +1,6 @@
 # Configuration
 
-You configure the collector through your Helm values file. This page covers each part of it, in the order you'd fill it in. [Installation](installation.md#save-your-values-file) has a complete minimal example, and [values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob/values.yaml) lists every setting with its default.
+You configure the collector through your Helm values file. This page covers each part of it, in the order you'd fill it in. [Installation](installation.md#save-your-values-file) has a complete minimal example, and [values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/values.yaml) lists every setting with its default.
 
 Passwords never go in the values file. They live in a separate [BMC credentials file](#bmc-credentials-file) that you store in a Kubernetes Secret, and the chart only references it.
 

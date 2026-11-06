@@ -5,8 +5,8 @@ CI renders `templates/configmap.yaml` with release name `test` and `test-values.
 After an intentional configuration change, regenerate the snapshot from the repository root and review the diff before committing:
 
 ```bash
-helm template test deployments/helm/fleet-intelligence-oob \
-  --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml \
+helm template test deployments/helm/fleet-intelligence-oob-collector \
+  --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml \
   --show-only templates/configmap.yaml \
-  > deployments/helm/fleet-intelligence-oob/ci/expected-configmap.yaml
+  > deployments/helm/fleet-intelligence-oob-collector/ci/expected-configmap.yaml
 ```

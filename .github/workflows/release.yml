@@ -61,7 +61,7 @@ jobs:
           cache: false
       - run: cargo test --workspace --locked
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
-      - run: helm lint deployments/helm/fleet-intelligence-oob --values deployments/helm/fleet-intelligence-oob/ci/test-values.yaml
+      - run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
 
   build-image:
     if: ${{ github.ref_type == 'tag' }}
@@ -315,8 +315,8 @@ jobs:
           version: v3.17.3
       - name: Package chart
         run: |
-          cp LICENSE deployments/helm/fleet-intelligence-oob/LICENSE
-          helm package deployments/helm/fleet-intelligence-oob --version "$VERSION" --app-version "$VERSION" --destination dist
+          cp LICENSE deployments/helm/fleet-intelligence-oob-collector/LICENSE
+          helm package deployments/helm/fleet-intelligence-oob-collector --version "$VERSION" --app-version "$VERSION" --destination dist
       - name: Install pinned NGC CLI
         env:
           NGC_CLI_VERSION: '4.36.6'
@@ -337,7 +337,7 @@ jobs:
       - name: Publish chart
         env:
           NGC_CLI_API_KEY: ${{ secrets.NGC_API_KEY }}
-          CHART_TARGET: 1070195845945670/fleet-intelligence/fleet-intelligence-oob
+          CHART_TARGET: 1070195845945670/fleet-intelligence/fleet-intelligence-oob-collector
         run: |
           set -euo pipefail
           cd dist

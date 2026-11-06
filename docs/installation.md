@@ -72,13 +72,13 @@ backend:
 
 ## Install
 
-Choose a published chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob) and replace `<chart-version>` below:
+Choose a published chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and replace `<chart-version>` below:
 
 ```bash
 export OOB_CHART_VERSION='<chart-version>'
 
-helm upgrade --install fleet-intelligence-oob \
-  fleet-intelligence-oob \
+helm upgrade --install fleet-intelligence-oob-collector \
+  fleet-intelligence-oob-collector \
   --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
   --version "$OOB_CHART_VERSION" \
   --values /path/to/collector-values.yaml \
@@ -95,12 +95,12 @@ Collector and NICo image tags default to the chart version. See [workload settin
 ## Verify
 
 ```bash
-helm status fleet-intelligence-oob \
+helm status fleet-intelligence-oob-collector \
   --namespace "$NAMESPACE"
 
 kubectl get pods \
   --namespace "$NAMESPACE" \
-  -l app.kubernetes.io/instance=fleet-intelligence-oob
+  -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
 
 kubectl logs \
   --namespace "$NAMESPACE" \
@@ -110,7 +110,7 @@ kubectl logs --namespace "$NAMESPACE" \
   deployment/nico-hardware-health --container generate-nico-config
 
 kubectl logs --namespace "$NAMESPACE" \
-  deployment/fleet-intelligence-oob-otel-gateway
+  deployment/fleet-intelligence-oob-collector-otel-gateway
 ```
 
 Use your release's Deployment names, and skip any component you disabled.
@@ -159,7 +159,7 @@ Uninstalling stops collection for every target in the release. Data that was alr
 1. Remove the Helm release, including its OOB collector, NICo hardware health, and OpenTelemetry gateway:
 
    ```bash
-   helm uninstall fleet-intelligence-oob \
+   helm uninstall fleet-intelligence-oob-collector \
      --namespace "$NAMESPACE" --wait --timeout 10m
    ```
 
@@ -167,7 +167,7 @@ Uninstalling stops collection for every target in the release. Data that was alr
 
    ```bash
    kubectl get pods --namespace "$NAMESPACE" \
-     -l app.kubernetes.io/instance=fleet-intelligence-oob
+     -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
 3. Delete unused credential Secrets:

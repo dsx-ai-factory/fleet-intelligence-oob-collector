@@ -7,7 +7,7 @@ Maintainers publish release artifacts through the **Release** workflow using a s
 | Collector image | `nvcr.io/nvidia/fleet-intelligence/oob-collector` |
 | NICo hardware health image | `nvcr.io/nvidia/fleet-intelligence/nico-hardware-health` |
 | Gateway image | `nvcr.io/nvidia/fleet-intelligence/otel-gateway` |
-| Helm chart | `fleet-intelligence-oob` |
+| Helm chart | `fleet-intelligence-oob-collector` |
 | Helm repository | `https://helm.ngc.nvidia.com/nvidia/fleet-intelligence` |
 
 New images and charts are published only to NGC. The gateway image is provided by Fleet Intelligence Agent. See [Installation](docs/installation.md) for installation and verification commands.
