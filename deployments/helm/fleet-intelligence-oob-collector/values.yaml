@@ -62,7 +62,7 @@ bmcCollector:
     requestsPerSecond: 10
     timeoutSeconds: 30
     # Disables verification and permits interception; collector only; NICo does not verify BMC certificates.
-    insecureTls: false
+    insecureTls: true
   latencyProbe:
     enabled: true
 

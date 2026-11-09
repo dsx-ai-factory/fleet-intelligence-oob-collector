@@ -248,7 +248,7 @@ Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` a
 | `bmcCollector.redfish.maxInFlight` | `2` | Maximum simultaneous requests to one BMC. |
 | `bmcCollector.redfish.requestsPerSecond` | `10` | Maximum request rate to one BMC. Short bursts up to the same number are allowed. |
 | `bmcCollector.redfish.timeoutSeconds` | `30` | Redfish request timeout. |
-| `bmcCollector.redfish.insecureTls` | `false` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
+| `bmcCollector.redfish.insecureTls` | `true` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
 | `bmcCollector.latencyProbe.enabled` | `true` | Measure network latency to each BMC. |
 
 These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. The two concurrency limits are independent, so inventory and NICo can each issue two requests to the same BMC at once with the defaults. See [request limits](architecture.md#request-limits) for how they work together.
@@ -282,4 +282,4 @@ proxy:
 
 `proxy` also accepts `httpProxy` and `allProxy`. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
 
-`bmcCollector.redfish.insecureTls` turns off BMC certificate checks for the collector. Use it only for BMCs with self-signed certificates on a network you trust, because it allows traffic to be intercepted. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.
+`bmcCollector.redfish.insecureTls` defaults to `true`, turning off BMC certificate checks for the collector. Set it to `false` to verify BMC certificates. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.
