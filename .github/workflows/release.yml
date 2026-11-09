@@ -110,8 +110,9 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ github.sha }}
-          provenance: mode=max
-          sbom: true
+          # Temporary NGC publishing workaround: disable BuildKit attestations.
+          provenance: false
+          sbom: false
 
       - name: Export image digest
         env:
@@ -231,8 +232,9 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ env.NICO_SOURCE_REF }}
-          provenance: mode=max
-          sbom: true
+          # Temporary NGC publishing workaround: disable BuildKit attestations.
+          provenance: false
+          sbom: false
 
       - name: Export image digest
         env:
