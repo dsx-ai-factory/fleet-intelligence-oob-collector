@@ -110,7 +110,6 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ github.sha }}
-          # Temporary NGC publishing workaround: disable BuildKit attestations.
           provenance: false
           sbom: false
 
@@ -232,7 +231,6 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION_TAG }}
             REVISION=${{ env.NICO_SOURCE_REF }}
-          # Temporary NGC publishing workaround: disable BuildKit attestations.
           provenance: false
           sbom: false
 
