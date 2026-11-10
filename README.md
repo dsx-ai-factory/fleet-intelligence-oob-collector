@@ -9,7 +9,7 @@ The Fleet Intelligence out-of-band (OOB) collector gathers hardware inventory an
 - Per-BMC concurrency and rate limiting shared by inventory and attestation.
 - [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) from the `infra-controller` health crate for metrics and BMC log collection.
 - An authenticated OpenTelemetry gateway for telemetry export.
-- An OCI Helm chart for Kubernetes deployment.
+- The `fleet-intelligence-oob-collector` Helm chart for Kubernetes deployment from NGC.
 
 ## How it works
 
@@ -49,6 +49,8 @@ Component references cover [inventory collection](https://github.com/dsx-ai-fact
 ## Contributing
 
 See [CONTRIBUTING.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md) for development setup and guidelines.
+
+See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for release artifacts.
 
 ## Security
 
