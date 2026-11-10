@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     mv "$1" "/out/fleetint-oob_${version}_$(dpkg --print-architecture).$PACKAGE_FORMAT" && \
     (cd /out && sha256sum ./*."$PACKAGE_FORMAT" > checksums.txt) && \
     if [ "$PACKAGE_TEST_UPGRADE" = 1 ]; then \
-        make "$PACKAGE_FORMAT" NICO_REF="$NICO_SOURCE_REF" VERSION="$package_version+test1" OUTPUTDIR=/out/test-fixtures; \
+        make -o package-binaries "$PACKAGE_FORMAT" NICO_REF="$NICO_SOURCE_REF" VERSION="$package_version+test1" OUTPUTDIR=/out/test-fixtures; \
     fi
 FROM scratch AS export
 COPY --from=build /out/ /
