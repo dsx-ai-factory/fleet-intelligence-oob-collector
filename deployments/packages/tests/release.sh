@@ -10,7 +10,7 @@ install -d -m700 "$GNUPGHOME"
 gpg --batch --passphrase '' --quick-gen-key 'OOB release test <release@example.test>' ed25519 sign 0
 fingerprint=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
 project="$root/project"
-mkdir -p "$project/scripts" "$project/deployments/packages/keys" "$root/bin" "$project/dist" "$root/store"
+mkdir -p "$project/scripts" "$project/deployments/packages/keys" "$root/bin" "$project/dist"
 cp scripts/*.sh "$project/scripts/"
 # Production scripts retain their approved pin. Only temporary copies use this key.
 sed -i -e "s/FE0C8B74CA66357C13BE197DCCE3C963087199B3/$fingerprint/g" \
@@ -18,13 +18,11 @@ sed -i -e "s/FE0C8B74CA66357C13BE197DCCE3C963087199B3/$fingerprint/g" \
 export SIGN_TEST_FINGERPRINT="$fingerprint"
 gpg --batch --armor --export "$fingerprint" > "$project/deployments/packages/keys/fleet-intelligence.pub.asc"
 cp deployments/packages/tests/fixtures/nvsec.sh "$root/bin/nvsec"
-cp deployments/packages/tests/fixtures/curl.sh "$root/bin/curl"
 chmod 755 "$root/bin/"*
 export PATH="$root/bin:$PATH" NVSEC_BIN="$root/bin/nvsec"
 export NVSEC_SSA_CLIENT_ID=test-client NVSEC_SSA_CLIENT_SECRET=test-client-secret
-export SIGN_LOG="$root/sign-log" UPLOAD_STORE="$root/store" HTTP_LOG="$root/requests"
+export SIGN_LOG="$root/sign-log"
 : > "$SIGN_LOG"
-: > "$HTTP_LOG"
 cd "$project"
 dist="$project/dist"
 key="$project/deployments/packages/keys/fleet-intelligence.pub.asc"
@@ -133,34 +131,6 @@ restore
 printf '%064d  fake.deb\n' 0 > "$dist/checksums.txt"
 reject scripts/verify-debian-release.sh "$dist"
 restore
-export ARTIFACTORY_URL=https://packages.example.test/oob
-export ARTIFACTORY_USER=test-user ARTIFACTORY_TOKEN=test-repository-token
-scripts/publish-deb-artifactory.sh "$dist"
-[ "$(find "$UPLOAD_STORE" -type f | wc -l)" -eq 2 ]
-puts=$(grep -c '^PUT ' "$HTTP_LOG")
-scripts/publish-deb-artifactory.sh "$dist"
-[ "$(grep -c '^PUT ' "$HTTP_LOG")" -eq "$puts" ]
-for problem in redirect changed signature http; do
-    restore
-    : > "$HTTP_LOG"
-    case "$problem" in
-        redirect) export REDIRECT=1 ;;
-        changed) printf 'different published bytes' > "$UPLOAD_STORE/${package##*/}" ;;
-        signature) printf 'not a signature' > "$dist/checksums.txt.asc" ;;
-        http) export ARTIFACTORY_URL=http://packages.example.test/oob ;;
-    esac
-    reject scripts/publish-deb-artifactory.sh "$dist"
-    if grep '^PUT ' "$HTTP_LOG"; then
-        echo 'Publication proceeded after validation failure' >&2; exit 1
-    else
-        [[ $? == 1 ]]
-    fi
-    unset REDIRECT
-done
-# Reject malformed destinations before creating credentials or issuing requests.
-for destination in 'https://user:password@example.test/oob' 'https://example.test/oob?query' 'https://example.test/oob#fragment' 'https://example.test:invalid/oob' 'https://example.test:70000/oob' 'https://example.test/white space'; do
-    ARTIFACTORY_URL="$destination" reject scripts/publish-deb-artifactory.sh --check-config
-done
 # RC package metadata uses '~' while downloadable names retain the tag.
 rc_dist="$root/prerelease"
 mkdir -p "$rc_dist"
@@ -175,4 +145,4 @@ for pair in amd64:x86_64 arm64:aarch64; do
 done
 scripts/prepare-debian-release.sh "$rc_dist" 1.2.3-rc.1
 scripts/verify-debian-release.sh "$rc_dist"
-printf 'Offline signing, authentication, tamper rejection and immutable publication checks passed\n'
+printf 'Offline signing and tamper rejection checks passed\n'

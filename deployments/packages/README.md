@@ -184,4 +184,4 @@ production rollout.
 
 `make rpm-test` uses the same build inputs to create RPMs and installs them in a disposable Rocky Linux 9 container. It starts all three daemons against loopback fixtures, verifies authenticated export, upgrades the package, checks configuration and service-state preservation, and removes it. The systemd manager is stubbed; validate sandboxing and service supervision on target VMs before production rollout. Modified package configuration is retained as `.rpmsave` on removal, and operator-created credentials remain.
 
-`make rpm-package PACKAGE_VERSION=1.2.3-rc.1` writes unsigned RPMs to `dist/rpm/`. Signed RPMs are attached to GitHub releases alongside DEBs; Artifactory publication currently covers DEBs only.
+`make rpm-package PACKAGE_VERSION=1.2.3-rc.1` writes unsigned RPMs to `dist/rpm/`. Signed RPMs are attached to GitHub releases alongside DEBs.
