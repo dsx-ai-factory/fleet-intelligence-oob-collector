@@ -352,12 +352,6 @@ jobs:
             rm -rf "$NGC_CLI_HOME"
           fi
 
-  package-ci:
-    if: ${{ github.ref_type == 'tag' }}
-    name: Test host packages
-    needs: validate
-    uses: ./.github/workflows/host-packages.yml
-
   reserve-package-release:
     if: ${{ github.ref_type == 'tag' }}
     name: Reserve package release
@@ -389,8 +383,8 @@ jobs:
 
   build-packages:
     if: ${{ github.ref_type == 'tag' }}
-    name: Build host packages (${{ matrix.architecture }})
-    needs: [reserve-package-release, package-ci]
+    name: Build and test host packages (${{ matrix.architecture }})
+    needs: reserve-package-release
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -406,22 +400,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Build release package
+      - name: Build and test release package
         env:
           RELEASE_TAG: ${{ env.VERSION_TAG }}
-          PACKAGE_ARCH: ${{ matrix.architecture }}
         run: |
-          make debian-package PACKAGE_VERSION="${RELEASE_TAG#v}"
-          make rpm-package PACKAGE_VERSION="${RELEASE_TAG#v}"
+          make debian-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+          make rpm-test PACKAGE_VERSION="${RELEASE_TAG#v}"
           # One flat upload root preserves the layout expected by signing.
           mkdir -p dist/release
-          for format in deb rpm; do
-            name="fleetint-oob_${RELEASE_TAG#v}_${PACKAGE_ARCH}.$format"
-            case "$format" in deb) source_dir=debian ;; rpm) source_dir=rpm ;; esac
-            test -s "dist/$source_dir/$name"
-            cp "dist/$source_dir/$name" dist/release/
-          done
-          test "$(find dist/release -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          cp dist/debian/*.deb dist/rpm/*.rpm dist/release/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-packages-${{ matrix.architecture }}
@@ -446,17 +433,11 @@ jobs:
           merge-multiple: true
       - name: Check signing runner tools and credentials
         env:
-          RELEASE_TAG: ${{ env.VERSION_TAG }}
           NVSEC_SSA_CLIENT_ID: ${{ secrets.NVSEC_SSA_CLIENT_ID }}
           NVSEC_SSA_CLIENT_SECRET: ${{ secrets.NVSEC_SSA_CLIENT_SECRET }}
         run: |
           for tool in nvsec gpg gpgv ar rpm sha256sum md5sum sha1sum; do
             command -v "$tool" >/dev/null || { echo "Required signing tool is unavailable: $tool" >&2; exit 1; }
-          done
-          for arch in amd64 arm64; do
-            for format in deb rpm; do
-              test -s "dist/fleetint-oob_${RELEASE_TAG#v}_${arch}.$format"
-            done
           done
           : "${NVSEC_SSA_CLIENT_ID:?Configure signing credentials}"
           : "${NVSEC_SSA_CLIENT_SECRET:?Configure signing credentials}"
