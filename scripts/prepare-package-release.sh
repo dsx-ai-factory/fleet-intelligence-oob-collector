@@ -15,12 +15,11 @@ for arch in amd64 arm64; do
   }
 done
 key=deployments/packages/keys/fleet-intelligence.pub.asc
-# Start with the unsigned hashes; refresh only the signed package entries later.
-(cd "$dist_dir" && sha256sum fleetint-oob_*.deb > checksums.txt)
 scripts/sign-linux-packages.sh "$dist_dir" "$key"
 install -m 0644 "$key" "$dist_dir/fleet-intelligence.pub.asc"
 install -m 0755 scripts/verify-linux-package-signature.sh "$dist_dir/verify-linux-package-signature.sh"
-scripts/refresh-checksums.sh "$dist_dir/checksums.txt" \
-  "$dist_dir/fleet-intelligence.pub.asc" "$dist_dir/verify-linux-package-signature.sh"
+# Hash the verified signed packages and the exact supporting release files.
+(cd "$dist_dir" && sha256sum "${packages[@]##*/}" \
+  fleet-intelligence.pub.asc verify-linux-package-signature.sh > checksums.txt)
 scripts/sign-checksum-manifest.sh "$dist_dir/checksums.txt" "$key"
-scripts/verify-debian-release.sh "$dist_dir"
+scripts/verify-package-release.sh "$dist_dir"

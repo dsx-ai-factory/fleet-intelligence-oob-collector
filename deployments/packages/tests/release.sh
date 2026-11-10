@@ -32,9 +32,9 @@ for arch in amd64 arm64; do
     dpkg-deb --build --root-owner-group "$tree" "$dist/fleetint-oob_1.2.3_$arch.deb"
 done
 cp -r "$dist" "$root/original"
-scripts/prepare-debian-release.sh "$dist" 1.2.3
+scripts/prepare-package-release.sh "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq 3 ]
-scripts/verify-debian-release.sh "$dist"
+scripts/verify-package-release.sh "$dist"
 cp -r "$dist" "$root/baseline"
 restore() {
     rm -f "$dist/"*
@@ -63,9 +63,9 @@ restore
 member=$(ar t "$package" | grep '^data.tar')
 printf 'altered signed payload' > "$root/$member"
 ar r "$package" "$root/$member"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 printf '%064d  fake.deb\n' 0 > "$dist/checksums.txt"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 printf 'Offline signing and tamper rejection checks passed\n'
