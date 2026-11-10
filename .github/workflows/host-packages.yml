@@ -19,7 +19,6 @@ on:
       - 'config.example.toml'
       - '.github/workflows/host-packages.yml'
   workflow_dispatch:
-  workflow_call:
 permissions:
   contents: read
 jobs:

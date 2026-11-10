@@ -67,6 +67,11 @@ spec:
             - "0.0.0.0:9009"
             - --metrics-prefix
             - fleetint
+            - --resource-status-firmware-poll-interval-seconds
+            - {{ .Values.nicoHardwareHealth.resourceStatus.firmwarePollIntervalSeconds | quote }}
+            {{- if not .Values.nicoHardwareHealth.resourceStatus.enabled }}
+            - --disable-resource-status-collection
+            {{- end }}
           volumeMounts:
             - name: collector-config
               mountPath: /etc/fleet-intelligence

@@ -162,7 +162,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 
 `RUST_LOG` sets the log level and defaults to `info`.
 
-`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), and `--metrics-prefix` (default `fleetint`). These options only configure NICo; they don't start a gateway.
+`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), `--metrics-prefix` (default `fleetint`), `--resource-status-firmware-poll-interval-seconds` (default `1800`), and `--disable-resource-status-collection`. These options only configure NICo; they don't start a gateway. The interval controls FirmwareInventory status; System and Chassis use NICo's discovery cadence, and Manager uses NICo's manager cadence.
 
 Do not commit real BMC credentials, customer data, private backend URLs, or raw hardware dumps. The repository ignores the documented local configuration and environment files by default.
 
