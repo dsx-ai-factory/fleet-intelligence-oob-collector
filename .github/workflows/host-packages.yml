@@ -17,7 +17,7 @@ on:
       - '.github/workflows/release.yml'
       - 'rust-toolchain.toml'
       - 'config.example.toml'
-      - '.github/workflows/debian.yml'
+      - '.github/workflows/host-packages.yml'
   workflow_dispatch:
 permissions:
   contents: read
