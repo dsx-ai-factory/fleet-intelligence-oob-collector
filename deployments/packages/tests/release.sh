@@ -40,13 +40,6 @@ for arch in amd64 arm64; do
     dpkg-deb --build --root-owner-group "$tree" "$dist/fleetint-oob_1.2.3_$arch.deb"
 done
 cp -r "$dist" "$root/original"
-scripts/prepare-package-release.sh "$dist" 1.2.3
-[ "$(wc -l < "$SIGN_LOG")" -eq 3 ]
-scripts/verify-package-release.sh "$dist"
-cp -r "$dist" "$root/deb-only"
-# DEB-only releases remain verifiable. New releases add real RPM packages and
-# signatures to the same manifest and the same verified GitHub asset inventory.
-cp "$root/original/"*.deb "$dist/"
 mkdir -p "$root/rpmbuild/SPECS"
 cat > "$root/rpmbuild/SPECS/fixture.spec" <<'SPEC'
 Name: fleetint-oob
@@ -70,7 +63,6 @@ for pair in amd64:x86_64 arm64:aarch64; do
     cp "$dist/fleetint-oob_1.2.3_$arch.rpm" "$root/original/"
 done
 : > "$SIGN_LOG"
-export REQUIRE_RPM=1
 scripts/prepare-package-release.sh "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq 5 ]
 scripts/verify-package-release.sh "$dist"
@@ -85,12 +77,13 @@ reject() {
         exit 1
     fi
 }
-# New releases must reject even a valid historical DEB-only release.
-REQUIRE_RPM=0 scripts/verify-package-release.sh "$root/deb-only"
-reject scripts/verify-package-release.sh "$root/deb-only"
+# Missing both RPMs must fail before any signing request.
+rm "$dist/"*.rpm
+reject scripts/verify-package-release.sh "$dist"
 sign_count=$(wc -l < "$SIGN_LOG")
-reject scripts/prepare-package-release.sh "$root/deb-only" 1.2.3
+reject scripts/prepare-package-release.sh "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq "$sign_count" ]
+restore
 for arch in amd64 arm64; do
     rpm_package="$dist/fleetint-oob_1.2.3_$arch.rpm"
     mv "$rpm_package" "$root/held.rpm"

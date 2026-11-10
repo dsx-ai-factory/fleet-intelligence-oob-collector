@@ -11,7 +11,8 @@ const upload = require('../../../scripts/publish-package-assets.cjs');
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'release-assets-'));
   const names = ['fleetint-oob_1.2.3_amd64.deb',
-    'fleetint-oob_1.2.3_arm64.deb', 'checksums.txt',
+    'fleetint-oob_1.2.3_arm64.deb',
+    'fleetint-oob_1.2.3_amd64.rpm', 'fleetint-oob_1.2.3_arm64.rpm', 'checksums.txt',
     'checksums.txt.asc', 'fleet-intelligence.pub.asc', 'verify-linux-package-signature.sh'];
   for (const name of names) fs.writeFileSync(path.join(directory, name), name);
   const state = { draft: true, tag_name: 'v1.2.3', assets: [], uploads: 0, fail: false };
@@ -47,9 +48,9 @@ test('uploads binary assets with their media type and retries without replacing 
   try {
     fs.writeFileSync(path.join(f.directory, 'fleetint-oob_1.2.3_amd64.deb'), Buffer.from([0, 255, 128, 13, 10]));
     await upload(f.args);
-    assert.equal(f.state.uploads, 6);
+    assert.equal(f.state.uploads, 8);
     await upload(f.args);
-    assert.equal(f.state.uploads, 6);
+    assert.equal(f.state.uploads, 8);
   } finally { f.cleanup(); }
 });
 
@@ -61,7 +62,7 @@ test('resumes an interrupted draft upload', async () => {
     assert.equal(f.state.uploads, 1);
     f.state.fail = false;
     await upload(f.args);
-    assert.equal(f.state.uploads, 6);
+    assert.equal(f.state.uploads, 8);
   } finally { f.cleanup(); }
 });
 
@@ -85,11 +86,11 @@ test('recovers an abandoned empty starter asset after an upload failure', async 
     const name = 'fleetint-oob_1.2.3_amd64.deb';
     f.state.assets.push({ id: 42, name, state: 'starter', size: 0, digest: null });
     await upload(f.args);
-    assert.equal(f.state.uploads, 6);
-    assert.equal(f.state.assets.length, 6);
+    assert.equal(f.state.uploads, 8);
+    assert.equal(f.state.assets.length, 8);
     assert.ok(f.state.assets.every(asset => asset.state === 'uploaded'));
     await upload(f.args);
-    assert.equal(f.state.uploads, 6);
+    assert.equal(f.state.uploads, 8);
   } finally { f.cleanup(); }
 });
 for (const problem of ['nonempty', 'digest', 'delete']) {
@@ -112,9 +113,6 @@ for (const problem of ['nonempty', 'digest', 'delete']) {
 test('uploads RPMs alongside DEBs and retains immutable retries', async () => {
   const f = fixture();
   try {
-    for (const arch of ['amd64', 'arm64']) {
-      fs.writeFileSync(path.join(f.directory, `fleetint-oob_1.2.3_${arch}.rpm`), arch);
-    }
     await upload(f.args);
     assert.equal(f.state.uploads, 8);
     await upload(f.args);
@@ -128,7 +126,7 @@ test('uploads RPMs alongside DEBs and retains immutable retries', async () => {
 test('rejects an incomplete RPM set before uploading any assets', async () => {
   const f = fixture();
   try {
-    fs.writeFileSync(path.join(f.directory, 'fleetint-oob_1.2.3_amd64.rpm'), 'fixture');
+    fs.unlinkSync(path.join(f.directory, 'fleetint-oob_1.2.3_arm64.rpm'));
     await assert.rejects(upload(f.args));
     assert.equal(f.state.uploads, 0);
   } finally { f.cleanup(); }
@@ -183,7 +181,9 @@ for (const problem of ['published', 'commit', 'ambiguous']) {
 test('requires both RPMs when publishing a new release', async () => {
   const f = fixture();
   try {
-    f.args.requireRpm = true;
+    for (const arch of ['amd64', 'arm64']) {
+      fs.unlinkSync(path.join(f.directory, `fleetint-oob_1.2.3_${arch}.rpm`));
+    }
     await assert.rejects(upload(f.args));
     assert.equal(f.state.uploads, 0);
   } finally { f.cleanup(); }

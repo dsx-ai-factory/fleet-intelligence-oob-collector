@@ -13,16 +13,9 @@ fingerprint="$(gpg --batch --homedir "$work_dir/gnupg" --show-keys --with-colons
 gpg --batch --homedir "$work_dir/gnupg" --dearmor --output "$work_dir/key.gpg" "$key"
 gpgv --status-fd 1 --keyring "$work_dir/key.gpg" "$dist_dir/checksums.txt.asc" "$dist_dir/checksums.txt" > "$work_dir/status" 2>&1
 grep -q '^\[GNUPG:\] VALIDSIG FE0C8B74CA66357C13BE197DCCE3C963087199B3 ' "$work_dir/status" || { echo "Unexpected checksum signer" >&2; exit 1; }
-# Retain DEB-only verification for releases published before RPM support.
 shopt -s nullglob
-rpms=("$dist_dir"/*.rpm)
-if [[ ${REQUIRE_RPM:-0} == 1 && ${#rpms[@]} != 2 ]]; then
-  echo "New releases require both RPM architecture packages" >&2; exit 1
-fi
-[[ ${#rpms[@]} == 0 || ${#rpms[@]} == 2 ]] || { echo "Expected zero or two RPM packages" >&2; exit 1; }
-expected_packages=$((2 + ${#rpms[@]}))
 # Signed filenames still need validation before any file is hashed.
-awk -v expected="$expected_packages" '
+awk -v expected=4 '
   NF != 2 || length($1) != 64 || $1 ~ /[^a-fA-F0-9]/ || $2 ~ /[\/\\]/ || seen[$2]++ {exit 1}
   $2 ~ /^fleetint-oob_[0-9][a-zA-Z0-9.+~-]*_(amd64|arm64)[.](deb|rpm)$/ {packages++; next}
   $2 == "fleet-intelligence.pub.asc" || $2 == "verify-linux-package-signature.sh" {extras++; next}
@@ -31,9 +24,7 @@ awk -v expected="$expected_packages" '
 ' "$dist_dir/checksums.txt" || { echo "Invalid release checksum inventory" >&2; exit 1; }
 (cd "$dist_dir" && sha256sum -c checksums.txt)
 version=
-formats=(deb)
-(( ${#rpms[@]} == 0 )) || formats+=(rpm)
-for format in "${formats[@]}"; do
+for format in deb rpm; do
   packages=("$dist_dir"/*."$format")
   [[ ${#packages[@]} == 2 ]] || { echo "Expected exactly two $format architecture packages" >&2; exit 1; }
   for arch in amd64 arm64; do

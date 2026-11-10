@@ -4,19 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-module.exports = async function uploadAssets({ github, context, releaseId, directory = 'dist', requireRpm = process.env.REQUIRE_RPM === '1' }) {
+module.exports = async function uploadAssets({ github, context, releaseId, directory = 'dist' }) {
   const tag = context.ref.replace(/^refs\/tags\//, '');
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) throw new Error('Invalid release tag');
   const version = tag.slice(1);
   const expected = [
     `fleetint-oob_${version}_amd64.deb`,
     `fleetint-oob_${version}_arm64.deb`,
+    `fleetint-oob_${version}_amd64.rpm`,
+    `fleetint-oob_${version}_arm64.rpm`,
     'checksums.txt', 'checksums.txt.asc', 'fleet-intelligence.pub.asc',
     'verify-linux-package-signature.sh',
   ];
-  if (requireRpm || fs.readdirSync(directory).some(name => name.endsWith('.rpm'))) {
-    expected.push(`fleetint-oob_${version}_amd64.rpm`, `fleetint-oob_${version}_arm64.rpm`);
-  }
   // Validate the complete local inventory before beginning any upload.
   for (const name of expected) fs.accessSync(path.join(directory, name), fs.constants.R_OK);
   const { data: release } = await github.rest.repos.getRelease({ ...context.repo, release_id: releaseId });

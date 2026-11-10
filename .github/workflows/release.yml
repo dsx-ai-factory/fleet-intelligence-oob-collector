@@ -22,7 +22,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REQUIRE_RPM: '1'
   VERSION_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
   IMAGE: nvcr.io/1070195845945670/fleet-intelligence/oob-collector
   NICO_IMAGE: nvcr.io/1070195845945670/fleet-intelligence/nico-hardware-health
