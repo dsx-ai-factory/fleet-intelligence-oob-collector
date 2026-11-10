@@ -42,7 +42,6 @@ jobs:
       - run: make debian-test
       - run: make rpm-test
       - run: make package-snapshot
-      - run: make release-test
       - uses: actions/upload-artifact@v4
         with:
           name: debian-${{ matrix.architecture }}
@@ -52,3 +51,14 @@ jobs:
             dist/rpm/checksums.txt
             dist/snapshot/*
           if-no-files-found: error
+
+  release-tests:
+    name: Test package signing and release uploads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - run: make release-test

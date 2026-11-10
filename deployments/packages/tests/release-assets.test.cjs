@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const upload = require('../../../scripts/publish-debian-assets.cjs');
+const upload = require('../../../scripts/publish-package-assets.cjs');
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'release-assets-'));

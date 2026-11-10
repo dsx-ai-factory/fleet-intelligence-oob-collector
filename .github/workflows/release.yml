@@ -49,7 +49,7 @@ jobs:
       - run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
 
   build-image:
-    needs: sign-debian
+    needs: validate
     name: Build image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -110,11 +110,11 @@ jobs:
           name: image-digest-${{ matrix.artifact }}
           path: /tmp/digests/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish-image:
     name: Publish image
-    needs: build-image
+    needs: [build-image, sign-packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -159,7 +159,7 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME#v}"
 
   build-nico-image:
-    needs: sign-debian
+    needs: validate
     name: Build NICo health image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -228,11 +228,11 @@ jobs:
           name: nico-image-digest-${{ matrix.artifact }}
           path: /tmp/digests/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish-nico-image:
     name: Publish NICo health image
-    needs: build-nico-image
+    needs: [build-nico-image, sign-packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -310,13 +310,13 @@ jobs:
 
   publish-docs:
     name: Publish Fern docs
-    needs: publish-debian
+    needs: publish-packages
     uses: ./.github/workflows/publish-fern-docs.yml
     secrets:
       DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
 
-  reserve-debian-release:
-    name: Reserve Debian release
+  reserve-package-release:
+    name: Reserve package release
     needs: validate
     runs-on: ubuntu-24.04
     permissions:
@@ -343,9 +343,9 @@ jobs:
             });
             core.setOutput('release-id', data.id);
 
-  build-debian:
+  build-packages:
     name: Build and test host packages (${{ matrix.architecture }})
-    needs: reserve-debian-release
+    needs: reserve-package-release
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -379,14 +379,14 @@ jobs:
           test "$(find dist/release -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
       - uses: actions/upload-artifact@v4
         with:
-          name: unsigned-debian-${{ matrix.architecture }}
+          name: unsigned-packages-${{ matrix.architecture }}
           path: dist/release/*
           if-no-files-found: error
           retention-days: 7
 
-  sign-debian:
+  sign-packages:
     name: Sign and verify host packages
-    needs: build-debian
+    needs: build-packages
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
     steps:
@@ -395,7 +395,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          pattern: unsigned-debian-*
+          pattern: unsigned-packages-*
           path: dist
           merge-multiple: true
       - name: Check signing runner tools and credentials
@@ -424,10 +424,10 @@ jobs:
           NVSEC_CHECKSUM_SSA_SCOPE: ${{ vars.NVSEC_CHECKSUM_SSA_SCOPE || 'SIGNING_FLEET_INTELLIGENCE' }}
           NVSEC_CHECKSUM_JOB_TYPE: ${{ vars.NVSEC_CHECKSUM_JOB_TYPE || 'FLEET_INTELLIGENCE' }}
           NSPECT_ID: ${{ vars.NSPECT_ID }}
-        run: scripts/prepare-debian-release.sh dist "${RELEASE_TAG#v}"
+        run: scripts/prepare-package-release.sh dist "${RELEASE_TAG#v}"
       - uses: actions/upload-artifact@v4
         with:
-          name: signed-debian-release
+          name: signed-package-release
           path: |
             dist/*.deb
             dist/*.rpm
@@ -438,9 +438,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish-debian:
+  publish-packages:
     name: Publish verified host packages
-    needs: [reserve-debian-release, sign-debian, publish-chart]
+    needs: [reserve-package-release, sign-packages, publish-chart]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -451,27 +451,18 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: signed-debian-release
+          name: signed-package-release
           path: dist
       - name: Install RPM verification tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
       - name: Verify downloaded signed artifacts
-        run: scripts/verify-debian-release.sh dist
-      - name: Upload verified assets to the draft without replacing existing assets
-        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
-        env:
-          RELEASE_ID: ${{ needs.reserve-debian-release.outputs.release-id }}
-        with:
-          script: |
-            await require('./scripts/publish-debian-assets.cjs')({
-              github, context, releaseId: Number(process.env.RELEASE_ID),
-            });
+        run: scripts/verify-package-release.sh dist
       - name: Publish the verified GitHub release
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
         env:
-          RELEASE_ID: ${{ needs.reserve-debian-release.outputs.release-id }}
+          RELEASE_ID: ${{ needs.reserve-package-release.outputs.release-id }}
         with:
           script: |
             const releaseId = Number(process.env.RELEASE_ID);
-            await require('./scripts/publish-debian-assets.cjs')({ github, context, releaseId });
+            await require('./scripts/publish-package-assets.cjs')({ github, context, releaseId });
             await github.rest.repos.updateRelease({ ...context.repo, release_id: releaseId, draft: false });

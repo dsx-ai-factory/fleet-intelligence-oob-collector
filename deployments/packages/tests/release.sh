@@ -34,9 +34,9 @@ for arch in amd64 arm64; do
     dpkg-deb --build --root-owner-group "$tree" "$dist/fleetint-oob_1.2.3_$arch.deb"
 done
 cp -r "$dist" "$root/original"
-scripts/prepare-debian-release.sh "$dist" 1.2.3
+scripts/prepare-package-release.sh "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq 3 ]
-scripts/verify-debian-release.sh "$dist"
+scripts/verify-package-release.sh "$dist"
 # DEB-only releases remain verifiable. New releases add real RPM packages and
 # signatures to the same manifest and the same verified GitHub asset inventory.
 cp "$root/original/"*.deb "$dist/"
@@ -63,9 +63,9 @@ for pair in amd64:x86_64 arm64:aarch64; do
     cp "$dist/fleetint-oob_1.2.3_$arch.rpm" "$root/original/"
 done
 : > "$SIGN_LOG"
-scripts/prepare-debian-release.sh "$dist" 1.2.3
+scripts/prepare-package-release.sh "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq 5 ]
-scripts/verify-debian-release.sh "$dist"
+scripts/verify-package-release.sh "$dist"
 cp -r "$dist" "$root/baseline"
 restore() {
     rm -f "$dist/"*
@@ -80,7 +80,7 @@ reject() {
 for arch in amd64 arm64; do
     rpm_package="$dist/fleetint-oob_1.2.3_$arch.rpm"
     mv "$rpm_package" "$root/held.rpm"
-    reject scripts/verify-debian-release.sh "$dist"
+    reject scripts/verify-package-release.sh "$dist"
     mv "$root/held.rpm" "$rpm_package"
 done
 rpm_package="$dist/fleetint-oob_1.2.3_amd64.rpm"
@@ -99,14 +99,15 @@ restore
 mv "$dist/fleetint-oob_1.2.3_amd64.rpm" "$dist/fleetint-oob_1.2.4_amd64.rpm"
 sed -i 's/fleetint-oob_1.2.3_amd64.rpm/fleetint-oob_1.2.4_amd64.rpm/' "$dist/checksums.txt"
 scripts/sign-checksum-manifest.sh "$dist/checksums.txt" "$key"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 mv "$dist/fleetint-oob_1.2.3_amd64.rpm" "$root/swapped.rpm"
 mv "$dist/fleetint-oob_1.2.3_arm64.rpm" "$dist/fleetint-oob_1.2.3_amd64.rpm"
 mv "$root/swapped.rpm" "$dist/fleetint-oob_1.2.3_arm64.rpm"
-scripts/refresh-checksums.sh "$dist/checksums.txt"
+(cd "$dist" && sha256sum fleetint-oob_*.deb fleetint-oob_*.rpm \
+    fleet-intelligence.pub.asc verify-linux-package-signature.sh > checksums.txt)
 scripts/sign-checksum-manifest.sh "$dist/checksums.txt" "$key"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 package="$dist/fleetint-oob_1.2.3_amd64.deb"
 for mode in empty missing; do
@@ -126,10 +127,10 @@ restore
 member=$(ar t "$package" | grep '^data.tar')
 printf 'altered signed payload' > "$root/$member"
 ar r "$package" "$root/$member"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 printf '%064d  fake.deb\n' 0 > "$dist/checksums.txt"
-reject scripts/verify-debian-release.sh "$dist"
+reject scripts/verify-package-release.sh "$dist"
 restore
 # RC package metadata uses '~' while downloadable names retain the tag.
 rc_dist="$root/prerelease"
@@ -143,6 +144,6 @@ for pair in amd64:x86_64 arm64:aarch64; do
     rpmbuild -bb --target "$rpm_arch" --define "_topdir $root/rpmbuild" "$root/rpmbuild/SPECS/prerelease.spec"
     cp "$root/rpmbuild/RPMS/$rpm_arch/fleetint-oob-1.2.3~rc.1-1.$rpm_arch.rpm" "$rc_dist/fleetint-oob_1.2.3-rc.1_$arch.rpm"
 done
-scripts/prepare-debian-release.sh "$rc_dist" 1.2.3-rc.1
-scripts/verify-debian-release.sh "$rc_dist"
+scripts/prepare-package-release.sh "$rc_dist" 1.2.3-rc.1
+scripts/verify-package-release.sh "$rc_dist"
 printf 'Offline signing and tamper rejection checks passed\n'
