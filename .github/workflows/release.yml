@@ -352,6 +352,12 @@ jobs:
             rm -rf "$NGC_CLI_HOME"
           fi
 
+  package-ci:
+    if: ${{ github.ref_type == 'tag' }}
+    name: Test host packages
+    needs: validate
+    uses: ./.github/workflows/host-packages.yml
+
   reserve-package-release:
     if: ${{ github.ref_type == 'tag' }}
     name: Reserve package release
@@ -383,8 +389,8 @@ jobs:
 
   build-packages:
     if: ${{ github.ref_type == 'tag' }}
-    name: Build and test host packages (${{ matrix.architecture }})
-    needs: reserve-package-release
+    name: Build host packages (${{ matrix.architecture }})
+    needs: [reserve-package-release, package-ci]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -400,13 +406,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Build and test release package
+      - name: Build release package
         env:
           RELEASE_TAG: ${{ env.VERSION_TAG }}
           PACKAGE_ARCH: ${{ matrix.architecture }}
         run: |
-          make debian-test PACKAGE_VERSION="${RELEASE_TAG#v}"
-          make rpm-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+          make debian-package PACKAGE_VERSION="${RELEASE_TAG#v}"
+          make rpm-package PACKAGE_VERSION="${RELEASE_TAG#v}"
           # One flat upload root preserves the layout expected by signing.
           mkdir -p dist/release
           for format in deb rpm; do
