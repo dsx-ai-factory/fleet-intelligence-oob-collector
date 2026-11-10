@@ -362,24 +362,16 @@ jobs:
     outputs:
       release-id: ${{ steps.reserve.outputs.release-id }}
     steps:
-      - name: Refuse existing releases and reserve a private draft
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reserve or resume the matching draft release
         id: reserve
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
         with:
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const releases = await github.paginate(github.rest.repos.listReleases, {
-              ...context.repo, per_page: 100,
-            });
-            if (releases.some(release => release.tag_name === tag)) {
-              throw new Error(`Release ${tag} already exists; refusing to replace artifacts. Resume failed jobs or use a new version.`);
-            }
-            const { data } = await github.rest.repos.createRelease({
-              ...context.repo, tag_name: tag, target_commitish: context.sha,
-              name: tag, draft: true, prerelease: tag.includes('-'),
-              generate_release_notes: true,
-            });
-            core.setOutput('release-id', data.id);
+            const releaseId = await require('./scripts/reserve-package-release.cjs')({ github, context });
+            core.setOutput('release-id', releaseId);
 
   build-packages:
     if: ${{ github.ref_type == 'tag' }}

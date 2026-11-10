@@ -7,6 +7,12 @@ root=$(mktemp -d /tmp/oob-signing-tests.XXXXXX)
 trap 'rm -rf "$root"' EXIT
 export GNUPGHOME="$root/gnupg"
 install -d -m700 "$GNUPGHOME"
+# Check the production identity before substituting the ephemeral test key.
+production_pin=$(sed -n 's/^readonly EXPECTED_FINGERPRINT="\([0-9A-F]*\)"$/\1/p' scripts/verify-linux-package-signature.sh)
+production_fingerprint=$(gpg --batch --show-keys --with-colons deployments/packages/keys/fleet-intelligence.pub.asc | awk -F: '$1 == "fpr" {print $10; exit}')
+[[ -n "$production_pin" && "$production_fingerprint" == "$production_pin" ]] || {
+    echo 'Committed production key does not match the verifier fingerprint' >&2; exit 1;
+}
 gpg --batch --passphrase '' --quick-gen-key 'OOB release test <release@example.test>' ed25519 sign 0
 fingerprint=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
 project="$root/project"

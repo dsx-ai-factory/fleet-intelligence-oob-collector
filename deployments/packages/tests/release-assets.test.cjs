@@ -107,3 +107,50 @@ for (const problem of ['nonempty', 'digest', 'delete']) {
     } finally { f.cleanup(); }
   });
 }
+
+const reserveRelease = require('../../../scripts/reserve-package-release.cjs');
+
+function reservationFixture(releases = [], ref = 'refs/tags/v1.2.3') {
+  const created = [];
+  const args = {
+    context: { repo: { owner: 'example', repo: 'oob' }, ref, sha: 'release-commit' },
+    github: {
+      paginate: async () => releases,
+      rest: { repos: {
+        listReleases() {},
+        createRelease: async params => { created.push(params); return { data: { id: 42 } }; },
+      } },
+    },
+  };
+  return { args, created };
+}
+
+for (const tag of ['v1.2.3', 'v1.2.3-rc.1']) {
+  test(`reserves a new draft for ${tag}`, async () => {
+    const f = reservationFixture([], `refs/tags/${tag}`);
+    assert.equal(await reserveRelease(f.args), 42);
+    assert.equal(f.created.length, 1);
+    assert.equal(f.created[0].tag_name, tag);
+    assert.equal(f.created[0].target_commitish, 'release-commit');
+    assert.equal(f.created[0].draft, true);
+    assert.equal(f.created[0].prerelease, tag.includes('-'));
+  });
+}
+
+test('reuses the matching draft after a full workflow rerun', async () => {
+  const f = reservationFixture([{ id: 7, tag_name: 'v1.2.3', draft: true,
+    target_commitish: 'release-commit' }]);
+  assert.equal(await reserveRelease(f.args), 7);
+  assert.equal(f.created.length, 0);
+});
+
+for (const problem of ['published', 'commit', 'ambiguous']) {
+  test(`refuses ${problem} release reservation`, async () => {
+    const release = { id: 7, tag_name: 'v1.2.3', draft: true, target_commitish: 'release-commit' };
+    if (problem === 'published') release.draft = false;
+    if (problem === 'commit') release.target_commitish = 'unrelated-commit';
+    const f = reservationFixture(problem === 'ambiguous' ? [release, { ...release, id: 8 }] : [release]);
+    await assert.rejects(reserveRelease(f.args), /Refusing to reuse/);
+    assert.equal(f.created.length, 0);
+  });
+}
