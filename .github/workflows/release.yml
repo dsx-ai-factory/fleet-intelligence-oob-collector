@@ -459,9 +459,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish-packages:
+  upload-package-assets:
     if: ${{ github.ref_type == 'tag' }}
-    name: Publish verified host packages
+    name: Upload verified host packages to draft
     needs: [reserve-package-release, sign-packages, publish-chart]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -477,7 +477,7 @@ jobs:
           path: dist
       - name: Verify downloaded signed artifacts
         run: scripts/verify-package-release.sh dist
-      - name: Publish the verified GitHub release
+      - name: Upload verified assets and keep release as draft
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
         env:
           RELEASE_ID: ${{ needs.reserve-package-release.outputs.release-id }}
@@ -485,4 +485,3 @@ jobs:
           script: |
             const releaseId = Number(process.env.RELEASE_ID);
             await require('./scripts/publish-package-assets.cjs')({ github, context, releaseId });
-            await github.rest.repos.updateRelease({ ...context.repo, release_id: releaseId, draft: false });
