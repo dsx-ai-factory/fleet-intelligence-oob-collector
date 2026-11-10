@@ -132,7 +132,7 @@ jobs:
     if: ${{ github.ref_type == 'tag' }}
     environment: ngc-publish
     name: Publish image
-    needs: [validate, build-image, sign-packages]
+    needs: [validate, build-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -253,7 +253,7 @@ jobs:
     if: ${{ github.ref_type == 'tag' }}
     environment: ngc-publish
     name: Publish NICo health image
-    needs: [validate, build-nico-image, sign-packages]
+    needs: [validate, build-nico-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -487,7 +487,7 @@ jobs:
   upload-package-assets:
     if: ${{ github.ref_type == 'tag' }}
     name: Upload verified host packages to draft
-    needs: [reserve-package-release, sign-packages, publish-chart]
+    needs: [reserve-package-release, sign-packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
