@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 work=$(mktemp -d /tmp/rpm-install.XXXXXXXX)
-trap 'rm -rf "$work"; rmdir /run/systemd/system' EXIT
+trap 'rm -rf "$work"; rmdir /run/systemd/system 2>/dev/null || true' EXIT
 (cd /packages && sha256sum -c checksums.txt)
 archive="/packages/$(awk '{print $2}' /packages/checksums.txt)"
 # Real RPM transactions execute the packaged scriptlets. Only the systemd

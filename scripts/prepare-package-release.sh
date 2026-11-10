@@ -15,7 +15,7 @@ for arch in amd64 arm64; do
   }
 done
 rpms=("$dist_dir"/*.rpm)
-if (( ${#rpms[@]} )); then
+if [[ ${REQUIRE_RPM:-0} == 1 ]] || (( ${#rpms[@]} )); then
   [[ ${#rpms[@]} == 2 ]] || { echo "Expected exactly two RPM architecture packages" >&2; exit 1; }
   for arch in amd64 arm64; do
     [[ -s "$dist_dir/fleetint-oob_${version}_${arch}.rpm" ]] || {

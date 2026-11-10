@@ -16,6 +16,9 @@ grep -q '^\[GNUPG:\] VALIDSIG FE0C8B74CA66357C13BE197DCCE3C963087199B3 ' "$work_
 # Retain DEB-only verification for releases published before RPM support.
 shopt -s nullglob
 rpms=("$dist_dir"/*.rpm)
+if [[ ${REQUIRE_RPM:-0} == 1 && ${#rpms[@]} != 2 ]]; then
+  echo "New releases require both RPM architecture packages" >&2; exit 1
+fi
 [[ ${#rpms[@]} == 0 || ${#rpms[@]} == 2 ]] || { echo "Expected zero or two RPM packages" >&2; exit 1; }
 expected_packages=$((2 + ${#rpms[@]}))
 # Signed filenames still need validation before any file is hashed.
