@@ -386,23 +386,16 @@ jobs:
           pattern: unsigned-debian-*
           path: dist
           merge-multiple: true
-      - name: Check signing runner tools and publication configuration
+      - name: Check signing runner tools and credentials
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
           NVSEC_SSA_CLIENT_ID: ${{ secrets.NVSEC_SSA_CLIENT_ID }}
           NVSEC_SSA_CLIENT_SECRET: ${{ secrets.NVSEC_SSA_CLIENT_SECRET }}
-          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
-          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
-          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
         run: |
           for tool in nvsec gpg gpgv ar sha256sum md5sum sha1sum; do
             command -v "$tool" >/dev/null || { echo "Required signing tool is unavailable: $tool" >&2; exit 1; }
           done
           : "${NVSEC_SSA_CLIENT_ID:?Configure signing credentials}"
           : "${NVSEC_SSA_CLIENT_SECRET:?Configure signing credentials}"
-          if [[ "$RELEASE_TAG" != *-* ]]; then
-            scripts/publish-deb-artifactory.sh --check-config
-          fi
       - name: Sign packages, refresh checksums, sign and verify manifest
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -452,13 +445,6 @@ jobs:
             await require('./scripts/publish-debian-assets.cjs')({
               github, context, releaseId: Number(process.env.RELEASE_ID),
             });
-      - name: Publish stable Debian packages to Artifactory
-        if: ${{ !contains(github.ref_name, '-') }}
-        env:
-          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
-          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
-          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
-        run: scripts/publish-deb-artifactory.sh dist
       - name: Publish the verified GitHub release
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
         env:
