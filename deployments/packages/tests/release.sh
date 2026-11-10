@@ -91,13 +91,18 @@ for arch in amd64 arm64; do
     mv "$root/held.rpm" "$rpm_package"
 done
 rpm_package="$dist/fleetint-oob_1.2.3_amd64.rpm"
+rpm_failure_dist="$root/rpm-signing-failure"
+mkdir -p "$rpm_failure_dist"
 for mode in empty missing; do
-    cp "$root/original/${rpm_package##*/}" "$rpm_package"
+    rpm_fixture="$rpm_failure_dist/${rpm_package##*/}"
+    cp "$root/original/${rpm_package##*/}" "$rpm_fixture"
+    : > "$SIGN_LOG"
     export SIGN_MODE=$mode
-    reject scripts/sign-linux-packages.sh "$dist" "$key"
-    cmp "$root/original/${rpm_package##*/}" "$rpm_package"
+    reject scripts/sign-linux-packages.sh "$rpm_failure_dist" "$key"
+    [ "$(wc -l < "$SIGN_LOG")" -eq 1 ]
+    grep -Fxq "LINUX_PACKAGE_FLEET_INTELLIGENCE ${rpm_package##*/}" "$SIGN_LOG"
+    cmp "$root/original/${rpm_package##*/}" "$rpm_fixture"
     unset SIGN_MODE
-    restore
 done
 truncate -s -1 "$rpm_package"
 reject scripts/verify-linux-package-signature.sh "$rpm_package" "$key"
