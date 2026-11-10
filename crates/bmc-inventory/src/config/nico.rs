@@ -20,6 +20,7 @@ use std::net::IpAddr;
 use std::num::NonZeroU32;
 
 use serde::Serialize;
+use toml::Value;
 
 use super::CollectorConfig;
 
@@ -28,6 +29,8 @@ pub struct NicoConfigOptions {
     pub otlp_endpoint: String,
     pub metrics_endpoint: String,
     pub metrics_prefix: String,
+    pub resource_status_collection: bool,
+    pub resource_status_firmware_poll_interval_seconds: u64,
 }
 
 impl Default for NicoConfigOptions {
@@ -36,6 +39,8 @@ impl Default for NicoConfigOptions {
             otlp_endpoint: "http://localhost:4317".to_string(),
             metrics_endpoint: "0.0.0.0:9009".to_string(),
             metrics_prefix: "fleetint".to_string(),
+            resource_status_collection: true,
+            resource_status_firmware_poll_interval_seconds: 1_800,
         }
     }
 }
@@ -58,6 +63,9 @@ pub fn render_nico_config(
     if metrics_prefix.is_empty() {
         return Err("NICo metrics prefix cannot be empty".into());
     }
+    if options.resource_status_firmware_poll_interval_seconds == 0 {
+        return Err("NICo resource status firmware poll interval must be greater than zero".into());
+    }
 
     let static_bmc_endpoints = config
         .targets
@@ -70,6 +78,26 @@ pub fn render_nico_config(
             labels: target.labels.clone(),
         })
         .collect();
+
+    let mut collectors = config.nico_health.native_collectors();
+    if options.resource_status_collection {
+        // Firmware status comes from the firmware collector, so the status
+        // feature takes precedence over independently configured firmware
+        // enablement and cadence while it is active.
+        let firmware = collectors
+            .entry("firmware")
+            .or_insert_with(|| Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or("internal NICo firmware collector configuration is not a table")?;
+        firmware.insert("enabled".into(), Value::Boolean(true));
+        firmware.insert(
+            "firmware_refresh_interval".into(),
+            Value::String(format!(
+                "{}s",
+                options.resource_status_firmware_poll_interval_seconds
+            )),
+        );
+    }
 
     let nico_config = NicoConfig {
         bmc_request_concurrency: config
@@ -86,7 +114,12 @@ pub fn render_nico_config(
             static_credentials_file: &config.credentials_file,
             static_bmc_endpoints,
         },
-        collectors: config.nico_health.native_collectors(),
+        collectors,
+        processors: NicoProcessors {
+            resource_status: NicoResourceStatusProcessor {
+                enabled: options.resource_status_collection,
+            },
+        },
         attributes: NicoAttributes { gpu_identity: true },
         sinks: NicoSinks {
             tracing: NicoEnabled { enabled: true },
@@ -126,6 +159,7 @@ struct NicoConfig<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     rate_limit: Option<toml::Table>,
     collectors: toml::Table,
+    processors: NicoProcessors,
     attributes: NicoAttributes,
     sinks: NicoSinks<'a>,
     metrics: NicoMetrics<'a>,
@@ -163,6 +197,16 @@ struct NicoStaticBmcEndpoint<'a> {
 #[derive(Serialize)]
 struct NicoAttributes {
     gpu_identity: bool,
+}
+
+#[derive(Serialize)]
+struct NicoProcessors {
+    resource_status: NicoResourceStatusProcessor,
+}
+
+#[derive(Serialize)]
+struct NicoResourceStatusProcessor {
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -537,6 +581,89 @@ mod tests {
             rendered["collectors"]["logs"]["auto"]["retry_sse_after_downgrade"].as_bool(),
             Some(true)
         );
+        assert_eq!(
+            rendered["collectors"]["firmware"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            rendered["collectors"]["firmware"]["firmware_refresh_interval"].as_str(),
+            Some("1800s")
+        );
+        assert_eq!(
+            rendered["processors"]["resource_status"]["enabled"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn rendered_nico_config_can_disable_resource_status_collection() {
+        let collector = parse_test_config(
+            r#"
+            [nico_health]
+            firmware_enabled = true
+            firmware_refresh_interval_seconds = 7200
+
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
+            ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+        let rendered = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                resource_status_collection: false,
+                resource_status_firmware_poll_interval_seconds: 60,
+                ..NicoConfigOptions::default()
+            },
+        )
+        .expect("NICo config");
+        let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+
+        assert_eq!(
+            rendered["collectors"]["firmware"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            rendered["collectors"]["firmware"]["firmware_refresh_interval"].as_str(),
+            Some("7200s")
+        );
+        assert_eq!(
+            rendered["processors"]["resource_status"]["enabled"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn rendered_nico_config_rejects_zero_resource_status_interval() {
+        let collector = parse_test_config(
+            r#"
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
+            ip = "10.0.0.1"
+            mac = "02:00:0a:00:00:01"
+            "#,
+            "test.toml",
+        )
+        .expect("collector config");
+
+        let error = render_nico_config(
+            &collector,
+            &NicoConfigOptions {
+                resource_status_firmware_poll_interval_seconds: 0,
+                ..NicoConfigOptions::default()
+            },
+        )
+        .expect_err("zero interval must fail");
+
+        assert_eq!(
+            error.to_string(),
+            "NICo resource status firmware poll interval must be greater than zero"
+        );
     }
 
     #[test]
@@ -601,6 +728,7 @@ mod tests {
                 otlp_endpoint: "  http://localhost:4317  ".to_string(),
                 metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
                 metrics_prefix: "  fleetint  ".to_string(),
+                ..NicoConfigOptions::default()
             },
         )
         .expect("NICo config");

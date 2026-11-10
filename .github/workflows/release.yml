@@ -26,9 +26,9 @@ env:
   IMAGE: nvcr.io/1070195845945670/fleet-intelligence/oob-collector
   NICO_IMAGE: nvcr.io/1070195845945670/fleet-intelligence/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
-  # Includes BMC credential-rejection suppression from
-  # dsx-ai-factory/infra-controller#8323.
-  NICO_SOURCE_REF: 92c64e5099c0496ae7d6e5291555d9cbebc45976
+  # Includes Redfish resource-status OTLP logs from
+  # dsx-ai-factory/infra-controller#8586.
+  NICO_SOURCE_REF: 844ae0766b6070ab69b3ca744cb87a72a3b0209a
 
 jobs:
   validate:
