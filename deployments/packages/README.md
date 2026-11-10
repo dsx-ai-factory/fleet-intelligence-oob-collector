@@ -163,7 +163,11 @@ and credential-permission failures stop installation.
 
 Run `make packages-test-hooks packages-test-build` for isolated lifecycle and build regression tests. They use mocked service/compiler commands and local Git fixtures; they never manage host services or fetch remote sources.
 
-Package checks run with `make packages-check-deb` or `make packages-check-rpm` using the distribution's inspection tools. They never install packages. Real service startup, upgrade/rollback, and shutdown during collection still need validation in a disposable VM before production use. To verify the signatures of downloaded DEB and RPM releases, see [verify host-package releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-package-release.md).
+Package checks run with `make packages-check-deb` or `make packages-check-rpm`
+using the distribution's inspection tools. They never install packages.
+Real service startup, upgrade/rollback, and shutdown during collection still
+need validation in a disposable VM before production use. Signing and release
+publishing are outside this prototype.
 
 ## Docker validation
 
@@ -180,8 +184,5 @@ credential symlinks. No customer backend or BMC is contacted.
 The package metadata uses Debian's `~` prerelease ordering; exported filenames
 retain the requested version. Docker builds and tests do not boot systemd as
 PID 1. Validate service sandboxing and musl DNS on disposable target VMs before
-production rollout.
-
-`make rpm-test` uses the same build inputs to create RPMs and installs them in a disposable Rocky Linux 9 container. It starts all three daemons against loopback fixtures, verifies authenticated export, upgrades the package, checks configuration and service-state preservation, and removes it. The systemd manager is stubbed; validate sandboxing and service supervision on target VMs before production rollout. Modified package configuration is retained as `.rpmsave` on removal, and operator-created credentials remain.
-
-`make rpm-package PACKAGE_VERSION=1.2.3-rc.1` writes unsigned RPMs to `dist/rpm/`. Signed RPMs are attached to GitHub releases alongside DEBs.
+production rollout. RPM lifecycle hooks retain isolated shell coverage; a real
+RPM install and upgrade still require validation on a target distribution.
