@@ -52,10 +52,21 @@ class NicoHelmTests(unittest.TestCase):
         result = render({}, "bmc-collector-deployment.yaml", use_ci_values=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stdout, r'- --bmc-max-in-flight\s+- "2"')
+        self.assertIn("- --insecure-tls", result.stdout)
         self.assertRegex(result.stdout, r'- name: FLEETINT_NICO_LOG_LEVEL\s+value: "warn"')
         result = render({}, "nico-hardware-health-deployment.yaml", use_ci_values=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stdout, r'- name: RUST_LOG\s+value: "warn"')
+
+    def test_collector_bmc_certificate_verification_override(self):
+        result = subprocess.run([
+            "helm", "template", "test", str(CHART),
+            "--values", str(CHART / "ci/test-values.yaml"),
+            "--show-only", "templates/bmc-collector-deployment.yaml",
+            "--set", "bmcCollector.redfish.insecureTls=false",
+        ], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--insecure-tls", result.stdout)
 
     def test_optional_settings_render_as_top_level_toml(self):
         """Preserve independent overrides, defaults, and shared target configuration."""

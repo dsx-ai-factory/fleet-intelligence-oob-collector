@@ -75,8 +75,7 @@ to work; an explicitly configured token file takes precedence and read failures
 stop startup visibly. `service.conf` is
 installed root-owned with mode `0600`. Systemd reads it, and small shell entry points load the token before
 executing the collector or gateway. Tokens never appear in process arguments.
-NICo does not load `service.conf`; proxy and logging variables in that file
-apply to the collector and gateway only.
+All three services load `service.conf`. The `FLEETINT_NICO_RESOURCE_STATUS_*` variables apply only to NICo; backend and token settings apply to the collector and gateway.
 
 Set each target's `credentials_profile` to a profile in the shared JSON file,
 or provide a per-MAC override. A placeholder example is installed at
@@ -85,12 +84,9 @@ or provide a per-MAC override. A placeholder example is installed at
 replace placeholder values only in that copy. Keep the credentials file owned
 by root, readable by group `fleetint-oob`, with mode `0640`; the installed documentation example must contain
 placeholders only.
-NICo's `run-nico` launcher calls the Rust `bmc-collector render-nico-config`
-command on every start, using `/etc/fleetint-oob/config.toml` as the source for
-BMC addresses, MACs, labels, and credential profiles. The generated NICo TOML
-references the same credentials JSON file as the collector; credential values
-stay in that file. This needs no separate TOML parser or Python dependency.
-Do not edit the generated file under `/run`; it is replaced on the next start.
+NICo's `run-nico` launcher calls the Rust `bmc-collector render-nico-config` command on every start, using `/etc/fleetint-oob/config.toml` as the source for BMC addresses, MACs, labels, and credential profiles. The generated NICo TOML references the same credentials JSON file as the collector; credential values stay in that file. This needs no separate TOML parser or Python dependency. Do not edit the generated file under `/run`; it is replaced on the next start.
+
+The launcher enables periodic System, Manager, Chassis, and FirmwareInventory status OTLP logs by default. NICo emits System and Chassis status on its discovery cadence, Manager status on its manager cadence, and FirmwareInventory status on its firmware cadence. Set `FLEETINT_NICO_RESOURCE_STATUS_FIRMWARE_POLL_INTERVAL_SECONDS` in `service.conf` to change the 1,800-second firmware cadence, or set `FLEETINT_NICO_RESOURCE_STATUS_ENABLED=false` to disable status processing. With status processing disabled, `[nico_health].firmware_enabled` controls firmware inventory collection.
 
 Configure NICo with flat snake_case fields under `[nico_health]` in `/etc/fleetint-oob/config.toml`. See [NICo collection controls](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/configuration.md#nico-collection-controls) for supported fields and defaults. Run `sudo systemctl restart fleetint-nico-health.service` after editing; the launcher regenerates NICo's configuration before starting it.
 

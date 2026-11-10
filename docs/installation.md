@@ -5,7 +5,7 @@ Install the collector on Kubernetes with its Helm chart. By default, the chart r
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`
-- Helm 3 with OCI registry support
+- Helm 3
 - Network access from the cluster to your BMCs and to Fleet Intelligence
 - The IP and MAC address of each BMC, and its login credentials
 - A Fleet Intelligence bootstrap token
@@ -72,13 +72,14 @@ backend:
 
 ## Install
 
-Choose a published chart version from the repository [releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases) and replace `<chart-version>` below:
+Choose a published chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and replace `<chart-version>` below:
 
 ```bash
 export OOB_CHART_VERSION='<chart-version>'
 
 helm upgrade --install fleet-intelligence-oob-collector \
-  oci://ghcr.io/dsx-ai-factory/charts/fleet-intelligence-oob-collector \
+  fleet-intelligence-oob-collector \
+  --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
   --version "$OOB_CHART_VERSION" \
   --values /path/to/collector-values.yaml \
   --namespace "$NAMESPACE" \

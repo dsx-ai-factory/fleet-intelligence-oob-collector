@@ -173,7 +173,7 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 
 The gateway requires NICo.
 
-NICo defaults to automatic log collection: it starts with Redfish SSE streaming, falls back to periodic polling when SSE is unavailable or keeps failing, and retries SSE after 30 minutes of polling. You can select fixed SSE streaming or periodic polling with `nicoHardwareHealth.config.logsMode`. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
+NICo defaults to automatic log collection: it starts with Redfish SSE streaming, falls back to periodic polling when SSE is unavailable or keeps failing, and retries SSE after 30 minutes of polling. You can select fixed SSE streaming or periodic polling with `nicoHardwareHealth.config.logsMode`. NICo's discovery, manager, and firmware collectors also emit each System, Manager, Chassis, and FirmwareInventory resource's `Status` as an OTLP log. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
 ### NICo collection controls
 
@@ -235,7 +235,7 @@ Integer controls accept `1` through `4294967295`; `rateLimitMaxJitterMillisecond
 
 Controls apply to all NICo targets, independently of inventory and attestation. Polling intervals are waits between iterations. Each collector runs independently, so disabling sensors leaves discovery for GPU identity and other enabled collectors active. Established SSE streams release their concurrency slot after the handshake. The global limiter counts collector iterations, not HTTP requests.
 
-Auto fallback uses the configured log-polling fields. Mode changes can replay or miss records when SSE and LogService histories differ; temporary checkpoints can be lost on pod replacement or native directory cleanup. Manager polling requires power-shelf metadata and stays inactive for the renderer's generic endpoints.
+Auto fallback uses the configured log-polling fields. Mode changes can replay or miss records when SSE and LogService histories differ; temporary checkpoints can be lost on pod replacement or native directory cleanup. Manager polling normally requires power-shelf metadata, but enabling resource-status logs broadens it to the renderer's generic Redfish endpoints.
 
 Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` and restart `fleetint-nico-health.service` on native installations.
 
@@ -248,10 +248,14 @@ Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` a
 | `bmcCollector.redfish.maxInFlight` | `2` | Maximum simultaneous requests to one BMC. |
 | `bmcCollector.redfish.requestsPerSecond` | `10` | Maximum request rate to one BMC. Short bursts up to the same number are allowed. |
 | `bmcCollector.redfish.timeoutSeconds` | `30` | Redfish request timeout. |
-| `bmcCollector.redfish.insecureTls` | `false` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
+| `bmcCollector.redfish.insecureTls` | `true` | Skip BMC certificate verification. See [TLS](#proxy-and-tls). |
 | `bmcCollector.latencyProbe.enabled` | `true` | Measure network latency to each BMC. |
+| `nicoHardwareHealth.resourceStatus.enabled` | `true` | Emit periodic System, Manager, Chassis, and FirmwareInventory status OTLP logs. |
+| `nicoHardwareHealth.resourceStatus.firmwarePollIntervalSeconds` | `1800` | Seconds between NICo FirmwareInventory status polls. |
 
-These limits apply to the collector only. NICo makes its own requests to the BMCs on its own schedule. The two concurrency limits are independent, so inventory and NICo can each issue two requests to the same BMC at once with the defaults. See [request limits](architecture.md#request-limits) for how they work together.
+When resource status is enabled, NICo emits System and Chassis status from entity discovery, Manager status from manager collection, and FirmwareInventory status from firmware collection. The setting above controls only the firmware cadence; the other resource types follow their source collector's cadence. Enabling resource status forces firmware collection on at that cadence, even if `nicoHardwareHealth.config.firmwareEnabled` is `false`. When resource status is disabled, the firmware collector follows `firmwareEnabled` and `firmwareRefreshIntervalSeconds` normally.
+
+These limits apply to the collector only. NICo makes its own requests to the BMCs on its source collectors' schedules. The two concurrency limits are independent, so inventory and NICo can each issue two requests to the same BMC at once with the defaults. See [request limits](architecture.md#request-limits) for how they work together.
 
 ## Workload settings
 
@@ -282,4 +286,4 @@ proxy:
 
 `proxy` also accepts `httpProxy` and `allProxy`. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
 
-`bmcCollector.redfish.insecureTls` turns off BMC certificate checks for the collector. Use it only for BMCs with self-signed certificates on a network you trust, because it allows traffic to be intercepted. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.
+`bmcCollector.redfish.insecureTls` defaults to `true`, turning off BMC certificate checks for the collector. Set it to `false` to verify BMC certificates. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.

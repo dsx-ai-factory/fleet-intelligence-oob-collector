@@ -162,7 +162,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 
 `RUST_LOG` sets the log level and defaults to `info`.
 
-`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), and `--metrics-prefix` (default `fleetint`). These options only configure NICo; they don't start a gateway.
+`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), `--metrics-prefix` (default `fleetint`), `--resource-status-firmware-poll-interval-seconds` (default `1800`), and `--disable-resource-status-collection`. These options only configure NICo; they don't start a gateway. The interval controls FirmwareInventory status; System and Chassis use NICo's discovery cadence, and Manager uses NICo's manager cadence.
 
 Do not commit real BMC credentials, customer data, private backend URLs, or raw hardware dumps. The repository ignores the documented local configuration and environment files by default.
 
@@ -230,7 +230,7 @@ The **Contribution conventions / PR title** GitHub Actions check validates PR ti
 
 ## Release Process
 
-Pushing a semantic version tag such as `v0.1.0` runs the release validation, publishes `amd64` and `arm64` collector and NICo images, and publishes the Helm chart with the matching version. Pre-release tags such as `v0.2.0-rc.1` are supported and do not update the collector image's `latest` tag.
+Maintainers publish collector and NICo images and the `fleet-intelligence-oob-collector` Helm chart through the Release workflow. See [RELEASE.md](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for artifact locations.
 
 ## Developer Certificate of Origin (DCO)
 

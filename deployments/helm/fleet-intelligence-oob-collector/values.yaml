@@ -32,7 +32,7 @@ telemetry:
 
 # Registry pull Secrets.
 imagePullSecrets: []
-# - name: ghcr-pull-secret
+# - name: registry-pull-secret
 
 # Proxy URLs must not contain credentials.
 proxy:
@@ -45,7 +45,7 @@ proxy:
 bmcCollector:
   enabled: true
   image:
-    repository: ghcr.io/dsx-ai-factory/fleet-intelligence-oob-collector
+    repository: nvcr.io/nvidia/fleet-intelligence/oob-collector
     # An empty tag uses the chart version.
     tag: ""
     pullPolicy: IfNotPresent
@@ -62,7 +62,7 @@ bmcCollector:
     requestsPerSecond: 10
     timeoutSeconds: 30
     # Disables verification and permits interception; collector only; NICo does not verify BMC certificates.
-    insecureTls: false
+    insecureTls: true
   latencyProbe:
     enabled: true
 
@@ -109,7 +109,7 @@ nicoHardwareHealth:
     rateLimitBucketReplenishMilliseconds: null
     rateLimitMaxJitterMilliseconds: null
   image:
-    repository: ghcr.io/dsx-ai-factory/nico-hardware-health
+    repository: nvcr.io/nvidia/fleet-intelligence/nico-hardware-health
     # An empty tag uses the chart version.
     tag: ""
     pullPolicy: IfNotPresent
@@ -119,12 +119,15 @@ nicoHardwareHealth:
   affinity: {}
   podAnnotations: {}
   logLevel: warn
+  resourceStatus:
+    enabled: true
+    firmwarePollIntervalSeconds: 1800
 
 otelGateway:
   enabled: true
   image:
-    repository: ghcr.io/nvidia/fleetint-otelcol
-    tag: 1.4.0 # Required; independent of the chart version.
+    repository: nvcr.io/nvidia/fleet-intelligence/otel-gateway
+    tag: 1.6.0 # Required; independent of the chart version.
     pullPolicy: IfNotPresent
   resources:
     limits:
