@@ -126,7 +126,7 @@ jobs:
           name: image-digest-${{ matrix.artifact }}
           path: /tmp/digests/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish-image:
     if: ${{ github.ref_type == 'tag' }}
@@ -247,7 +247,7 @@ jobs:
           name: nico-image-digest-${{ matrix.artifact }}
           path: /tmp/digests/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish-nico-image:
     if: ${{ github.ref_type == 'tag' }}
@@ -351,3 +351,129 @@ jobs:
           if [[ -n "${NGC_CLI_HOME:-}" ]]; then
             rm -rf "$NGC_CLI_HOME"
           fi
+
+  reserve-package-release:
+    if: ${{ github.ref_type == 'tag' }}
+    name: Reserve package release
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.reserve.outputs.release-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reserve or resume the matching draft release
+        id: reserve
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
+        with:
+          script: |
+            const releaseId = await require('./scripts/reserve-package-release.cjs')({ github, context });
+            core.setOutput('release-id', releaseId);
+
+  build-packages:
+    if: ${{ github.ref_type == 'tag' }}
+    name: Build and test host packages (${{ matrix.architecture }})
+    needs: reserve-package-release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: amd64
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and test release package
+        env:
+          RELEASE_TAG: ${{ env.VERSION_TAG }}
+        run: make debian-test PACKAGE_VERSION="${RELEASE_TAG#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-packages-${{ matrix.architecture }}
+          path: dist/debian/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-packages:
+    if: ${{ github.ref_type == 'tag' }}
+    name: Sign and verify host packages
+    needs: build-packages
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: unsigned-packages-*
+          path: dist
+          merge-multiple: true
+      - name: Check signing runner tools and credentials
+        env:
+          NVSEC_SSA_CLIENT_ID: ${{ secrets.NVSEC_SSA_CLIENT_ID }}
+          NVSEC_SSA_CLIENT_SECRET: ${{ secrets.NVSEC_SSA_CLIENT_SECRET }}
+        run: |
+          for tool in nvsec gpg gpgv ar sha256sum md5sum sha1sum; do
+            command -v "$tool" >/dev/null || { echo "Required signing tool is unavailable: $tool" >&2; exit 1; }
+          done
+          : "${NVSEC_SSA_CLIENT_ID:?Configure signing credentials}"
+          : "${NVSEC_SSA_CLIENT_SECRET:?Configure signing credentials}"
+      - name: Sign packages, refresh checksums, sign and verify manifest
+        env:
+          RELEASE_TAG: ${{ env.VERSION_TAG }}
+          NVSEC_SSA_CLIENT_ID: ${{ secrets.NVSEC_SSA_CLIENT_ID }}
+          NVSEC_SSA_CLIENT_SECRET: ${{ secrets.NVSEC_SSA_CLIENT_SECRET }}
+          NVSEC_LINUX_PACKAGE_SSA_SCOPE: ${{ vars.NVSEC_LINUX_PACKAGE_SSA_SCOPE || 'SIGNING_LINUX_PACKAGE_FLEET_INTELLIGENCE' }}
+          NVSEC_LINUX_PACKAGE_JOB_TYPE: ${{ vars.NVSEC_LINUX_PACKAGE_JOB_TYPE || 'LINUX_PACKAGE_FLEET_INTELLIGENCE' }}
+          NVSEC_CHECKSUM_SSA_SCOPE: ${{ vars.NVSEC_CHECKSUM_SSA_SCOPE || 'SIGNING_FLEET_INTELLIGENCE' }}
+          NVSEC_CHECKSUM_JOB_TYPE: ${{ vars.NVSEC_CHECKSUM_JOB_TYPE || 'FLEET_INTELLIGENCE' }}
+          NSPECT_ID: ${{ vars.NSPECT_ID }}
+        run: scripts/prepare-package-release.sh dist "${RELEASE_TAG#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-package-release
+          path: |
+            dist/*.deb
+            dist/checksums.txt
+            dist/checksums.txt.asc
+            dist/fleet-intelligence.pub.asc
+            dist/verify-linux-package-signature.sh
+          if-no-files-found: error
+          retention-days: 7
+
+  upload-package-assets:
+    if: ${{ github.ref_type == 'tag' }}
+    name: Upload verified host packages to draft
+    needs: [reserve-package-release, sign-packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signed-package-release
+          path: dist
+      - name: Verify downloaded signed artifacts
+        run: scripts/verify-package-release.sh dist
+      - name: Upload verified assets and keep release as draft
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
+        env:
+          RELEASE_ID: ${{ needs.reserve-package-release.outputs.release-id }}
+        with:
+          script: |
+            const releaseId = Number(process.env.RELEASE_ID);
+            await require('./scripts/publish-package-assets.cjs')({ github, context, releaseId });
