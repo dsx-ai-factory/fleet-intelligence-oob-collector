@@ -11,9 +11,13 @@ module.exports = async function uploadAssets({ github, context, releaseId, direc
   const expected = [
     `fleetint-oob_${version}_amd64.deb`,
     `fleetint-oob_${version}_arm64.deb`,
+    `fleetint-oob_${version}_amd64.rpm`,
+    `fleetint-oob_${version}_arm64.rpm`,
     'checksums.txt', 'checksums.txt.asc', 'fleet-intelligence.pub.asc',
     'verify-linux-package-signature.sh',
   ];
+  // Validate the complete local inventory before beginning any upload.
+  for (const name of expected) fs.accessSync(path.join(directory, name), fs.constants.R_OK);
   const { data: release } = await github.rest.repos.getRelease({ ...context.repo, release_id: releaseId });
   if (release.tag_name !== tag || !release.draft) throw new Error('Expected the reserved draft release');
   const assets = await github.paginate(github.rest.repos.listReleaseAssets, {

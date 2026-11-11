@@ -13,28 +13,36 @@ fingerprint="$(gpg --batch --homedir "$work_dir/gnupg" --show-keys --with-colons
 gpg --batch --homedir "$work_dir/gnupg" --dearmor --output "$work_dir/key.gpg" "$key"
 gpgv --status-fd 1 --keyring "$work_dir/key.gpg" "$dist_dir/checksums.txt.asc" "$dist_dir/checksums.txt" > "$work_dir/status" 2>&1
 grep -q '^\[GNUPG:\] VALIDSIG FE0C8B74CA66357C13BE197DCCE3C963087199B3 ' "$work_dir/status" || { echo "Unexpected checksum signer" >&2; exit 1; }
-# A valid signature does not make filenames safe. Only these four artifacts
-# belong in the signed manifest; reject duplicates and paths before hashing.
-awk '
+shopt -s nullglob
+# Signed filenames still need validation before any file is hashed.
+awk -v expected=4 '
   NF != 2 || length($1) != 64 || $1 ~ /[^a-fA-F0-9]/ || $2 ~ /[\/\\]/ || seen[$2]++ {exit 1}
-  $2 ~ /^fleetint-oob_[0-9][a-zA-Z0-9.+~-]*_(amd64|arm64)[.]deb$/ {packages++; next}
+  $2 ~ /^fleetint-oob_[0-9][a-zA-Z0-9.+~-]*_(amd64|arm64)[.](deb|rpm)$/ {packages++; next}
   $2 == "fleet-intelligence.pub.asc" || $2 == "verify-linux-package-signature.sh" {extras++; next}
   {exit 1}
-  END {if (NR != 4 || packages != 2 || extras != 2) exit 1}
+  END {if (NR != expected + 2 || packages != expected || extras != 2) exit 1}
 ' "$dist_dir/checksums.txt" || { echo "Invalid release checksum inventory" >&2; exit 1; }
 (cd "$dist_dir" && sha256sum -c checksums.txt)
-shopt -s nullglob
-packages=("$dist_dir"/*.deb)
-[[ ${#packages[@]} == 2 ]] || { echo "Expected exactly two architecture packages" >&2; exit 1; }
 version=
-for arch in amd64 arm64; do
-  matches=("$dist_dir"/fleetint-oob_*_"$arch".deb)
-  [[ ${#matches[@]} == 1 ]] || { echo "Expected one $arch package" >&2; exit 1; }
-  name="$(basename "${matches[0]}")"
-  current="${name#fleetint-oob_}"
-  current="${current%_"${arch}".deb}"
-  [[ -z "$version" || "$version" == "$current" ]] || { echo "Architecture versions differ" >&2; exit 1; }
-  version="$current"
-  awk -v name="$name" '$2 == name {count++} END {exit count != 1}' "$dist_dir/checksums.txt" || { echo "Package missing from signed manifest" >&2; exit 1; }
-  "$(dirname "$0")/verify-linux-package-signature.sh" "${matches[0]}" "$key"
+for format in deb rpm; do
+  packages=("$dist_dir"/*."$format")
+  [[ ${#packages[@]} == 2 ]] || { echo "Expected exactly two $format architecture packages" >&2; exit 1; }
+  for arch in amd64 arm64; do
+    matches=("$dist_dir"/fleetint-oob_*_"$arch"."$format")
+    [[ ${#matches[@]} == 1 ]] || { echo "Expected one $arch $format package" >&2; exit 1; }
+    name="$(basename "${matches[0]}")"
+    current="${name#fleetint-oob_}"
+    current="${current%_"${arch}"."$format"}"
+    [[ -z "$version" || "$version" == "$current" ]] || { echo "Package versions differ" >&2; exit 1; }
+    version="$current"
+    awk -v name="$name" '$2 == name {count++} END {exit count != 1}' "$dist_dir/checksums.txt" || { echo "Package missing from signed manifest" >&2; exit 1; }
+    "$(dirname "$0")/verify-linux-package-signature.sh" "${matches[0]}" "$key"
+    if [[ "$format" == rpm ]]; then
+      case "$arch" in amd64) rpm_arch=x86_64 ;; arm64) rpm_arch=aarch64 ;; esac
+      metadata="$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "${matches[0]}")"
+      [[ "$metadata" == "fleetint-oob ${current/-/\~} $rpm_arch" ]] || {
+        echo "RPM metadata does not match its release name" >&2; exit 1;
+      }
+    fi
+  done
 done

@@ -1,7 +1,7 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 FROM debian:12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends bash gnupg binutils dpkg-dev nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends bash gnupg binutils dpkg-dev nodejs rpm && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY scripts/ scripts/
 COPY deployments/packages/keys/ deployments/packages/keys/

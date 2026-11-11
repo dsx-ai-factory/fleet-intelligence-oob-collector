@@ -23,3 +23,5 @@ Where to look:
 Run `make debian-test` for a real three-component Debian package installation,
 non-root daemon startup, authenticated telemetry export to loopback fixtures,
 and upgrade/removal coverage. These checks use shell scripts in Docker.
+
+Run `make rpm-test` for the same daemon runtime and authenticated telemetry checks with a real RPM install, upgrade, configuration preservation, and removal in a Rocky Linux 9 container. These tests execute the packaged RPM scriptlets and stub only the systemd manager.
