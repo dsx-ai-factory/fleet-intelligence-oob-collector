@@ -135,6 +135,8 @@
       "additionalProperties": false,
       "required": [
         "enabled",
+        "deploymentMode",
+        "external",
         "image",
         "resources",
         "nodeSelector",
@@ -146,6 +148,15 @@
       ],
       "properties": {
         "enabled": {"type": "boolean"},
+        "deploymentMode": {"type": "string", "enum": ["managed", "external"]},
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expectedImage"],
+          "properties": {
+            "expectedImage": {"type": "string"}
+          }
+        },
         "config": {
           "type": "object",
           "additionalProperties": false,

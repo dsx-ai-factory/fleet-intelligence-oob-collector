@@ -35,14 +35,15 @@ The two Secrets hold the [BMC credentials file](../../../credentials.example.jso
 | Inventory and attestation only | `nicoHardwareHealth.enabled: false` and `otelGateway.enabled: false` |
 | Health telemetry only | `bmcCollector.enabled: false` |
 | NICo with your own OTLP/gRPC collector | `telemetry.endpoint` and `otelGateway.enabled: false` |
+| Existing NICo with the bundled gateway | `nicoHardwareHealth.deploymentMode: external` |
 
-The gateway requires NICo. NICo's init container uses the collector image even when the collector is disabled.
+The gateway requires NICo health to be enabled. In the default `managed` mode, NICo's init container uses the collector image even when the collector is disabled. In `external` mode, set `nicoHardwareHealth.external.expectedImage` to the existing official image and `nicoHardwareHealth.image` to the FI-qualified replacement. The chart renders an integration contract instead of a NICo Deployment or Service and preserves the customer configuration while adding FI settings. Follow the [external NICo integration guide](../../../docs/external-nico-preserve-configuration.md).
 
 ## How it works
 
 With release name `fleet-intelligence-oob-collector`, the workloads are named `fleet-intelligence-oob-collector`, `nico-hardware-health`, and `fleet-intelligence-oob-collector-otel-gateway`.
 
-The chart turns `inventory` and optional NICo collection settings into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`.
+The chart turns `inventory` and optional NICo collection settings into a collector TOML file. NICo's init container runs `bmc-collector render-nico-config` on that file to generate NICo's configuration in a pod-local volume; every target kind becomes a generic Redfish endpoint. The collector, the init container, and NICo all mount the same credentials file at `/run/secrets/bmc/credentials.json`. External mode applies the same init-container and volume contract to the existing NICo Deployment with the repository integration command.
 
 Set optional flat fields under `nicoHardwareHealth.config` to configure NICo collection. See [NICo collection controls](../../../docs/configuration.md#nico-collection-controls) for supported fields and defaults.
 

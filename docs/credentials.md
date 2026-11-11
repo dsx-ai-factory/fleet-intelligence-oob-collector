@@ -207,7 +207,7 @@ What happens next depends on what changed:
 | --- | --- |
 | BMC passwords in the credentials file | Nothing. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
 | Bootstrap token | Restart the collector and gateway, because they read the token only at startup. The VSO token example does this for you. With ESO or a hand-made Secret, restart them yourself (below). |
-| Targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
+| Targets or other Helm values | Run `helm upgrade`. The chart restarts managed workloads whose configuration changed: target changes restart the collector and managed NICo, and gateway settings restart the gateway. With external NICo, rerun the [integration command](external-nico-preserve-configuration.md#5-validate-and-apply-the-integration) after the upgrade. |
 
 Restart after a token change:
 

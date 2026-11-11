@@ -183,6 +183,116 @@ class NicoHelmTests(unittest.TestCase):
         config = tomllib.loads(textwrap.dedent(result.stdout.split("  collector.toml: |\n", 1)[1]))
         self.assertNotIn("nico_health", config)
 
+    def test_external_mode_renders_integration_without_managed_nico(self):
+        """Keep NICo enabled in reports while leaving its workload externally owned."""
+        command = [
+            "helm", "template", "test", str(CHART),
+            "--values", str(CHART / "ci/test-values.yaml"),
+            "--set", "nicoHardwareHealth.deploymentMode=external",
+            "--set-string", "nicoHardwareHealth.external.expectedImage=registry.example/nico:v2.3.4",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("name: nico-hardware-health\n", result.stdout)
+        self.assertIn("app.kubernetes.io/component: external-nico-integration", result.stdout)
+        self.assertIn('value: "true"', result.stdout)
+        self.assertIn('value: "bundledGateway"', result.stdout)
+
+        integration = render(
+            {},
+            "external-nico-integration-configmap.yaml",
+            workload={
+                "deploymentMode": "external",
+                "external.expectedImage": "registry.example/nico:v2.3.4",
+            },
+        )
+        self.assertEqual(integration.returncode, 0, integration.stderr)
+        encoded = textwrap.dedent(
+            integration.stdout.split("  integration.json: |\n", 1)[1]
+        )
+        contract = json.loads(encoded)
+        self.assertEqual(
+            contract["qualifiedNicoRevision"],
+            "844ae0766b6070ab69b3ca744cb87a72a3b0209a",
+        )
+        self.assertEqual(
+            contract["qualifiedNicoImage"],
+            "nvcr.io/nvidia/fleet-intelligence/nico-hardware-health:0.1.0",
+        )
+        self.assertEqual(
+            contract["expectedSourceNicoImage"],
+            "registry.example/nico:v2.3.4",
+        )
+        self.assertEqual(
+            contract["initContainer"]["args"][5:7],
+            ["--otlp-endpoint", "http://test-fleet-intelligence-oob-collector-otel-gateway:4317"],
+        )
+        self.assertEqual(contract["mainContainer"]["args"], ["/etc/nico-health/config.toml"])
+        self.assertEqual(contract["imagePullSecrets"], [{"name": "ghcr-pull-secret-test"}])
+        initializer = contract["initContainer"]
+        base_index = initializer["args"].index("--base-config") + 1
+        self.assertEqual(
+            initializer["args"][base_index],
+            "__FLEET_INTELLIGENCE_EXISTING_NICO_CONFIG__",
+        )
+        self.assertIn(
+            "fleet-intelligence-bmc-credentials",
+            {mount["name"] for mount in initializer["volumeMounts"]},
+        )
+        self.assertNotIn(
+            "fleet-intelligence-bmc-credentials",
+            {mount["name"] for mount in contract["mainContainer"]["volumeMounts"]},
+        )
+
+        disabled_status = render(
+            {},
+            "external-nico-integration-configmap.yaml",
+            workload={
+                "deploymentMode": "external",
+                "external.expectedImage": "registry.example/nico:v2.3.4",
+                "resourceStatus.enabled": False,
+            },
+        )
+        self.assertEqual(disabled_status.returncode, 0, disabled_status.stderr)
+        disabled_contract = json.loads(
+            textwrap.dedent(
+                disabled_status.stdout.split("  integration.json: |\n", 1)[1]
+            )
+        )
+        self.assertEqual(
+            disabled_contract["initContainer"]["args"][-1],
+            "--disable-resource-status-collection",
+        )
+
+        policy = render(
+            {},
+            "otel-gateway-networkpolicy.yaml",
+            workload={
+                "deploymentMode": "external",
+                "external.expectedImage": "registry.example/nico:v2.3.4",
+            },
+        )
+        self.assertEqual(policy.returncode, 0, policy.stderr)
+        self.assertIn('fleet-intelligence.nvidia.com/otel-source: "test"', policy.stdout)
+        self.assertNotIn('app.kubernetes.io/instance: "test"', policy.stdout.split("ingress:", 1)[1])
+
+    def test_external_mode_requires_health_enablement(self):
+        result = render(
+            {},
+            workload={"enabled": False, "deploymentMode": "external"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "deploymentMode=external requires nicoHardwareHealth.enabled=true",
+            result.stderr,
+        )
+        result = render({}, workload={"deploymentMode": "external"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "nicoHardwareHealth.external.expectedImage is required in external mode",
+            result.stderr,
+        )
+
     def test_invalid_settings_fail_schema_validation(self):
         """Reject invalid types and values before producing a ConfigMap."""
         for key in ["sensorFetchIntervalSeconds", "bmcRequestConcurrency"]:

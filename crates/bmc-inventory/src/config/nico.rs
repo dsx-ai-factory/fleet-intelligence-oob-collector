@@ -18,7 +18,9 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
+use std::str::FromStr;
 
+use mac_address::MacAddress;
 use serde::Serialize;
 use toml::Value;
 
@@ -147,6 +149,270 @@ pub fn render_nico_config(
 
     toml::to_string_pretty(&nico_config)
         .map_err(|error| format!("failed to render NICo TOML config: {error}").into())
+}
+
+/// Add FI-owned collection and telemetry settings to an existing NICo configuration.
+///
+/// Endpoint sources and unrelated customer settings remain customer-owned. Known FI
+/// collection controls override the corresponding native collector fields, while
+/// unknown collector and plugin fields are retained.
+pub fn merge_nico_config(
+    base: &str,
+    config: &CollectorConfig,
+    options: &NicoConfigOptions,
+) -> Result<String, Box<dyn Error>> {
+    let mut merged: Value =
+        toml::from_str(base).map_err(|_| "existing NICo configuration is not valid TOML")?;
+    let overlay: Value = toml::from_str(&render_nico_config(config, options)?)
+        .map_err(|_| "internally rendered NICo configuration is not valid TOML")?;
+
+    let merged_root = merged
+        .as_table_mut()
+        .ok_or("existing NICo configuration root must be a TOML table")?;
+    let overlay_root = overlay
+        .as_table()
+        .ok_or("internally rendered NICo configuration root is not a TOML table")?;
+
+    // These controls are already part of the FI Helm contract. Overlay their
+    // known fields without deleting customer-only collectors or nested fields.
+    for key in [
+        "bmc_request_concurrency",
+        "endpoint_discovery_interval",
+        "rate_limit",
+    ] {
+        if let Some(value) = overlay_root.get(key) {
+            merged_root.insert(key.into(), value.clone());
+        }
+    }
+    merge_root_table(merged_root, overlay_root, "collectors")?;
+    merge_nested_table(
+        merged_root,
+        overlay_root,
+        &["processors", "resource_status"],
+    )?;
+    merge_nested_table(merged_root, overlay_root, &["attributes"])?;
+    merge_static_endpoint_labels(merged_root, overlay_root)?;
+    merge_fi_otlp_target(merged_root, overlay_root)?;
+
+    toml::to_string_pretty(&merged)
+        .map_err(|error| format!("failed to serialize merged NICo configuration: {error}").into())
+}
+
+fn merge_root_table(
+    merged: &mut toml::Table,
+    overlay: &toml::Table,
+    key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let Some(overlay_value) = overlay.get(key) else {
+        return Ok(());
+    };
+    let overlay_table = overlay_value
+        .as_table()
+        .ok_or_else(|| format!("internal NICo {key} configuration is not a table"))?;
+    let merged_value = merged
+        .entry(key)
+        .or_insert_with(|| Value::Table(toml::Table::new()));
+    let merged_table = merged_value
+        .as_table_mut()
+        .ok_or_else(|| format!("existing NICo {key} configuration must be a table"))?;
+    deep_merge(merged_table, overlay_table);
+    Ok(())
+}
+
+fn merge_nested_table(
+    merged: &mut toml::Table,
+    overlay: &toml::Table,
+    path: &[&str],
+) -> Result<(), Box<dyn Error>> {
+    let overlay_table = table_at_path(overlay, path, "internal")?;
+    let merged_table = table_at_path_mut(merged, path, "existing")?;
+    deep_merge(merged_table, overlay_table);
+    Ok(())
+}
+
+fn table_at_path<'a>(
+    mut table: &'a toml::Table,
+    path: &[&str],
+    owner: &str,
+) -> Result<&'a toml::Table, Box<dyn Error>> {
+    for key in path {
+        table = table.get(*key).and_then(Value::as_table).ok_or_else(|| {
+            format!(
+                "{owner} NICo {} configuration must be a table",
+                path.join(".")
+            )
+        })?;
+    }
+    Ok(table)
+}
+
+fn table_at_path_mut<'a>(
+    mut table: &'a mut toml::Table,
+    path: &[&str],
+    owner: &str,
+) -> Result<&'a mut toml::Table, Box<dyn Error>> {
+    for key in path {
+        let value = table
+            .entry(*key)
+            .or_insert_with(|| Value::Table(toml::Table::new()));
+        table = value.as_table_mut().ok_or_else(|| {
+            format!(
+                "{owner} NICo {} configuration must be a table",
+                path.join(".")
+            )
+        })?;
+    }
+    Ok(table)
+}
+
+fn deep_merge(destination: &mut toml::Table, overlay: &toml::Table) {
+    for (key, overlay_value) in overlay {
+        match (
+            destination.get_mut(key).and_then(Value::as_table_mut),
+            overlay_value.as_table(),
+        ) {
+            (Some(destination_table), Some(overlay_table)) => {
+                deep_merge(destination_table, overlay_table);
+            }
+            _ => {
+                destination.insert(key.clone(), overlay_value.clone());
+            }
+        }
+    }
+}
+
+fn merge_static_endpoint_labels(
+    merged: &mut toml::Table,
+    overlay: &toml::Table,
+) -> Result<(), Box<dyn Error>> {
+    let overlay_sources = table_at_path(overlay, &["endpoint_sources"], "internal")?;
+    let overlay_endpoints = overlay_sources
+        .get("static_bmc_endpoints")
+        .and_then(Value::as_array)
+        .ok_or("internal NICo static endpoint configuration must be an array")?;
+    let labels_by_mac = endpoint_labels_by_mac(overlay_endpoints, "internal")?;
+
+    let Some(merged_sources_value) = merged.get_mut("endpoint_sources") else {
+        return Ok(());
+    };
+    let merged_sources = merged_sources_value
+        .as_table_mut()
+        .ok_or("existing NICo endpoint_sources configuration must be a table")?;
+    let Some(merged_endpoints_value) = merged_sources.get_mut("static_bmc_endpoints") else {
+        return Ok(());
+    };
+    let merged_endpoints = merged_endpoints_value
+        .as_array_mut()
+        .ok_or("existing NICo endpoint_sources.static_bmc_endpoints must be an array")?;
+
+    for (index, endpoint) in merged_endpoints.iter_mut().enumerate() {
+        let endpoint = endpoint.as_table_mut().ok_or_else(|| {
+            format!("existing NICo endpoint_sources.static_bmc_endpoints[{index}] must be a table")
+        })?;
+        let Some(mac) = endpoint.get("mac").and_then(Value::as_str) else {
+            continue;
+        };
+        let mac = normalize_mac(mac).map_err(|_| {
+            format!("existing NICo endpoint_sources.static_bmc_endpoints[{index}].mac is invalid")
+        })?;
+        let Some(fi_labels) = labels_by_mac.get(&mac) else {
+            continue;
+        };
+        let labels = endpoint
+            .entry("labels")
+            .or_insert_with(|| Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                format!(
+                    "existing NICo endpoint_sources.static_bmc_endpoints[{index}].labels must be a table"
+                )
+            })?;
+        deep_merge(labels, fi_labels);
+    }
+    Ok(())
+}
+
+fn endpoint_labels_by_mac(
+    endpoints: &[Value],
+    owner: &str,
+) -> Result<BTreeMap<String, toml::Table>, Box<dyn Error>> {
+    let mut labels_by_mac = BTreeMap::new();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let endpoint = endpoint.as_table().ok_or_else(|| {
+            format!("{owner} NICo endpoint_sources.static_bmc_endpoints[{index}] must be a table")
+        })?;
+        let mac = endpoint.get("mac").and_then(Value::as_str).ok_or_else(|| {
+            format!(
+                "{owner} NICo endpoint_sources.static_bmc_endpoints[{index}].mac must be a string"
+            )
+        })?;
+        let mac = normalize_mac(mac).map_err(|_| {
+            format!("{owner} NICo endpoint_sources.static_bmc_endpoints[{index}].mac is invalid")
+        })?;
+        let labels = endpoint
+            .get("labels")
+            .and_then(Value::as_table)
+            .ok_or_else(|| {
+                format!(
+                    "{owner} NICo endpoint_sources.static_bmc_endpoints[{index}].labels must be a table"
+                )
+            })?;
+        if labels_by_mac.insert(mac, labels.clone()).is_some() {
+            return Err("FI target configuration contains a duplicate BMC MAC".into());
+        }
+    }
+    Ok(labels_by_mac)
+}
+
+fn normalize_mac(value: &str) -> Result<String, Box<dyn Error>> {
+    Ok(MacAddress::from_str(value.trim())?.to_string())
+}
+
+fn merge_fi_otlp_target(
+    merged: &mut toml::Table,
+    overlay: &toml::Table,
+) -> Result<(), Box<dyn Error>> {
+    let overlay_otlp = table_at_path(overlay, &["sinks", "otlp"], "internal")?;
+    let overlay_target = overlay_otlp
+        .get("targets")
+        .and_then(Value::as_array)
+        .and_then(|targets| targets.first())
+        .and_then(Value::as_table)
+        .ok_or("internal NICo FI OTLP target is missing")?;
+    let fi_endpoint = overlay_target
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .ok_or("internal NICo FI OTLP endpoint is missing")?;
+
+    let merged_sinks = table_at_path_mut(merged, &["sinks"], "existing")?;
+    let merged_otlp = table_at_path_mut(merged_sinks, &["otlp"], "existing")?;
+    merged_otlp.insert("enabled".into(), Value::Boolean(true));
+    let targets = merged_otlp
+        .entry("targets")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or("existing NICo sinks.otlp.targets must be an array")?;
+
+    let mut matching_index = None;
+    for (index, target) in targets.iter().enumerate() {
+        let target = target
+            .as_table()
+            .ok_or_else(|| format!("existing NICo sinks.otlp.targets[{index}] must be a table"))?;
+        if target.get("endpoint").and_then(Value::as_str) == Some(fi_endpoint)
+            && matching_index.replace(index).is_some()
+        {
+            return Err("existing NICo configuration repeats the FI OTLP endpoint".into());
+        }
+    }
+    if let Some(index) = matching_index {
+        let target = targets[index]
+            .as_table_mut()
+            .ok_or("existing NICo FI OTLP target must be a table")?;
+        deep_merge(target, overlay_target);
+    } else {
+        targets.push(Value::Table(overlay_target.clone()));
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -779,5 +1045,196 @@ mod tests {
         assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
         assert!(endpoint["labels"].get("machine_name").is_none());
         assert!(endpoint.get("port").is_none());
+    }
+
+    #[test]
+    fn merged_nico_config_preserves_customer_sources_plugins_and_sinks() {
+        let collector = parse_test_config(
+            r#"
+            compute_zone = "us-west-dc1"
+            node_group = "gb200-training"
+
+            [[targets]]
+            credentials_profile = "bmc"
+            kind = "compute"
+            name = "node-01"
+            ip = "10.0.0.1"
+            mac = "AA:BB:CC:DD:EE:FF"
+            "#,
+            "test.toml",
+        )
+        .unwrap();
+        let base = r#"
+customer_root_setting = "preserved"
+
+[endpoint_sources]
+identity = ["mac", "ip"]
+static_credentials_file = "/gmi/credentials.json"
+
+[endpoint_sources.sql]
+database_url_file = "/gmi/database-url"
+credentials_profile = "gmi-bmc"
+query = "SELECT bmc_ip, bmc_mac, machine_name FROM inventory"
+
+[collectors.custom_plugin]
+enabled = true
+plugin_option = "preserved"
+
+[collectors.logs]
+enabled = false
+customer_option = "preserved"
+
+[processors.customer]
+enabled = true
+
+[attributes]
+customer_attribute = true
+
+[sinks.customer]
+enabled = true
+
+[sinks.otlp]
+enabled = true
+
+[[sinks.otlp.targets]]
+endpoint = "https://customer-otel.example:4317"
+batch_size = 7
+"#;
+        let merged = merge_nico_config(base, &collector, &NicoConfigOptions::default()).unwrap();
+        let merged: Value = toml::from_str(&merged).unwrap();
+
+        assert_eq!(merged["customer_root_setting"].as_str(), Some("preserved"));
+        assert_eq!(
+            merged["endpoint_sources"]["sql"]["query"].as_str(),
+            Some("SELECT bmc_ip, bmc_mac, machine_name FROM inventory")
+        );
+        assert!(
+            merged["endpoint_sources"]
+                .get("static_bmc_endpoints")
+                .is_none()
+        );
+        assert_eq!(
+            merged["collectors"]["custom_plugin"]["plugin_option"].as_str(),
+            Some("preserved")
+        );
+        assert_eq!(
+            merged["collectors"]["logs"]["customer_option"].as_str(),
+            Some("preserved")
+        );
+        assert_eq!(
+            merged["collectors"]["logs"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            merged["processors"]["customer"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            merged["attributes"]["customer_attribute"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(merged["attributes"]["gpu_identity"].as_bool(), Some(true));
+        assert_eq!(merged["sinks"]["customer"]["enabled"].as_bool(), Some(true));
+        let targets = merged["sinks"]["otlp"]["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0]["endpoint"].as_str(),
+            Some("https://customer-otel.example:4317")
+        );
+        assert_eq!(
+            targets[1]["endpoint"].as_str(),
+            Some("http://localhost:4317")
+        );
+        assert_eq!(targets[1]["include_diagnostics"].as_bool(), Some(true));
+        assert_eq!(targets[1]["include_alert_details"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn merged_nico_config_enriches_matching_static_endpoint_without_replacing_it() {
+        let collector = parse_test_config(
+            r#"
+            compute_zone = "us-west-dc1"
+            node_group = "gb200-training"
+
+            [[targets]]
+            credentials_profile = "bmc"
+            name = "node-01"
+            ip = "10.0.0.99"
+            mac = "AA:BB:CC:DD:EE:FF"
+            labels = { fi_custom = "fi-value" }
+            "#,
+            "test.toml",
+        )
+        .unwrap();
+        let base = r#"
+[endpoint_sources]
+static_credentials_file = "/gmi/credentials.json"
+
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.0.1"
+port = 8443
+mac = "aa-bb-cc-dd-ee-ff"
+credentials_profile = "gmi-profile"
+labels = { customer = "preserved", machine_name = "old-name" }
+
+[collectors.custom]
+enabled = true
+
+[sinks.otlp]
+enabled = true
+
+[[sinks.otlp.targets]]
+endpoint = "http://localhost:4317"
+customer_tls_option = "preserved"
+"#;
+        let merged = merge_nico_config(base, &collector, &NicoConfigOptions::default()).unwrap();
+        let merged: Value = toml::from_str(&merged).unwrap();
+        let endpoint = &merged["endpoint_sources"]["static_bmc_endpoints"][0];
+
+        assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
+        assert_eq!(endpoint["port"].as_integer(), Some(8443));
+        assert_eq!(
+            endpoint["credentials_profile"].as_str(),
+            Some("gmi-profile")
+        );
+        assert_eq!(endpoint["labels"]["customer"].as_str(), Some("preserved"));
+        assert_eq!(endpoint["labels"]["machine_name"].as_str(), Some("node-01"));
+        assert_eq!(
+            endpoint["labels"]["compute_zone"].as_str(),
+            Some("us-west-dc1")
+        );
+        assert_eq!(endpoint["labels"]["oob"].as_str(), Some("true"));
+        assert_eq!(endpoint["labels"]["fi_custom"].as_str(), Some("fi-value"));
+        let targets = merged["sinks"]["otlp"]["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0]["customer_tls_option"].as_str(),
+            Some("preserved")
+        );
+        assert_eq!(targets[0]["batch_size"].as_integer(), Some(512));
+    }
+
+    #[test]
+    fn merged_nico_config_does_not_echo_invalid_customer_content() {
+        let collector = parse_test_config(
+            r#"
+            [[targets]]
+            credentials_profile = "bmc"
+            ip = "10.0.0.1"
+            mac = "AA:BB:CC:DD:EE:FF"
+            "#,
+            "test.toml",
+        )
+        .unwrap();
+        let error = merge_nico_config(
+            "password = 'sensitive-value'\ninvalid = [",
+            &collector,
+            &NicoConfigOptions::default(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(error, "existing NICo configuration is not valid TOML");
+        assert!(!error.contains("sensitive-value"));
     }
 }

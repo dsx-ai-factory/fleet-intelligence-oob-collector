@@ -44,6 +44,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.nicoHardwareHealth.image.repository (default .Chart.Version .Values.nicoHardwareHealth.image.tag) -}}
 {{- end }}
 
+{{- define "fleet-intelligence-oob-collector.externalNicoIntegrationName" -}}
+{{- printf "%s-external-nico" (include "fleet-intelligence-oob-collector.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "fleet-intelligence-oob-collector.otelGatewayImage" -}}
 {{- printf "%s:%s" .Values.otelGateway.image.repository .Values.otelGateway.image.tag -}}
 {{- end }}
@@ -94,6 +98,12 @@ affinity:
 {{- define "fleet-intelligence-oob-collector.validate" -}}
 {{- if not (or .Values.bmcCollector.enabled .Values.nicoHardwareHealth.enabled) -}}
 {{- fail "enable at least one of bmcCollector or nicoHardwareHealth" -}}
+{{- end -}}
+{{- if and (not .Values.nicoHardwareHealth.enabled) (eq .Values.nicoHardwareHealth.deploymentMode "external") -}}
+{{- fail "nicoHardwareHealth.deploymentMode=external requires nicoHardwareHealth.enabled=true" -}}
+{{- end -}}
+{{- if and (eq .Values.nicoHardwareHealth.deploymentMode "external") (not (.Values.nicoHardwareHealth.external.expectedImage | trim)) -}}
+{{- fail "nicoHardwareHealth.external.expectedImage is required in external mode" -}}
 {{- end -}}
 {{- if and .Values.otelGateway.enabled (not .Values.nicoHardwareHealth.enabled) -}}
 {{- fail "otelGateway requires nicoHardwareHealth to be enabled" -}}

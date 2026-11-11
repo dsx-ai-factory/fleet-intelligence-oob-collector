@@ -68,6 +68,11 @@ bmcCollector:
 
 nicoHardwareHealth:
   enabled: true
+  # managed deploys NICo; external configures a pre-existing same-namespace Deployment through the integration command.
+  deploymentMode: managed # managed | external
+  external:
+    # Exact image currently used by the pre-existing NICo Deployment; required in external mode.
+    expectedImage: ""
   # Collection settings; pod settings remain alongside this block.
   config:
     sensorFetchIntervalSeconds: 60

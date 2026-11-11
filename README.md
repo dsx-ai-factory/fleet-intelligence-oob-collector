@@ -41,6 +41,7 @@ Read the [collector documentation](https://docs.nvidia.com/fleet-intel/oob-colle
 
 - [Installation](docs/installation.md): Kubernetes setup, verification, and removal.
 - [Configuration](docs/configuration.md): Helm values for targets, credentials, telemetry, and collection.
+- [External NICo integration](docs/external-nico-preserve-configuration.md): add FI telemetry to a pre-existing same-namespace NICo Deployment while retaining customer endpoint sources, plugins, and sinks.
 - [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
 - [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
 
