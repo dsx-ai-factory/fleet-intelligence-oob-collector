@@ -23,7 +23,7 @@ sudo apt-get install build-essential clang cmake pkg-config binutils musl-tools 
 
 The Make targets build the collector with Cargo, build only NICo's `carbide-health` / `forge-hw-health` binary with Cargo, and build the custom OpenTelemetry gateway through the agent's pinned collector builder. Rustup uses each source repository's pinned toolchain and installs the native musl target. No Docker or Helm is required for building host packages.
 
-Pinned NICo and agent sources are checked out under revision-specific directories in `dist/package-sources/`. Changing a pinned revision selects a new checkout; an existing custom checkout must match the requested revision. NICo uses the same source revision as the release workflow. Build outputs stay under `target/` and `dist/`; upstream sources are not edited. The gateway's `sakauth` extension is required for authentication.
+Pinned NICo and agent sources are checked out under revision-specific directories in `dist/package-sources/`. Changing a pinned revision requires reviewing and updating `NOTICE` and selects a new checkout; an existing custom checkout must match the reviewed revision. NICo uses the same source revision as the release workflow. Build outputs stay under `target/` and `dist/`; upstream sources are not edited. The gateway's `sakauth` extension is required for authentication.
 
 ```bash
 make deb      # DEB only
@@ -31,9 +31,9 @@ make rpm      # RPM only
 make package  # Both formats
 ```
 
-The targets first prepare all three binaries and their notices in `dist/package-input/`, then invoke nFPM using `nfpm/fleetint-oob.yaml`. Packages go to `dist/packages/`. Build on the target Linux architecture; cross-compilation is not configured.
+The targets first prepare all three binaries in `dist/package-input/`, then invoke nFPM using `nfpm/fleetint-oob.yaml`. Packages go to `dist/packages/`. Build on the target Linux architecture; cross-compilation is not configured.
 
-Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or the `NFPM` executable as needed. `NICO_SOURCE` and `AGENT_SOURCE` can point to existing checkouts at the selected revisions; the Make targets verify their revisions and do not change those checkouts. Versions must be valid in both package formats, for example `0.1.0~prototype1`. The package revision is 1.
+Override `VERSION`, `ARCH` (`amd64` or `arm64`), `INPUTDIR`, `OUTPUTDIR`, or the `NFPM` executable as needed. `NICO_SOURCE` and `AGENT_SOURCE` can point to existing checkouts at the selected revisions; the Make targets verify their revisions and do not change those checkouts. Versions must be valid in both package formats, for example `0.1.0~prototype1`. The package revision is 1. Effective `NICO_REF` and `AGENT_REF` values, including environment or command-line overrides, must exactly match the full revisions recorded in `NOTICE`. Native package targets and Docker package targets reject mismatches before invoking the packager or Docker.
 
 Both Rust binaries use Rust's self-contained musl linker defaults; `musl-gcc`
 is used for their C dependencies. The gateway uses `CGO_ENABLED=0`.

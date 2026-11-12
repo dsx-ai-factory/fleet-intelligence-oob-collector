@@ -33,6 +33,28 @@ grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
 expect_failure make --no-print-directory package-native-check AGENT_REF=
 grep -q 'Pinned NICo and agent revisions are required' "$test_root/failure.log"
 
+# Effective command-line/environment overrides must fail before the packager
+# or Docker is invoked, including fixture packaging that skips binary builds.
+export PACKAGE_TEST_TOOL_CALLS="$test_root/tool-calls"
+cat > "$test_root/bin/package-tool" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$0 $*" >> "$PACKAGE_TEST_TOOL_CALLS"
+EOF
+chmod +x "$test_root/bin/package-tool"
+ln -s package-tool "$test_root/bin/nfpm"
+ln -s package-tool "$test_root/bin/docker"
+export PATH="$test_root/bin:$PATH"
+make --no-print-directory package-source-check
+for variable in NICO_REF AGENT_REF; do
+    for target in deb rpm debian-package rpm-package; do
+        expect_failure make --no-print-directory -o package-binaries "$target" "$variable=0000000000000000000000000000000000000000" NFPM="$test_root/bin/nfpm"
+        grep -q "Effective $variable does not match" "$test_root/failure.log"
+        expect_failure env "$variable=0000000000000000000000000000000000000000" make --no-print-directory -o package-binaries "$target" NFPM="$test_root/bin/nfpm"
+        grep -q "Effective $variable does not match" "$test_root/failure.log"
+    done
+done
+test ! -e "$PACKAGE_TEST_TOOL_CALLS"
+
 # Real local Git repositories, with mocked compilers: no network or actual builds.
 printf '[workspace]\n' > "$test_root/nico/Cargo.toml"
 printf 'dist: {}\n' > "$test_root/agent/otelcol/otelcol-builder.yaml"
@@ -77,21 +99,29 @@ cp "$test_root/bin/rustup" "$test_root/bin/strip"
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 
+# Each fixture revision has corresponding reviewed notices. Keep them in the
+# temporary build workspace so tests never change the repository's NOTICE.
+cp Makefile "$test_root/Makefile"
+fixture_make() {
+    (cd "$test_root" && make --no-print-directory "$@")
+}
+
 for revision in first second; do
     nico_ref=$(cat "$test_root/nico-$revision")
     agent_ref=$(cat "$test_root/agent-$revision")
-    make --no-print-directory package-nico package-gateway \
+    printf 'NICo hardware health (carbide-health)\nRevision: %s\nTargets: fixture\nFleet Intelligence OpenTelemetry gateway\nRevision: %s\nManifest: fixture\n' "$nico_ref" "$agent_ref" > "$test_root/NOTICE"
+    fixture_make package-nico package-gateway \
         NICO_REF="$nico_ref" AGENT_REF="$agent_ref" \
         PACKAGE_SOURCEDIR="$test_root/sources" PACKAGE_BUILDDIR="$test_root/build" \
         INPUTDIR="$test_root/input" > "$test_root/build.log" 2>&1
     test "$(cat "$test_root/input/nico-hardware-health")" = "$nico_ref"
     test "$(cat "$test_root/input/otel-gateway")" = "$agent_ref"
 done
-expect_failure make --no-print-directory package-nico \
-    NICO_REF="$nico_ref" NICO_SOURCE="$test_root/sources/infra-controller-$(cat "$test_root/nico-first")"
+expect_failure fixture_make package-nico \
+    AGENT_REF="$agent_ref" NICO_REF="$nico_ref" NICO_SOURCE="$test_root/sources/infra-controller-$(cat "$test_root/nico-first")"
 grep -q 'NICo checkout does not match' "$test_root/failure.log"
-expect_failure make --no-print-directory package-gateway \
-    AGENT_REF="$agent_ref" AGENT_SOURCE="$test_root/sources/fleet-intelligence-agent-$(cat "$test_root/agent-first")"
+expect_failure fixture_make package-gateway \
+    NICO_REF="$nico_ref" AGENT_REF="$agent_ref" AGENT_SOURCE="$test_root/sources/fleet-intelligence-agent-$(cat "$test_root/agent-first")"
 grep -q 'Agent checkout does not match' "$test_root/failure.log"
 
 # Native arm64 defaults must not silently request amd64.
