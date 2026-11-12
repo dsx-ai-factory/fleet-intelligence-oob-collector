@@ -5,6 +5,11 @@ set -eu
 : "${FLEETINT_OTLP_ENDPOINT:=http://127.0.0.1:4317}"
 : "${FLEETINT_NICO_RESOURCE_STATUS_ENABLED:=true}"
 : "${FLEETINT_NICO_RESOURCE_STATUS_FIRMWARE_POLL_INTERVAL_SECONDS:=1800}"
+: "${FLEETINT_NICO_LOG_LEVEL:=warn}"
+case "$FLEETINT_NICO_LOG_LEVEL" in
+    trace|debug|info|warn|error|off) ;;
+    *) echo 'FLEETINT_NICO_LOG_LEVEL must be trace, debug, info, warn, error, or off' >&2; exit 2 ;;
+esac
 umask 077
 # RuntimeDirectory is private to this service account. A fresh directory avoids
 # following pre-existing files, and failed rendering never starts NICo.
@@ -27,4 +32,4 @@ esac
 /usr/bin/bmc-collector "$@"
 # systemd removes RuntimeDirectory after the process exits, including crashes.
 trap - EXIT HUP INT TERM
-exec /usr/lib/fleetint-oob/nico-hardware-health "$work/config.toml"
+RUST_LOG="$FLEETINT_NICO_LOG_LEVEL" exec /usr/lib/fleetint-oob/nico-hardware-health "$work/config.toml"

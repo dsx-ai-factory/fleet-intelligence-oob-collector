@@ -30,9 +30,9 @@ for shell in sh bash; do
             FLEETINT_AGENT_TOKEN=legacy-token
     done
 done
-for unit in fleetint-oob-collector.service fleetint-otel-gateway.service; do
+for unit in fleetint-oob-collector.service fleetint-otel-gateway.service fleetint-nico-health.service; do
     if ! grep -Fxq 'RestartPreventExitStatus=2' "$unit_root/$unit"; then
-        echo "$unit must prevent retries for missing-token failures" >&2
+        echo "$unit must prevent retries for configuration failures" >&2
         exit 1
     fi
     grep -Fxq 'Restart=on-failure' "$unit_root/$unit"

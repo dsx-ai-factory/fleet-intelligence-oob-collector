@@ -13,6 +13,7 @@ EnvironmentFile=/etc/fleetint-oob/service.conf
 RuntimeDirectory=fleetint-nico-health
 RuntimeDirectoryMode=0700
 ExecStart=/usr/lib/fleetint-oob/run-nico
+RestartPreventExitStatus=2
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=30
