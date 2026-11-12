@@ -25,16 +25,50 @@ def source_pins(root):
     return nico[0], agent[0]
 
 
+def dependency_entries(text, definitions, errors):
+    headers = list(re.finditer(
+        r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: ([^\n]+)(?:\n|$)", text, re.M))
+    boundary = re.compile(
+        r"^(?:" + "|".join(re.escape(heading) for heading in COMPONENTS)
+        + r"|Shared (?:dependency notice|license text) [A-Z][0-9]+"
+        + r"|Apache License 2\.0 \(appendix\)|BUNDLED COMPONENT NOTICES)$"
+        + r"|^\[See shared dependency notice ", re.M)
+    # Recognize inline license grants, rather than metadata, copyright lines,
+    # file labels, or paths standing in for license text.
+    grant = re.compile(
+        r"Permission\s+(?:is\s+(?:hereby\s+)?granted|to\s+use)"
+        r"|Redistribution\s+and\s+use|Grant\s+of\s+Copyright\s+License"
+        r"|Data Recipient may (?:use|share)|This is free and unencumbered"
+        r"|CC0.*?waiv|GNU.*?TERMS AND CONDITIONS|Mozilla Public License.*?Definitions",
+        re.I | re.S)
+    def shared_text(body):
+        return any(grant.search(definitions.get(("license text", identifier), ""))
+                   for identifier in re.findall(r"\[See shared license text ([AM][0-9]+) below\.\]", body))
+
+    appendix_available = False
+    for appendix in re.finditer(r"^Apache License 2\.0 \(appendix\)$", text, re.M):
+        stop = boundary.search(text, appendix.end())
+        appendix_available |= shared_text(text[appendix.end():stop.start() if stop else len(text)])
+    entries = set()
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        stop = boundary.search(text, header.end(), end)
+        body = text[header.end():stop.start() if stop else end]
+        appendix = ("Apache-2.0" in header[3]
+                    and re.search(r"terms in (?:the )?appendix below", body)
+                    and appendix_available)
+        if shared_text(body) or appendix or grant.search(body):
+            entries.add((header[1], header[2]))
+        else:
+            errors.append(f"Missing license text or shared reference in NOTICE entry: {header[1]} ({header[2]})")
+    return entries
+
+
 def check_notice(text, root=ROOT):
     errors = []
     with (root / "Cargo.lock").open("rb") as lockfile:
         locked = {(package["name"], package["version"])
                   for package in tomllib.load(lockfile)["package"] if package.get("source")}
-    # Count complete inline/shared entries, not mentions in prose or references.
-    entries = set(re.findall(r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: [^\n]+$",
-                             text, re.M))
-    for name, version in sorted(locked - entries):
-        errors.append(f"Missing NOTICE entry for locked dependency: {name} ({version})")
     positions = []
     for heading in COMPONENTS:
         matches = list(re.finditer(r"^" + re.escape(heading) + r"$", text, re.M))
@@ -90,6 +124,9 @@ def check_notice(text, root=ROOT):
         errors.append(f"Unreferenced shared definition: {key}")
     if not references or not definitions:
         errors.append("Missing shared notice/license references or definitions")
+    entries = dependency_entries(text, definitions, errors)
+    for name, version in sorted(locked - entries):
+        errors.append(f"Missing NOTICE entry for locked dependency: {name} ({version})")
     return errors
 
 

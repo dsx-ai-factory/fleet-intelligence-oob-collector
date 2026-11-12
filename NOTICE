@@ -21805,10 +21805,13 @@ License: MIT OR Apache-2.0
 URL: https://crates.io/crates/sqlx-core
 
 [LICENSE-APACHE]
-../LICENSE-APACHE
+[See shared license text A03 below.]
 
 [LICENSE-MIT]
-../LICENSE-MIT
+Copyright (C) SQLx Contributors
+Portions of this work Copyright (C) LaunchBadge, LLC
+
+[See shared license text M02 below.]
 
 =========================================================
 
@@ -21817,10 +21820,13 @@ License: MIT OR Apache-2.0
 URL: https://crates.io/crates/sqlx-macros-core
 
 [LICENSE-APACHE]
-../LICENSE-APACHE
+[See shared license text A03 below.]
 
 [LICENSE-MIT]
-../LICENSE-MIT
+Copyright (C) SQLx Contributors
+Portions of this work Copyright (C) LaunchBadge, LLC
+
+[See shared license text M02 below.]
 
 =========================================================
 
