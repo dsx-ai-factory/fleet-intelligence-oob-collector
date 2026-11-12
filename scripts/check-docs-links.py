@@ -4,6 +4,7 @@
 
 """Validate file links against both source and release-staged Fern pages offline."""
 
+from functools import cache
 import importlib.util
 import posixpath
 import re
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO_URL = "https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector"
 
 
+@cache
 def load_stager():
     """Load the release stager and its shared Markdown fence handling."""
     spec = importlib.util.spec_from_file_location(

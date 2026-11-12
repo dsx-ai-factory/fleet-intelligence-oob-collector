@@ -25,3 +25,17 @@ non-root daemon startup, authenticated telemetry export to loopback fixtures,
 and upgrade/removal coverage. These checks use shell scripts in Docker.
 
 Run `make rpm-test` for the same daemon runtime and authenticated telemetry checks with a real RPM install, upgrade, configuration preservation, and removal in a Rocky Linux 9 container. These tests execute the packaged RPM scriptlets and stub only the systemd manager.
+
+## Script responsibilities
+
+| Area | Entry points and scope |
+| --- | --- |
+| Package builds | `Makefile` builds and inspects packages; `deployments/packages/Dockerfile` provides the Linux toolchains. |
+| Signing | `scripts/package-signing.sh` shares the signing request implementation across packages, checksum manifests, and complete releases. |
+| Verification | `scripts/verify-package-release.sh` checks the complete signed inventory; `scripts/verify-linux-package-signature.sh` verifies an individual DEB/RPM and is included in release assets. |
+| GitHub releases | `scripts/package-release.cjs` reserves a draft and uploads immutable verified assets. |
+| Installed services | `deployments/packages/run-service` loads collector/gateway tokens; `run-nico` renders private NICo configuration. Distro-specific hooks remain separate for package-manager lifecycle semantics. |
+| Package tests | `hooks.sh` and `build.sh` use isolated mocks; `smoke.sh` and `rpm.sh` execute actual package transactions; shared `startup.sh` and `runtime.sh` cover the installed daemons. `lifecycle.sh` tests installed Debian hooks, and `linking.sh` validates the musl toolchain. |
+| Release tests | The host-package workflow runs helper tests once, then installs/tests actual packages on each architecture. `make release-test` runs signing/tamper tests with ephemeral keys and a fake signing service, plus GitHub API fixture tests. It uses no production credentials or signing requests. |
+| Docs | `docs-fetch-versions.py` stages versioned docs; `check-docs-links.py` validates source/staged links. Their Python tests cover distinct behaviors. |
+| Static notices | `check-notice.py` checks collector Cargo.lock crate/version coverage, component sections and source revisions, and shared references. Its optional `--crate-sources` audit checks root and nested license/attribution files against each dependency's expanded notice. `test_notice.py` covers missing terms and malformed references, source discovery, declared license files, source identity, and audit failures using local crate fixtures. Installed package tests compare the complete NOTICE with the source file validated by CI. |

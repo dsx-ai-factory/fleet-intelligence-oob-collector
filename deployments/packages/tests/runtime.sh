@@ -27,16 +27,12 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
-# Each packaged notice must belong to this build's Cargo dependency inventory.
-for component in collector-dependencies nico-dependencies; do
-    directory="/usr/share/doc/fleetint-oob/$component"
-    inventory=$(find "$directory" -name 'package-versions.txt*' -type f)
-    if [[ "$inventory" == *.gz ]]; then gzip -dc "$inventory"; else cat "$inventory"; fi > "$work/package-versions.txt"
-    [[ -s "$work/package-versions.txt" ]]
-    for notice in "$directory"/licenses/*; do
-        grep -Fxq "${notice##*/}" "$work/package-versions.txt"
-    done
-done
+# Notices are consolidated files, with no duplicate dependency license trees.
+[[ ! -e /usr/share/doc/fleetint-oob/collector-dependencies ]]
+[[ ! -e /usr/share/doc/fleetint-oob/nico-dependencies ]]
+# CI/release validation checks locked dependencies, all components and shared
+# references. Require the installed file to match that entire checked source.
+cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 wait_for() {
     local pid=$1
     shift

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template deb rpm package packages-check-deb packages-check-rpm packages-test-hooks packages-test-build package-binaries package-collector package-nico package-gateway package-native-check package-static-check
+.PHONY: test coverage coverage-html build container-build nico-container-build chart-lint chart-template deb rpm package packages-check-deb packages-check-rpm packages-test-hooks packages-test-build package-binaries package-collector package-nico package-gateway package-native-check package-source-check package-static-check
 
 NFPM ?= nfpm
 CARGO ?= cargo
@@ -44,7 +44,7 @@ export OOB_PACKAGE_INPUT = $(abspath $(INPUTDIR))
 
 package: deb rpm
 
-deb rpm: package-binaries
+deb rpm: package-source-check package-binaries
 	mkdir -p "$(OUTPUTDIR)"
 	$(NFPM) package --config deployments/packages/nfpm/fleetint-oob.yaml \
 		--packager $@ --target "$(OUTPUTDIR)/"
@@ -62,8 +62,14 @@ package-static-check:
 		fi; \
 	done
 
-package-native-check:
+package-source-check:
 	@test -n "$(NICO_REF)" -a -n "$(AGENT_REF)" || { echo 'Pinned NICo and agent revisions are required' >&2; exit 1; }
+	@notice_ref=$$(sed -n '/^NICo hardware health (carbide-health)$$/,/^Targets:/s/^Revision: //p' NOTICE); \
+		test "$(NICO_REF)" = "$$notice_ref" || { echo 'Effective NICO_REF does not match the revision covered by NOTICE' >&2; exit 1; }
+	@notice_ref=$$(sed -n '/^Fleet Intelligence OpenTelemetry gateway$$/,/^Manifest:/s/^Revision: //p' NOTICE); \
+		test "$(AGENT_REF)" = "$$notice_ref" || { echo 'Effective AGENT_REF does not match the revision covered by NOTICE' >&2; exit 1; }
+
+package-native-check: package-source-check
 	@test "$$(uname -s)" = Linux || { echo 'Host packages must be built on Linux' >&2; exit 1; }
 	@test "$(ARCH)" = "$$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')" || { echo 'Build natively for ARCH=$(ARCH); cross-compilation is not configured' >&2; exit 1; }
 
@@ -73,7 +79,6 @@ package-collector: package-native-check
 	FLEETINT_BUILD_VERSION="$(VERSION)" $(CARGO) build --release --locked --target "$(RUST_TARGET)" --bin bmc-collector
 	install -m 0755 "target/$(RUST_TARGET)/release/bmc-collector" "$(INPUTDIR)/bmc-collector"
 	$(STRIP) "$(INPUTDIR)/bmc-collector"
-	sh deployments/packages/collect-licenses fleet-intelligence-oob "$(abspath $(INPUTDIR))/collector-dependencies"
 
 $(NICO_SOURCE)/Cargo.toml:
 	mkdir -p "$(dir $(NICO_SOURCE))"
@@ -92,8 +97,6 @@ package-nico: package-native-check $(NICO_SOURCE)/Cargo.toml
 		$(CARGO) build --release --locked --target "$(RUST_TARGET)" -p carbide-health --bin forge-hw-health
 	install -m 0755 "$(PACKAGE_BUILDDIR)/nico/$(RUST_TARGET)/release/forge-hw-health" "$(INPUTDIR)/nico-hardware-health"
 	$(STRIP) "$(INPUTDIR)/nico-hardware-health"
-	cd "$(NICO_SOURCE)" && sh "$(abspath deployments/packages/collect-licenses)" carbide-health "$(abspath $(INPUTDIR))/nico-dependencies"
-	cat "$(NICO_SOURCE)/LICENSE" "$(NICO_SOURCE)/THIRD-PARTY-LICENSES" > "$(INPUTDIR)/nico-NOTICES"
 
 $(AGENT_SOURCE)/otelcol/otelcol-builder.yaml:
 	mkdir -p "$(dir $(AGENT_SOURCE))"
@@ -109,7 +112,6 @@ package-gateway: package-native-check $(AGENT_SOURCE)/otelcol/otelcol-builder.ya
 		--config=otelcol-builder.yaml --output-path="$(abspath $(PACKAGE_BUILDDIR))/gateway"
 	install -m 0755 "$(PACKAGE_BUILDDIR)/gateway/fleetint-otelcol" "$(INPUTDIR)/otel-gateway"
 	$(STRIP) "$(INPUTDIR)/otel-gateway"
-	cat "$(AGENT_SOURCE)/LICENSE" "$(AGENT_SOURCE)/NOTICE" > "$(INPUTDIR)/gateway-NOTICES"
 
 .PHONY: packages-test-linking
 packages-test-linking: package-native-check
@@ -194,7 +196,7 @@ coverage-html:
 PACKAGE_VERSION ?=
 PACKAGE_OUTPUT ?= dist/debian
 SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD)
-debian-package:
+debian-package: package-source-check
 	docker build --file deployments/packages/Dockerfile --target export \
 		--build-arg NICO_SOURCE_REF="$(NICO_REF)" \
 		--build-arg NFPM_VERSION="$$(cat deployments/packages/nfpm.version)" \
@@ -210,7 +212,7 @@ debian-test: debian-package
 .PHONY: rpm-package rpm-test
 RPM_OUTPUT ?= dist/rpm
 PACKAGE_TEST_UPGRADE ?= 0
-rpm-package:
+rpm-package: package-source-check
 	docker build --file deployments/packages/Dockerfile --target export \
 		--build-arg NICO_SOURCE_REF="$(NICO_REF)" \
 		--build-arg NFPM_VERSION="$$(cat deployments/packages/nfpm.version)" \

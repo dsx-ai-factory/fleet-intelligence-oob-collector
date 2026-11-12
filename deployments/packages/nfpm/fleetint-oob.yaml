@@ -63,11 +63,6 @@ contents:
   expand: true
   file_info:
     mode: 0755
-- src: ${OOB_PACKAGE_INPUT}/nico-NOTICES
-  dst: /usr/share/doc/fleetint-oob/nico-NOTICES
-  expand: true
-  file_info:
-    mode: 0644
 - src: deployments/packages/systemd/fleetint-otel-gateway.service
   dst: /usr/lib/systemd/system/fleetint-otel-gateway.service
   file_info:
@@ -80,11 +75,6 @@ contents:
 - src: deployments/packages/config/gateway.yaml
   dst: /etc/fleetint-oob/gateway.yaml
   type: config|noreplace
-  file_info:
-    mode: 0644
-- src: ${OOB_PACKAGE_INPUT}/gateway-NOTICES
-  dst: /usr/share/doc/fleetint-oob/gateway-NOTICES
-  expand: true
   file_info:
     mode: 0644
 - src: deployments/packages/systemd/fleetint-oob.target
@@ -103,14 +93,6 @@ contents:
   dst: /usr/lib/sysusers.d/fleetint-oob.conf
 - src: deployments/packages/permissions.conf
   dst: /usr/lib/fleetint-oob/permissions.conf
-- src: ${OOB_PACKAGE_INPUT}/collector-dependencies/
-  dst: /usr/share/doc/fleetint-oob/collector-dependencies
-  type: tree
-  expand: true
-- src: ${OOB_PACKAGE_INPUT}/nico-dependencies/
-  dst: /usr/share/doc/fleetint-oob/nico-dependencies
-  type: tree
-  expand: true
 overrides:
   deb:
     depends:

@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Check static NOTICE against locked dependencies
+        run: python3 scripts/check-notice.py
       - name: Set release version
         id: version
         env:
@@ -370,7 +372,7 @@ jobs:
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
         with:
           script: |
-            const releaseId = await require('./scripts/reserve-package-release.cjs')({ github, context });
+            const releaseId = await require('./scripts/package-release.cjs').reserveRelease({ github, context });
             core.setOutput('release-id', releaseId);
 
   build-packages:
@@ -428,7 +430,7 @@ jobs:
           NVSEC_SSA_CLIENT_ID: ${{ secrets.NVSEC_SSA_CLIENT_ID }}
           NVSEC_SSA_CLIENT_SECRET: ${{ secrets.NVSEC_SSA_CLIENT_SECRET }}
         run: |
-          for tool in nvsec gpg gpgv ar rpm sha256sum md5sum sha1sum; do
+          for tool in nvsec gpg gpgv ar dpkg-deb rpm sha256sum md5sum sha1sum; do
             command -v "$tool" >/dev/null || { echo "Required signing tool is unavailable: $tool" >&2; exit 1; }
           done
           : "${NVSEC_SSA_CLIENT_ID:?Configure signing credentials}"
@@ -443,7 +445,7 @@ jobs:
           NVSEC_CHECKSUM_SSA_SCOPE: ${{ vars.NVSEC_CHECKSUM_SSA_SCOPE || 'SIGNING_FLEET_INTELLIGENCE' }}
           NVSEC_CHECKSUM_JOB_TYPE: ${{ vars.NVSEC_CHECKSUM_JOB_TYPE || 'FLEET_INTELLIGENCE' }}
           NSPECT_ID: ${{ vars.NSPECT_ID }}
-        run: scripts/prepare-package-release.sh dist "${RELEASE_TAG#v}"
+        run: scripts/package-signing.sh release dist "${RELEASE_TAG#v}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-package-release
@@ -484,4 +486,4 @@ jobs:
         with:
           script: |
             const releaseId = Number(process.env.RELEASE_ID);
-            await require('./scripts/publish-package-assets.cjs')({ github, context, releaseId });
+            await require('./scripts/package-release.cjs').uploadAssets({ github, context, releaseId });
