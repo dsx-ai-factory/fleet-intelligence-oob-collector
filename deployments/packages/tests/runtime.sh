@@ -30,7 +30,7 @@ trap cleanup EXIT
 # Notices are consolidated files, with no duplicate dependency license trees.
 [[ ! -e /usr/share/doc/fleetint-oob/collector-dependencies ]]
 [[ ! -e /usr/share/doc/fleetint-oob/nico-dependencies ]]
-# CI/release validation checks all components, dependency inputs and shared
+# CI/release validation checks locked dependencies, all components and shared
 # references. Require the installed file to match that entire checked source.
 cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 wait_for() {

@@ -16,57 +16,76 @@ class NoticeTests(unittest.TestCase):
     def test_current_notice(self):
         self.assertEqual(notice.check_notice(TEXT), [])
 
-    def test_dependency_and_build_input_changes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            files = list(notice.INPUT_FILES) + [
-                p.relative_to(notice.ROOT).as_posix()
-                for p in (notice.ROOT / "crates").rglob("Cargo.toml")
-            ] + [".github/workflows/release.yml"]
-            for name in files:
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((notice.ROOT / name).read_bytes())
-            self.assertEqual(notice.check_notice(TEXT, root), [])
-            for name in files:
-                with self.subTest(input=name):
-                    path = root / name
-                    original = path.read_bytes()
-                    if name.endswith("release.yml"):
-                        changed = original.replace(notice.source_pins(root)[0].encode(), b"1" * 40)
-                    else:
-                        changed = original + b"\n# dependency/build change\n"
-                    path.write_bytes(changed)
-                    self.assertTrue(notice.check_notice(TEXT, root))
-                    path.write_bytes(original)
-            added = root / "crates/new-component/Cargo.toml"
-            added.parent.mkdir(parents=True)
-            added.write_text('[package]\nname = "new-component"\nversion = "1.0.0"\n')
-            self.assertTrue(notice.check_notice(TEXT, root))
+    def copy_inputs(self, root):
+        for name in ("Cargo.lock", "Makefile", ".github/workflows/release.yml"):
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((notice.ROOT / name).read_bytes())
 
-    def test_pin_revision_mismatch_survives_digest_refresh(self):
+    def test_new_external_dependency_requires_notice(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for path in list(notice.INPUT_FILES) + [
-                p.relative_to(notice.ROOT).as_posix()
-                for p in (notice.ROOT / "crates").rglob("Cargo.toml")
-            ] + [".github/workflows/release.yml"]:
-                target = root / path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes((notice.ROOT / path).read_bytes())
+            self.copy_inputs(root)
+            lock = root / "Cargo.lock"
+            lock.write_text(lock.read_text() + '\n[[package]]\nname = "new-external-crate"\n'
+                            'version = "1.2.3"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+            errors = notice.check_notice(TEXT, root)
+            self.assertIn("Missing NOTICE entry for locked dependency: new-external-crate (1.2.3)", errors)
+            updated = TEXT.replace("\nNICo hardware health (carbide-health)\n",
+                "\nnew-external-crate (1.2.3)\nLicense: MIT\nCopyright Example contributors\n"
+                "[See shared license text M02 below.]\n\nNICo hardware health (carbide-health)\n", 1)
+            self.assertEqual(notice.check_notice(updated, root), [])
+
+    def test_multiple_locked_versions_require_separate_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_inputs(root)
+            lock = root / "Cargo.lock"
+            lock.write_text(lock.read_text() + '\n[[package]]\nname = "aho-corasick"\n'
+                            'version = "999.0.0"\nsource = "git+https://example.test/source#1234"\n')
+            self.assertIn("Missing NOTICE entry for locked dependency: aho-corasick (999.0.0)",
+                          notice.check_notice(TEXT, root))
+
+    def test_version_bump_requires_new_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_inputs(root)
+            lock = root / "Cargo.lock"
+            old = 'name = "aho-corasick"\nversion = "1.1.4"'
+            self.assertIn(old, lock.read_text())
+            lock.write_text(lock.read_text().replace(old, 'name = "aho-corasick"\nversion = "999.0.0"'))
+            self.assertIn("Missing NOTICE entry for locked dependency: aho-corasick (999.0.0)",
+                          notice.check_notice(TEXT, root))
+
+    def test_local_packages_and_formatting_do_not_require_notice_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_inputs(root)
+            lock = root / "Cargo.lock"
+            lock.write_text("# harmless formatting/comment change\n" + lock.read_text()
+                            + '\n[[package]]\nname = "local-workspace-member"\nversion = "1.0.0"\n')
+            makefile = root / "Makefile"
+            makefile.write_text(makefile.read_text() + "\n# unrelated build/test edit\n")
+            (root / "Dockerfile").write_text("# unrelated image edit\n")
+            self.assertEqual(notice.check_notice(TEXT, root), [])
+
+    def test_missing_dependency_entry_is_not_satisfied_by_references(self):
+        text = TEXT.replace("aho-corasick (1.1.4)\nLicense:", "removed-entry (1.1.4)\nLicense:")
+        self.assertIn("Missing NOTICE entry for locked dependency: aho-corasick (1.1.4)",
+                      notice.check_notice(text))
+
+    def test_source_pin_requires_matching_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_inputs(root)
             nico, agent = notice.source_pins(root)
-            for path, pin in [("Makefile", agent), (".github/workflows/release.yml", nico)]:
-                with self.subTest(pin=path):
-                    target = root / path
+            for name, pin in [("Makefile", agent), (".github/workflows/release.yml", nico)]:
+                with self.subTest(pin=name):
+                    target = root / name
                     original = target.read_text()
                     target.write_text(original.replace(pin, "1" * 40))
-                    refreshed = TEXT.replace(notice.input_digest(), notice.input_digest(root))
-                    self.assertTrue(any("revision" in error for error in notice.check_notice(refreshed, root)))
+                    self.assertTrue(any("revision" in error for error in notice.check_notice(TEXT, root)))
                     target.write_text(original)
-
-    def test_missing_or_stale_review_digest(self):
-        self.assertTrue(notice.check_notice(TEXT.replace(notice.input_digest(), "0" * 64)))
-        self.assertTrue(notice.check_notice(re.sub(r"^Reviewed attribution inputs SHA256: .*\n", "", TEXT)))
 
     def test_deleted_component_sections(self):
         for index, heading in enumerate(notice.COMPONENTS[:4]):

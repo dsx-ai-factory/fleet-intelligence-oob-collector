@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Check static attribution coverage markers, shared references, and reviewed inputs."""
+"""Check locked collector dependencies, component revisions, and shared NOTICE references."""
 
 import argparse
-import hashlib
 from pathlib import Path
 import re
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
-INPUT_FILES = (
-    "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "LICENSE", "Makefile",
-    "Dockerfile", "Dockerfile.nico-hardware-health", "deployments/packages/Dockerfile",
-)
-DIGEST_LABEL = "Reviewed attribution inputs SHA256: "
 COMPONENTS = (
     "Fleet Intelligence OOB Collector", "NICo hardware health (carbide-health)",
     "Fleet Intelligence OpenTelemetry gateway", "Go runtime and standard library",
@@ -30,26 +25,16 @@ def source_pins(root):
     return nico[0], agent[0]
 
 
-def input_digest(root=ROOT):
-    # Include build definitions as well as manifests: feature flags/toolchains can
-    # change bundled code without changing a dependency version in Cargo.lock.
-    paths = sorted(set(INPUT_FILES) | {
-        path.relative_to(root).as_posix() for path in (root / "crates").rglob("Cargo.toml")
-    })
-    digest = hashlib.sha256()
-    for name in paths:
-        digest.update(name.encode() + b"\0" + (root / name).read_bytes() + b"\0")
-    for pin in source_pins(root):
-        digest.update(pin.encode() + b"\0")
-    return digest.hexdigest()
-
-
 def check_notice(text, root=ROOT):
     errors = []
-    recorded = re.findall(r"^" + DIGEST_LABEL + r"([a-f0-9]{64})$", text, re.M)
-    if recorded != [input_digest(root)]:
-        errors.append("NOTICE attribution inputs changed: review dependency/source-pin changes, "
-                      "update attribution, then record --print-input-digest after review")
+    with (root / "Cargo.lock").open("rb") as lockfile:
+        locked = {(package["name"], package["version"])
+                  for package in tomllib.load(lockfile)["package"] if package.get("source")}
+    # Count complete inline/shared entries, not mentions in prose or references.
+    entries = set(re.findall(r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: [^\n]+$",
+                             text, re.M))
+    for name, version in sorted(locked - entries):
+        errors.append(f"Missing NOTICE entry for locked dependency: {name} ({version})")
     positions = []
     for heading in COMPONENTS:
         matches = list(re.finditer(r"^" + re.escape(heading) + r"$", text, re.M))
@@ -110,16 +95,11 @@ def check_notice(text, root=ROOT):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--print-input-digest", action="store_true",
-                        help="Print the current dependency/build-input digest for a reviewed NOTICE update")
-    args = parser.parse_args()
-    if args.print_input_digest:
-        print(DIGEST_LABEL + input_digest())
-        return
+    parser.parse_args()
     errors = check_notice((ROOT / "NOTICE").read_text())
     if errors:
         raise SystemExit("\n".join(errors))
-    print("NOTICE dependency inputs, components, and shared references checked.")
+    print("NOTICE locked dependencies, components, and shared references checked.")
 
 
 if __name__ == "__main__":

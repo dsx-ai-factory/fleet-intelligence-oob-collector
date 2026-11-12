@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Check static NOTICE and its dependency inputs
+      - name: Check static NOTICE against locked dependencies
         run: python3 scripts/check-notice.py
       - name: Set release version
         id: version
