@@ -22,15 +22,24 @@ navigation:
   - page: Overview
     path: ../README.md
     slug: overview
-  - page: Host package
-    path: ../deployments/packages/README.md
-    slug: host-package
-  - page: Installation
-    path: ../docs/installation.md
-    slug: installation
-  - page: Configuration
-    path: ../docs/configuration.md
-    slug: configuration
+  - section: Installation
+    skip-slug: true
+    contents:
+      - page: Kubernetes
+        path: ../docs/installation.md
+        slug: installation
+      - page: Linux packages (DEB/RPM)
+        path: ../docs/host-installation.md
+        slug: host-installation
+  - section: Configuration
+    skip-slug: true
+    contents:
+      - page: Kubernetes
+        path: ../docs/configuration.md
+        slug: configuration
+      - page: Linux packages (DEB/RPM)
+        path: ../docs/host-configuration.md
+        slug: host-configuration
   - page: Credentials
     path: ../docs/credentials.md
     slug: credentials
@@ -42,6 +51,8 @@ navigation:
     slug: contributing
 
 redirects:
+  - source: "/fleet-intel/oob-collector/host-package"
+    destination: "/fleet-intel/oob-collector/host-installation"
   - source: "/fleet-intel/oob-collector/index.html"
     destination: "/fleet-intel/oob-collector/"
 

@@ -4,6 +4,8 @@ You configure the collector through your Helm values file. This page covers each
 
 Passwords never go in the values file. They live in a separate [BMC credentials file](#bmc-credentials-file) that you store in a Kubernetes Secret, and the chart only references it.
 
+For DEB/RPM installations, use the [Linux package guide](host-configuration.md).
+
 ## Targets
 
 List one entry under `inventory.targets` for each BMC. The collector and NICo hardware health both read this list.
@@ -179,46 +181,46 @@ NICo defaults to automatic log collection: it starts with Redfish SSE streaming,
 
 Set these optional values under `nicoHardwareHealth.config`. Workload settings such as `image`, `resources`, and scheduling remain under `nicoHardwareHealth`. Omitted or `null` settings use the defaults below, including on native installations without a `[nico_health]` section. Timing settings alone preserve each collector's enabled state: metrics, telemetry reports, firmware, and the iteration limiter require their corresponding `*Enabled: true` setting to start. TCP reachability checks are enabled by default; set `reachabilityEnabled: false` to disable them. Logs default to auto mode with SSE recovery enabled.
 
-| Setting under `nicoHardwareHealth.config` | Default | Description |
-| --- | --- | --- |
-| `bmcRequestConcurrency` | `2` | Shared maximum concurrent Redfish operations per BMC. |
-| `endpointDiscoveryIntervalSeconds` | `300` | Interval between endpoint reconciliation iterations. |
-| `discoveryRefreshIntervalSeconds` | `3600` | Interval between Redfish entity-tree discovery iterations. |
-| `discoveryConcurrency` | `4` | Concurrent endpoint identity resolutions. |
-| `sensorFetchIntervalSeconds` | `60` | Interval between sensor fetch iterations. |
-| `sensorsEnabled` | `true` | Collect sensor readings. |
-| `includeSensorThresholds` | `true` | Include thresholds in sensor attributes. |
-| `leakDetectorEnabled` | `true` | Query thermal-subsystem leak detectors. |
-| `leakDetectorPollIntervalSeconds` | `60` | Interval between leak-detector polls. |
-| `leakDetectorStateRefreshIntervalSeconds` | `1800` | Interval between leak-detector discovery refreshes. |
-| `logsEnabled` | `true` | Collect BMC logs. |
-| `logsMode` | `auto` | `sse`, `periodic`, or `auto` (SSE with per-endpoint polling fallback). |
-| `logsSseInitialBackoffSeconds` | `1` | Initial reconnect backoff, before jitter. |
-| `logsSseMaxBackoffSeconds` | `30` | Maximum reconnect backoff, before jitter. |
-| `logsCollectionIntervalSeconds` | `300` | Interval between log polls in periodic mode or auto fallback. |
-| `logsStateRefreshIntervalSeconds` | `1800` | Interval between log-service discovery refreshes. |
-| `logsExcludeServices` | `["Journal"]` | Skip LogServices whose resource IDs contain any listed substring; `[]` includes every service. |
-| `logsSkipInitialHistory` | `false` | Skip retained history on the first successful baseline without a checkpoint. |
-| `logsAutoSseNotAvailableThreshold` | `1` | Unsupported-SSE attempts before falling back to polling. |
-| `logsAutoConnectFailureWindowSeconds` | `300` | Window for counting SSE connection failures. |
-| `logsAutoConnectFailureThreshold` | `5` | Connection failures within that window before falling back. |
-| `logsAutoRetrySseAfterDowngrade` | `true` | In auto mode, retry SSE after 30 minutes of polling fallback. Set `false` to remain in polling mode. |
-| `metricsEnabled` | `false` | Collect Redfish entity metrics. |
-| `metricsFetchIntervalSeconds` | `120` | Interval between entity-metric iterations. |
-| `telemetryEnabled` | `false` | Collect Redfish TelemetryService reports. |
-| `telemetryFetchIntervalSeconds` | `60` | Interval between report-fetch iterations. |
-| `firmwareEnabled` | `false` | Collect firmware inventory in NICo. |
-| `firmwareRefreshIntervalSeconds` | `7200` | Interval between firmware iterations. |
-| `managerEnabled` | `true` | Poll Manager status for NICo power-shelf endpoints. |
-| `managerPollIntervalSeconds` | `300` | Interval between eligible Manager polls. |
-| `reachabilityEnabled` | `true` | Probe eligible endpoint TCP ports. |
-| `reachabilityIntervalSeconds` | `60` | Interval between TCP probe cycles. |
-| `reachabilityTimeoutSeconds` | `3` | Timeout for one TCP connection attempt. |
-| `reachabilityLogMode` | `unreachable` | Log failed probes (`unreachable`) or every probe (`all`). |
-| `rateLimitEnabled` | `false` | Enable NICo's global collector-iteration token bucket. |
-| `rateLimitBucketBurst` | `100` | Collector iterations admitted in a burst. |
-| `rateLimitBucketReplenishMilliseconds` | `30` | Interval between token replenishments. |
-| `rateLimitMaxJitterMilliseconds` | `50` | Maximum token-bucket jitter; `0` disables this jitter. |
+| Helm field under `nicoHardwareHealth.config` | TOML field under `[nico_health]` | Default | Description |
+| --- | --- | --- | --- |
+| `bmcRequestConcurrency` | `bmc_request_concurrency` | `2` | Shared maximum concurrent Redfish operations per BMC. |
+| `endpointDiscoveryIntervalSeconds` | `endpoint_discovery_interval_seconds` | `300` | Interval between endpoint reconciliation iterations. |
+| `discoveryRefreshIntervalSeconds` | `discovery_refresh_interval_seconds` | `3600` | Interval between Redfish entity-tree discovery iterations. |
+| `discoveryConcurrency` | `discovery_concurrency` | `4` | Concurrent endpoint identity resolutions. |
+| `sensorFetchIntervalSeconds` | `sensor_fetch_interval_seconds` | `60` | Interval between sensor fetch iterations. |
+| `sensorsEnabled` | `sensors_enabled` | `true` | Collect sensor readings. |
+| `includeSensorThresholds` | `include_sensor_thresholds` | `true` | Include thresholds in sensor attributes. |
+| `leakDetectorEnabled` | `leak_detector_enabled` | `true` | Query thermal-subsystem leak detectors. |
+| `leakDetectorPollIntervalSeconds` | `leak_detector_poll_interval_seconds` | `60` | Interval between leak-detector polls. |
+| `leakDetectorStateRefreshIntervalSeconds` | `leak_detector_state_refresh_interval_seconds` | `1800` | Interval between leak-detector discovery refreshes. |
+| `logsEnabled` | `logs_enabled` | `true` | Collect BMC logs. |
+| `logsMode` | `logs_mode` | `auto` | `sse`, `periodic`, or `auto` (SSE with per-endpoint polling fallback). |
+| `logsSseInitialBackoffSeconds` | `logs_sse_initial_backoff_seconds` | `1` | Initial reconnect backoff, before jitter. |
+| `logsSseMaxBackoffSeconds` | `logs_sse_max_backoff_seconds` | `30` | Maximum reconnect backoff, before jitter. |
+| `logsCollectionIntervalSeconds` | `logs_collection_interval_seconds` | `300` | Interval between log polls in periodic mode or auto fallback. |
+| `logsStateRefreshIntervalSeconds` | `logs_state_refresh_interval_seconds` | `1800` | Interval between log-service discovery refreshes. |
+| `logsExcludeServices` | `logs_exclude_services` | `["Journal"]` | Skip LogServices whose resource IDs contain any listed substring; `[]` includes every service. |
+| `logsSkipInitialHistory` | `logs_skip_initial_history` | `false` | Skip retained history on the first successful baseline without a checkpoint. |
+| `logsAutoSseNotAvailableThreshold` | `logs_auto_sse_not_available_threshold` | `1` | Unsupported-SSE attempts before falling back to polling. |
+| `logsAutoConnectFailureWindowSeconds` | `logs_auto_connect_failure_window_seconds` | `300` | Window for counting SSE connection failures. |
+| `logsAutoConnectFailureThreshold` | `logs_auto_connect_failure_threshold` | `5` | Connection failures within that window before falling back. |
+| `logsAutoRetrySseAfterDowngrade` | `logs_auto_retry_sse_after_downgrade` | `true` | In auto mode, retry SSE after 30 minutes of polling fallback. Set `false` to remain in polling mode. |
+| `metricsEnabled` | `metrics_enabled` | `false` | Collect Redfish entity metrics. |
+| `metricsFetchIntervalSeconds` | `metrics_fetch_interval_seconds` | `120` | Interval between entity-metric iterations. |
+| `telemetryEnabled` | `telemetry_enabled` | `false` | Collect Redfish TelemetryService reports. |
+| `telemetryFetchIntervalSeconds` | `telemetry_fetch_interval_seconds` | `60` | Interval between report-fetch iterations. |
+| `firmwareEnabled` | `firmware_enabled` | `false` | Collect firmware inventory in NICo. |
+| `firmwareRefreshIntervalSeconds` | `firmware_refresh_interval_seconds` | `7200` | Interval between firmware iterations. |
+| `managerEnabled` | `manager_enabled` | `true` | Poll Manager status for NICo power-shelf endpoints. |
+| `managerPollIntervalSeconds` | `manager_poll_interval_seconds` | `300` | Interval between eligible Manager polls. |
+| `reachabilityEnabled` | `reachability_enabled` | `true` | Probe eligible endpoint TCP ports. |
+| `reachabilityIntervalSeconds` | `reachability_interval_seconds` | `60` | Interval between TCP probe cycles. |
+| `reachabilityTimeoutSeconds` | `reachability_timeout_seconds` | `3` | Timeout for one TCP connection attempt. |
+| `reachabilityLogMode` | `reachability_log_mode` | `unreachable` | Log failed probes (`unreachable`) or every probe (`all`). |
+| `rateLimitEnabled` | `rate_limit_enabled` | `false` | Enable NICo's global collector-iteration token bucket. |
+| `rateLimitBucketBurst` | `rate_limit_bucket_burst` | `100` | Collector iterations admitted in a burst. |
+| `rateLimitBucketReplenishMilliseconds` | `rate_limit_bucket_replenish_milliseconds` | `30` | Interval between token replenishments. |
+| `rateLimitMaxJitterMilliseconds` | `rate_limit_max_jitter_milliseconds` | `50` | Maximum token-bucket jitter; `0` disables this jitter. |
 
 For example:
 

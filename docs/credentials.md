@@ -15,6 +15,8 @@ Three separate logins are involved, and it helps to keep them apart:
 - **The collector and NICo** sign in to BMCs with the usernames and passwords in the credentials file.
 - **The collector and gateway** each exchange the bootstrap token for their own Fleet Intelligence session. Get the bootstrap token from your Fleet Intelligence administrator. A Vault or OpenBao token can't be used in its place.
 
+For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
+
 ## Before you start
 
 Pick one operator for each Secret. The examples pair Vault with the Vault Secrets Operator (VSO) and OpenBao with the External Secrets Operator (ESO):
@@ -199,17 +201,24 @@ Install with these values and your targets, following [Installation](installatio
 
 ## Rotation and ownership
 
-To rotate a BMC password or the bootstrap token, change it at its source (the BMC, or your Fleet Intelligence administrator), then update the entry in your secrets manager or the Kubernetes Secret. The operator copies the new value into Kubernetes on its next refresh: `refreshAfter` for VSO, `refreshInterval` for ESO.
+To rotate a BMC password or the bootstrap token, change it at its source (the BMC, or your Fleet Intelligence administrator), then update the credential file used by your deployment. On Linux hosts, update the protected files described in [host configuration](host-configuration.md#configuration-files-and-permissions) and retain their ownership and permissions. In Kubernetes, update the secrets manager or Secret; an operator syncs the new value on its next refresh (`refreshAfter` for VSO, `refreshInterval` for ESO).
 
 What happens next depends on what changed:
 
 | Change | What you need to do |
 | --- | --- |
 | BMC passwords in the credentials file | Nothing. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
-| Bootstrap token | Restart the collector and gateway, because they read the token only at startup. The VSO token example does this for you. With ESO or a hand-made Secret, restart them yourself (below). |
-| Targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
+| Bootstrap token | Restart the collector and gateway, because they read the token only at startup. On Kubernetes, the VSO token example does this for you. With ESO, a hand-made Secret, or a Linux token file, restart them yourself (below). |
+| Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
+| Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |
 
-Restart after a token change:
+Restart after a token change on Linux:
+
+```bash
+sudo systemctl restart fleetint-oob-collector.service fleetint-otel-gateway.service
+```
+
+On Kubernetes:
 
 ```bash
 kubectl rollout restart deployment/fleet-intelligence-oob-collector \
@@ -220,4 +229,4 @@ kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway
 
 Use your release's Deployment names, and skip the gateway if it's disabled. You don't need to do anything for the short-lived Fleet Intelligence sessions; the collector and gateway renew those themselves.
 
-The operator owns the Secrets it creates, so clean them up through the operator. Uninstalling the collector chart leaves the operator resources and Secrets in place.
+On Kubernetes, the operator owns the Secrets it creates, so clean them up through the operator. Uninstalling the collector chart leaves operator resources and Secrets in place. On Linux, package removal/purge retains operator-created credentials and token files. Retire credentials at their source and remove unused local files explicitly.

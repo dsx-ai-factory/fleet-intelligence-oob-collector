@@ -2,6 +2,8 @@
 
 Install the collector on Kubernetes with its Helm chart. By default, the chart runs three workloads: the OOB collector, NICo hardware health, and a telemetry gateway that forwards NICo's metrics and logs to Fleet Intelligence.
 
+For DEB/RPM installations, use the [Linux package guide](host-installation.md).
+
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`

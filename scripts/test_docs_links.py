@@ -48,6 +48,31 @@ class PublicationLinksTest(unittest.TestCase):
             staged = (versions / "test-content/host-package.md").read_text()
             self.assertIn("/blob/HEAD/docs/configuration.md", staged)
 
+    def test_linux_guides_and_navigation_are_staged_together(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            for name in ("installation.md", "configuration.md", "host-installation.md", "host-configuration.md"):
+                (root / "docs" / name).write_text("# Guide\n")
+            legacy = root / "deployments/packages/README.md"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("# Package build instructions\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Docs Tests",
+                            "-c", "user.email=tests@example.test", "commit", "-qm", "fixture"], check=True)
+            stager = links.load_stager()
+            with patch.object(stager, "REPO_ROOT", root), patch.object(stager, "VERSIONS_DIR", root / "versions"):
+                files = stager.fetch_version("test", "HEAD")
+            self.assertIn("host-installation.md", files)
+            self.assertIn("host-configuration.md", files)
+            self.assertNotIn("host-package.md", files)
+            nav = stager.generate_nav_yml("test", files)
+            self.assertEqual(nav.count("skip-slug: true"), 2)
+            for name in files:
+                self.assertEqual(nav.count(f"path: test-content/{name}"), 1)
+                self.assertIn(f"slug: {name.removesuffix('.md')}", nav)
+
     def test_asset_url_pins_to_release(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

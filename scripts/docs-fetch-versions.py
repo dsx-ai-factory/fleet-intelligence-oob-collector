@@ -67,13 +67,17 @@ TITLE_MAP: dict[str, str] = {
     "configuration.md": "Configuration",
     "architecture.md": "Architecture",
     "contributing.md": "Contributing",
+    "host-installation.md": "Install on Linux (DEB/RPM)",
+    "host-configuration.md": "Configure Linux packages",
 }
 
 # Preferred page order. Files absent from this list are appended alphabetically.
 PAGE_ORDER = [
     "overview.md",
     "installation.md",
+    "host-installation.md",
     "configuration.md",
+    "host-configuration.md",
     "architecture.md",
     "contributing.md",
 ]
@@ -267,6 +271,10 @@ def fetch_version(version_label: str, tag: str) -> list[str]:
         shutil.rmtree(docs_subdir)
 
     for src_name, dest_name in ROOT_PAGES:
+        # Retain the old operator page for older tags; newer releases publish
+        # dedicated Linux guides and keep the packaging README for contributors.
+        if dest_name == "host-package.md" and "host-installation.md" in md_files:
+            continue
         content = get_git_file(tag, src_name)
         if content is not None:
             (content_dir / dest_name).write_text(fix_mdx(content, tag), encoding="utf-8")
@@ -279,12 +287,21 @@ def generate_nav_yml(version_label: str, md_files: list[str]) -> str:
     """Generate a Fern navigation YML for a version's staged content."""
     content_prefix = f"{version_label}-content"
     lines = ["navigation:"]
+    grouped = set()
     for filename in md_files:
-        title = get_title(filename)
-        slug = filename.removesuffix(".md")
-        lines.append(f"  - page: {title}")
-        lines.append(f"    path: {content_prefix}/{filename}")
-        lines.append(f"    slug: {slug}")
+        if filename in grouped:
+            continue
+        partner = {"installation.md": "host-installation.md",
+                   "configuration.md": "host-configuration.md"}.get(filename)
+        if partner in md_files:
+            lines += [f"  - section: {get_title(filename)}", "    skip-slug: true", "    contents:"]
+            for page, title in [(filename, "Kubernetes"), (partner, "Linux packages (DEB/RPM)")]:
+                lines += [f"      - page: {title}", f"        path: {content_prefix}/{page}",
+                          f"        slug: {page.removesuffix('.md')}"]
+            grouped.add(partner)
+        else:
+            lines += [f"  - page: {get_title(filename)}", f"    path: {content_prefix}/{filename}",
+                      f"    slug: {filename.removesuffix('.md')}"]
     return "\n".join(lines) + "\n"
 
 
