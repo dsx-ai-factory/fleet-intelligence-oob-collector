@@ -106,7 +106,9 @@ def check_notice(text, root=ROOT):
                 errors.append(f"Shared license definitions must contain text, not further references: {key}")
             definitions[key] = body
     references = re.findall(r"\[See shared (license text|dependency notice) ([A-Za-z][0-9]+)([^\]\n]*)\]", text)
-    if len(references) != len(re.findall(r"\[See shared [^\]\n]*\]", text)):
+    # Count marker starts independently: incomplete pointers must not disappear
+    # from both sides of the syntax check when a closing bracket is missing.
+    if len(references) != text.count("[See shared"):
         errors.append("Malformed shared notice/license reference")
     if "[See shared dependency notice " in sections[4]:
         errors.append("Shared dependency definitions must not reference other dependency definitions")

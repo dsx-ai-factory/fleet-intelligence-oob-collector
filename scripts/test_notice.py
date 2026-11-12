@@ -123,6 +123,48 @@ class NoticeTests(unittest.TestCase):
         self.assertTrue(notice.check_notice(TEXT.replace(
             "[See shared license text A01 below.]", "[See shared license A01 below.]", 1)))
 
+    def test_incomplete_reference_with_another_valid_use(self):
+        for reference in (
+            "[See shared license text A01 below.]",
+            "[See shared dependency notice D001: aho-corasick (1.1.4).]",
+        ):
+            with self.subTest(reference=reference):
+                self.assertGreater(TEXT.count(reference), 1)
+                text = TEXT.replace(reference, reference[:-1], 1)
+                self.assertIn(reference, text)
+                self.assertIn("Malformed shared notice/license reference", notice.check_notice(text))
+
+    def test_unfinished_shared_marker(self):
+        self.assertIn("Malformed shared notice/license reference",
+                      notice.check_notice(TEXT + "\n[See shared"))
+
+    def test_nested_license_notices(self):
+        # Retain the nested notices found in the published crate audit, including
+        # both bundled regex-syntax versions' Unicode data license.
+        required = {
+            ("aws-lc-sys", "0.47.0"): ("aws-lc/third_party/fiat/LICENSE",),
+            ("petgraph", "0.8.3"): ("assets/images/LICENSE.md",),
+            ("regex-syntax", "0.8.10"): ("src/unicode_tables/LICENSE-UNICODE",),
+            ("regex-syntax", "0.8.11"): ("src/unicode_tables/LICENSE-UNICODE",),
+            ("ring", "0.17.14"): ("src/polyfill/once_cell/LICENSE-APACHE",
+                                  "src/polyfill/once_cell/LICENSE-MIT", "third_party/fiat/LICENSE"),
+            ("tracing-core", "0.1.36"): ("src/spin/LICENSE",),
+        }
+        headers = list(re.finditer(r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: ", TEXT, re.M))
+        for key, paths in required.items():
+            entries = [TEXT[header.end():headers[index + 1].start() if index + 1 < len(headers) else len(TEXT)]
+                       for index, header in enumerate(headers) if (header[1], header[2]) == key]
+            self.assertTrue(entries, key)
+            for entry in entries:
+                entry = re.split(r"^={57}$|^Shared dependency notice D[0-9]+$", entry, maxsplit=1, flags=re.M)[0]
+                for path in paths:
+                    with self.subTest(dependency=key, path=path):
+                        self.assertIn(f"[{path}]\n", entry)
+                if key[0] == "regex-syntax":
+                    self.assertIn("Copyright © 1991-2018 Unicode, Inc. All rights reserved.", entry)
+                    self.assertIn("UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE", entry)
+                    self.assertIn("written authorization of the copyright holder.", entry)
+
     def test_recursive_license_reference(self):
         self.assertTrue(notice.check_notice(TEXT.replace(
             "Shared license text A01\n\n", "Shared license text A01\n\n[See shared license text A01 below.]\n", 1)))
