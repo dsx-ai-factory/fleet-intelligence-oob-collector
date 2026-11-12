@@ -14,8 +14,6 @@ on:
       - 'NOTICE'
       - 'scripts/*.sh'
       - 'scripts/*.cjs'
-      - 'scripts/generate-notice.py'
-      - 'scripts/notice-fallbacks/**'
       - '.github/workflows/release.yml'
       - 'rust-toolchain.toml'
       - 'config.example.toml'
