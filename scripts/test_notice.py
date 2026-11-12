@@ -168,3 +168,113 @@ class NoticeTests(unittest.TestCase):
     def test_recursive_license_reference(self):
         self.assertTrue(notice.check_notice(TEXT.replace(
             "Shared license text A01\n\n", "Shared license text A01\n\n[See shared license text A01 below.]\n", 1)))
+
+
+class CrateSourceAuditTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.crate = self.root / "example-1.2.3"
+        self.crate.mkdir()
+        self.manifest = '[package]\nname = "example"\nversion = "1.2.3"\n'
+        (self.crate / "Cargo.toml").write_text(self.manifest)
+        self.license = "Copyright Example contributors.\nPermission is hereby granted to use example.\n"
+        (self.crate / "LICENSE").write_text(self.license)
+        self.text = "example (1.2.3)\nLicense: MIT\n" + self.license
+
+    def audit(self, text=None):
+        return notice.audit_crate_sources(self.text if text is None else text, [self.root])
+
+    def test_nested_terms_are_required_not_just_the_path(self):
+        path = self.crate / "src/unicode_tables/LICENSE-UNICODE"
+        path.parent.mkdir(parents=True)
+        terms = "Copyright Unicode contributors.\nPermission to use the Unicode data.\n"
+        path.write_text(terms)
+        for text in (self.text, self.text + "\n[src/unicode_tables/LICENSE-UNICODE]\n"):
+            with self.subTest(text=text):
+                self.assertIn("Missing source license/attribution text in NOTICE: "
+                              "example-1.2.3/src/unicode_tables/LICENSE-UNICODE", self.audit(text))
+        self.assertEqual(self.audit(self.text + terms), [])
+
+    def test_full_grant_copyright_and_disclaimer_must_remain(self):
+        terms = "Copyright © Example.\nPermission to use.\nProvided without warranty.\n"
+        (self.crate / "LICENSE").write_text(terms, encoding="utf-8")
+        for line in terms.splitlines(keepends=True):
+            with self.subTest(removed=line):
+                self.assertTrue(self.audit("example (1.2.3)\nLicense: MIT\n" + terms.replace(line, "")))
+        self.assertEqual(self.audit("example (1.2.3)\nLicense: MIT\n" + terms.replace("\n", "\r\n\n")), [])
+
+    def test_shared_license_expansion(self):
+        text = "example (1.2.3)\nLicense: MIT\n[See shared license text M02 below.]\n\n"
+        text += "SHARED LICENSE TEXTS\nShared license text M02\n\n" + self.license
+        self.assertEqual(self.audit(text), [])
+
+    def test_other_dependency_cannot_supply_missing_terms(self):
+        text = "example (1.2.3)\nLicense: MIT\n[LICENSE]\n" + "=" * 57 + "\n\n"
+        text += "other (9.0.0)\nLicense: MIT\n" + self.license
+        errors = self.audit(text)
+        self.assertIn("Missing source license/attribution text in NOTICE: example-1.2.3/LICENSE", errors)
+
+    def test_each_repeated_entry_is_audited(self):
+        text = self.text + "=" * 57 + "\nexample (1.2.3)\nLicense: MIT\n[LICENSE]\n"
+        self.assertIn("Missing source license/attribution text in NOTICE: example-1.2.3/LICENSE", self.audit(text))
+
+    def test_shared_dependency_definition_is_audited(self):
+        text = "[See shared dependency notice D001: example (1.2.3).]\n\n"
+        text += "SHARED DEPENDENCY NOTICES\nShared dependency notice D001\n\n" + self.text
+        self.assertEqual(self.audit(text), [])
+
+    def test_explicit_apache_appendix_can_supply_terms(self):
+        terms = "Apache License.\nGrant of Copyright License.\n"
+        appendix = "APPENDIX: Copyright Example contributors.\n"
+        (self.crate / "LICENSE").write_text(terms + appendix)
+        text = "example (1.2.3)\nLicense: Apache-2.0\n"
+        text += "[LICENSE: terms in the appendix below]\n" + appendix
+        text += "=" * 57 + "\nApache License 2.0 (appendix)\n" + terms
+        self.assertEqual(self.audit(text), [])
+        self.assertTrue(self.audit(text.replace(appendix, "")))
+
+    def test_declared_file_with_unconventional_name(self):
+        (self.crate / "Cargo.toml").write_text(self.manifest + 'license-file = "legal/terms.txt"\n')
+        path = self.crate / "legal/terms.txt"
+        path.parent.mkdir()
+        path.write_text("Additional declared terms.\n")
+        self.assertTrue(self.audit())
+        self.assertEqual(self.audit(self.text + "Additional declared terms.\n"), [])
+
+    def test_xml_schema_names_are_not_license_files(self):
+        for name in ("License_v1.xml", "LicenseCollection_v1.xml"):
+            (self.crate / name).write_text("<Schema />")
+        self.assertEqual(self.audit(), [])
+
+    def test_empty_and_unavailable_sources_fail(self):
+        self.assertTrue(notice.audit_crate_sources(self.text, [self.root / "missing"]))
+        self.assertTrue(notice.audit_crate_sources(self.text.replace("1.2.3", "9.0.0"), [self.root]))
+        (self.crate / "LICENSE").write_text("")
+        self.assertTrue(self.audit())
+        (self.crate / "LICENSE").unlink()
+        self.assertTrue(self.audit())
+
+    def test_manifest_identity_must_match(self):
+        (self.crate / "Cargo.toml").write_text(self.manifest.replace("1.2.3", "9.0.0"))
+        self.assertTrue(self.audit())
+
+    def test_path_only_files_require_manual_review(self):
+        (self.crate / "LICENSE").write_text("../LICENSE-MIT")
+        self.assertTrue(any("contains only a path" in error for error in self.audit()))
+
+    def test_multiple_registries(self):
+        second = self.root / "second-registry"
+        second.mkdir()
+        self.assertEqual(notice.audit_crate_sources(self.text, [second, self.root]), [])
+        (second / self.crate.name).mkdir()
+        self.assertTrue(any("found 2" in error for error in
+                            notice.audit_crate_sources(self.text, [second, self.root])))
+
+    def test_license_path_cannot_escape_crate(self):
+        outside = self.root / "outside-license"
+        outside.write_text(self.license)
+        (self.crate / "LICENSE").unlink()
+        (self.crate / "LICENSE").symlink_to(outside)
+        self.assertTrue(any("outside its crate" in error for error in self.audit()))

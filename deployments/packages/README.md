@@ -184,4 +184,21 @@ production rollout. The RPM container tests execute real installation, upgrade, 
 
 The package installs the repository's checked-in `LICENSE` as `copyright` and its checked-in `NOTICE` under `/usr/share/doc/fleetint-oob/`. `NOTICE` covers the collector, pinned NICo health dependencies, and pinned gateway. There are no dependency license directories or build-time notice generation steps.
 
-When changing dependencies or the NICo/agent source pins, review and update the corresponding sections of `NOTICE` in the same change. Inspect license and attribution files throughout each published crate, including nested source and vendored-code directories, and keep their required copyright, license terms, and upstream notices. Run `python3 scripts/check-notice.py` to validate the result. CI and release validation require an entry with inline license content or a resolved shared-license reference for every external crate/version in the collector's `Cargo.lock`, matching NICo/gateway source revisions, all component sections, and valid shared references. Incomplete shared-reference markers are rejected even when another reference uses the same identifier. Dependency headers, URLs, and license-file paths alone do not satisfy coverage. The checker ignores unrelated build-file edits and lockfile formatting; it does not discover upstream license files. Changes to the pinned NICo/gateway dependency inventories still require review against those upstream sources; the collector lockfile does not describe their dependencies. The checked-in `NOTICE` remains the single source for third-party notice text; no generator or fallback directory is required.
+When changing dependencies or the NICo/agent source pins, review and update the corresponding sections of `NOTICE` in the same change. Run `python3 scripts/check-notice.py` for the offline checks used by CI and release validation: collector Cargo.lock crate/version coverage, license content, component/source revisions, and shared references. Incomplete shared-reference markers are rejected even when another reference uses the same identifier. Dependency headers, URLs, and license-file paths alone do not satisfy coverage. Unrelated build-file edits and lockfile formatting do not require notice updates.
+
+Use the source audit when reviewing attribution from published Rust crates:
+
+1. Fetch the collector and pinned NICo dependencies with `cargo fetch --locked` from their respective source trees. Include dependencies for both supported architectures. The collector lockfile alone does not cover NICo's inventory.
+2. Find the Cargo registry source directories under `${CARGO_HOME:-$HOME/.cargo}/registry/src/`. Each supplied directory must contain the published `<name>-<version>` crate directories. Supply each required registry separately:
+
+   ```bash
+   python3 scripts/check-notice.py \
+     --crate-sources /path/to/first-registry-sources \
+     --crate-sources /path/to/second-registry-sources
+   ```
+
+3. Review the reported crate names and relative file paths. Copy missing terms into the corresponding dependency entry in `NOTICE`, preserving attribution and license variants, or use a matching shared-license reference. Rerun the audit after editing.
+
+The audit recursively discovers conventional LICENSE, LICENCE, COPYING, UNLICENSE, COPYRIGHT, NOTICE, and AUTHORS filenames and their suffix variants, plus each crate's declared `license-file`. XML schema files are excluded unless explicitly declared as the license file. It checks complete text after normalizing whitespace and expanding shared license references, scoped to each dependency entry. Explicit Apache appendix references can supply common terms. Missing or ambiguous crate directories, mismatching manifest identities, empty files, path-only pointers, and files outside the crate stop the audit with an error. Crates without published license files require manual review against upstream terms; the audit reports those cases rather than claiming complete coverage. Exact text differences also require review, even when the difference is a license URL's scheme.
+
+The source audit reads local files and leaves `NOTICE` unchanged. The default check needs no crate cache; the source audit requires sources for every Rust crate version represented by the NOTICE dependency entries. Review gateway attribution and any unpublished upstream terms separately. The checked-in `NOTICE` remains the source of truth; no generator or fallback directory is required.

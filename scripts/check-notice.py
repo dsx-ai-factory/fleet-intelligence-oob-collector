@@ -14,6 +14,10 @@ COMPONENTS = (
     "Fleet Intelligence OpenTelemetry gateway", "Go runtime and standard library",
     "SHARED DEPENDENCY NOTICES", "SHARED LICENSE TEXTS",
 )
+DEPENDENCY_HEADER = re.compile(
+    r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: ([^\n]+)(?:\n|$)", re.M)
+SOURCE_LICENSE_NAME = re.compile(
+    r"^(?:licen[cs]e|copying|unlicense|copyright|notice|authors)(?:$|[-_.])", re.I)
 
 
 def source_pins(root):
@@ -26,8 +30,7 @@ def source_pins(root):
 
 
 def dependency_entries(text, definitions, errors):
-    headers = list(re.finditer(
-        r"^([-A-Za-z0-9_]+) \(([0-9][^\n]*)\)\nLicense: ([^\n]+)(?:\n|$)", text, re.M))
+    headers = list(DEPENDENCY_HEADER.finditer(text))
     boundary = re.compile(
         r"^(?:" + "|".join(re.escape(heading) for heading in COMPONENTS)
         + r"|Shared (?:dependency notice|license text) [A-Z][0-9]+"
@@ -132,13 +135,110 @@ def check_notice(text, root=ROOT):
     return errors
 
 
+def audit_crate_sources(text, source_roots):
+    """Check published crate files against each dependency's own expanded notice."""
+    errors = []
+    roots = [Path(root) for root in source_roots]
+    for root in roots:
+        if not root.is_dir():
+            errors.append(f"Crate source directory does not exist: {root}")
+    if errors:
+        return errors
+
+    # Expand shared licenses before comparing file content. Shared dependency
+    # definitions contain ordinary dependency headers and are audited once.
+    definitions = list(re.finditer(r"^Shared license text ([AM][0-9]+)\n\n", text, re.M))
+    licenses = {
+        match[1]: text[match.end():definitions[index + 1].start()
+                       if index + 1 < len(definitions) else len(text)].strip().rstrip("=").strip()
+        for index, match in enumerate(definitions)
+    }
+    expanded = re.sub(r"\[See shared license text ([AM][0-9]+) below\.\]",
+                      lambda match: licenses.get(match[1], match[0]), text)
+    boundary = re.compile(
+        r"^={57}$|^Shared (?:dependency notice|license text) [A-Z][0-9]+$"
+        r"|^(?:" + "|".join(re.escape(heading) for heading in COMPONENTS)
+        + r"|Apache License 2\.0 \(appendix\)|BUNDLED COMPONENT NOTICES)$", re.M)
+    appendices = []
+    for match in re.finditer(r"^Apache License 2\.0 \(appendix\)$", expanded, re.M):
+        stop = boundary.search(expanded, match.end())
+        appendices.append(expanded[match.end():stop.start() if stop else len(expanded)])
+
+    headers = list(DEPENDENCY_HEADER.finditer(expanded))
+    source_files = {}
+    for index, header in enumerate(headers):
+        key = (header[1], header[2])
+        name = f"{key[0]}-{key[1]}"
+        if key not in source_files:
+            directories = {root / name for root in roots if (root / name).is_dir()}
+            if len(directories) != 1:
+                errors.append(f"Expected one published crate source directory for {name}; found {len(directories)}")
+                source_files[key] = []
+                continue
+            crate = directories.pop()
+            try:
+                manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+                package = manifest.get("package", {})
+                if (package.get("name"), package.get("version")) != key:
+                    raise ValueError("Cargo.toml name/version does not match NOTICE")
+                # Match conventional legal filenames at every depth. Redfish
+                # License_v1.xml files are schemas, not attribution documents.
+                paths = {path for path in crate.rglob("*")
+                         if path.is_file() and SOURCE_LICENSE_NAME.match(path.name)
+                         and path.suffix.lower() != ".xml"}
+                declared = package.get("license-file")
+                if declared:
+                    paths.add(crate / declared)
+                files = []
+                for path in sorted(paths):
+                    if not path.resolve().is_relative_to(crate.resolve()):
+                        raise ValueError("license file resolves outside its crate")
+                    content = " ".join(path.read_text(encoding="utf-8").split())
+                    if not content:
+                        raise ValueError(f"empty license/attribution file: {path.relative_to(crate)}")
+                    if re.fullmatch(r"(?:\.\.?/)[^\s]+", content):
+                        raise ValueError(f"license file contains only a path: {path.relative_to(crate)}; "
+                                         "review upstream terms manually")
+                    files.append((path.relative_to(crate), content))
+                if not files:
+                    raise ValueError("no license/attribution files found; review upstream terms manually")
+                source_files[key] = files
+            except (OSError, ValueError) as error:
+                errors.append(f"Cannot audit {name}: {error}")
+                source_files[key] = []
+
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(expanded)
+        stop = boundary.search(expanded, header.end(), end)
+        body = expanded[header.end():stop.start() if stop else end]
+        if re.search(r"terms in (?:the )?appendix below", body):
+            body += "\n" + "\n".join(appendices)
+        normalized = " ".join(body.split())
+        for path, content in source_files[key]:
+            # Existing NOTICE entries may put the Apache terms in a common
+            # appendix and retain the application appendix beside attribution.
+            parts = content.split("APPENDIX:", 1)
+            covered = content in normalized or (
+                len(parts) == 2 and parts[0].strip() in normalized
+                and ("APPENDIX:" + parts[1]) in normalized)
+            if not covered:
+                errors.append(f"Missing source license/attribution text in NOTICE: {name}/{path}")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
-    errors = check_notice((ROOT / "NOTICE").read_text())
+    parser.add_argument("--crate-sources", action="append", type=Path, default=[], metavar="DIRECTORY",
+                        help="also audit published name-version crate directories recursively; repeat for multiple registries")
+    args = parser.parse_args()
+    text = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    errors = check_notice(text)
+    if args.crate_sources and not errors:
+        errors.extend(audit_crate_sources(text, args.crate_sources))
     if errors:
         raise SystemExit("\n".join(errors))
     print("NOTICE locked dependencies, components, and shared references checked.")
+    if args.crate_sources:
+        print("Published crate license/attribution files checked recursively against NOTICE.")
 
 
 if __name__ == "__main__":
