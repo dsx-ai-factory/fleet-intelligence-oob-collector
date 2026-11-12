@@ -73,7 +73,6 @@ package-collector: package-native-check
 	FLEETINT_BUILD_VERSION="$(VERSION)" $(CARGO) build --release --locked --target "$(RUST_TARGET)" --bin bmc-collector
 	install -m 0755 "target/$(RUST_TARGET)/release/bmc-collector" "$(INPUTDIR)/bmc-collector"
 	$(STRIP) "$(INPUTDIR)/bmc-collector"
-	sh deployments/packages/collect-licenses fleet-intelligence-oob "$(abspath $(INPUTDIR))/collector-dependencies"
 
 $(NICO_SOURCE)/Cargo.toml:
 	mkdir -p "$(dir $(NICO_SOURCE))"
@@ -92,8 +91,6 @@ package-nico: package-native-check $(NICO_SOURCE)/Cargo.toml
 		$(CARGO) build --release --locked --target "$(RUST_TARGET)" -p carbide-health --bin forge-hw-health
 	install -m 0755 "$(PACKAGE_BUILDDIR)/nico/$(RUST_TARGET)/release/forge-hw-health" "$(INPUTDIR)/nico-hardware-health"
 	$(STRIP) "$(INPUTDIR)/nico-hardware-health"
-	cd "$(NICO_SOURCE)" && sh "$(abspath deployments/packages/collect-licenses)" carbide-health "$(abspath $(INPUTDIR))/nico-dependencies"
-	cat "$(NICO_SOURCE)/LICENSE" "$(NICO_SOURCE)/THIRD-PARTY-LICENSES" > "$(INPUTDIR)/nico-NOTICES"
 
 $(AGENT_SOURCE)/otelcol/otelcol-builder.yaml:
 	mkdir -p "$(dir $(AGENT_SOURCE))"
@@ -109,7 +106,6 @@ package-gateway: package-native-check $(AGENT_SOURCE)/otelcol/otelcol-builder.ya
 		--config=otelcol-builder.yaml --output-path="$(abspath $(PACKAGE_BUILDDIR))/gateway"
 	install -m 0755 "$(PACKAGE_BUILDDIR)/gateway/fleetint-otelcol" "$(INPUTDIR)/otel-gateway"
 	$(STRIP) "$(INPUTDIR)/otel-gateway"
-	cat "$(AGENT_SOURCE)/LICENSE" "$(AGENT_SOURCE)/NOTICE" > "$(INPUTDIR)/gateway-NOTICES"
 
 .PHONY: packages-test-linking
 packages-test-linking: package-native-check

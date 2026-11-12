@@ -39,10 +39,6 @@ sh /startup.sh /usr/lib/fleetint-oob/run-service /usr/lib/systemd/system
 cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 [ -s /usr/share/doc/fleetint-oob/copyright ]
 [ "$(rpm -qp --qf '%{VENDOR}' "$archive")" = 'NVIDIA Corporation' ]
-for component in collector-dependencies nico-dependencies; do
-    [ -s "/usr/share/doc/fleetint-oob/$component/dependencies.txt" ]
-    [ -n "$(find "/usr/share/doc/fleetint-oob/$component/licenses" -type f -print -quit)" ]
-done
 systemd-analyze verify /usr/lib/systemd/system/fleetint-oob-collector.service /usr/lib/systemd/system/fleetint-nico-health.service /usr/lib/systemd/system/fleetint-otel-gateway.service /usr/lib/systemd/system/fleetint-oob.target
 conf=/etc/fleetint-oob
 install -d -m750 -o root -g fleetint-oob "$conf/credentials"

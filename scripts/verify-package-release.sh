@@ -37,7 +37,13 @@ for format in deb rpm; do
     version="$current"
     awk -v name="$name" '$2 == name {count++} END {exit count != 1}' "$dist_dir/checksums.txt" || { echo "Package missing from signed manifest" >&2; exit 1; }
     "$(dirname "$0")/verify-linux-package-signature.sh" "${matches[0]}" "$key"
-    if [[ "$format" == rpm ]]; then
+    if [[ "$format" == deb ]]; then
+      metadata="$(dpkg-deb --field "${matches[0]}" Package Version Architecture)"
+      expected=$(printf 'Package: fleetint-oob\nVersion: %s\nArchitecture: %s' "${current/-/\~}-1" "$arch")
+      [[ "$metadata" == "$expected" ]] || {
+        echo "DEB metadata does not match its release name" >&2; exit 1;
+      }
+    else
       case "$arch" in amd64) rpm_arch=x86_64 ;; arm64) rpm_arch=aarch64 ;; esac
       metadata="$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "${matches[0]}")"
       [[ "$metadata" == "fleetint-oob ${current/-/\~} $rpm_arch" ]] || {

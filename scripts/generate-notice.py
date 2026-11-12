@@ -25,13 +25,16 @@ Exit non-zero, without writing NOTICE, if a crate has no legal text: either its
 package ships none and no reviewed fallback exists, or a fallback is stale.
 """
 
+import argparse
 import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOTICE = os.path.join(ROOT, "NOTICE")
+BUNDLED_MARKER = "\nBUNDLED COMPONENT NOTICES\n"
 SEPARATOR = "=" * 57
 
 HEADER = """Fleet Intelligence OOB Collector
@@ -74,6 +77,28 @@ FALLBACKS = {
             "nv-redfish-schema",
         )
     },
+    # v0.22.1 LICENSE was checked byte-for-byte against the v0.22.0 text.
+    **{(name, "0.22.1"): NV_REDFISH for name in (
+        "nv-redfish", "nv-redfish-bmc-http", "nv-redfish-core",
+        "nv-redfish-csdl-compiler", "nv-redfish-dispatcher",
+        "nv-redfish-quirks", "nv-redfish-schema", "nv-redfish-server-core",
+    )},
+    # Same upstream commit as rustify 0.7.0, whose root LICENSE supplies MIT terms.
+    ("rustify_derive", "0.5.5"): (
+        "rustify_derive-0.5.5.LICENSE",
+        "https://github.com/jmgilman/rustify/blob/1de071288ded430103f1cb1954275a842596867a/LICENSE",
+        None,
+    ),
+    **{(name, "0.14.6"): (
+        "tonic-0.14.6.LICENSE",
+        "https://github.com/hyperium/tonic/blob/6cb6056b5a748bc5a29bd48f4602dbc4e552bb7d/LICENSE",
+        None,
+    ) for name in ("tonic-prost", "tonic-prost-build")},
+    ("vaultrs", "0.8.0"): (
+        "vaultrs-0.8.0.LICENSE",
+        "https://github.com/jmgilman/vaultrs/blob/342816da2a1fffa945db134b1b7ee5585f005e8b/LICENSE",
+        None,
+    ),
     ("tagged-types", "0.2.4"): TAGGED_TYPES,
     ("tagged-types-derive", "0.2.4"): TAGGED_TYPES,
     ("valuable", "0.1.1"): (
@@ -201,23 +226,42 @@ def crate_entry(pkg, apache_text, unresolved):
     return "\n".join(lines)
 
 
-def generate():
-    """Return the full NOTICE text for the crates in Cargo.lock."""
+def generate(package=None, target=None, source=ROOT):
+    """Collect workspace dependency notices, optionally scoped to one package/target."""
     out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked"],
-        cwd=ROOT,
+        ["cargo", "metadata", "--format-version", "1", "--locked"]
+        + (["--filter-platform", target] if target else []),
+        cwd=source,
         check=True,
         capture_output=True,
         text=True,
     ).stdout
     pkgs = [p for p in json.loads(out)["packages"] if p["source"]]
+    if package:
+        tree = subprocess.check_output([
+            "cargo", "tree", "--locked", "--offline", "--package", package,
+            "--target", target, "--edges", "normal,build", "--prefix", "none",
+            "--format", "{p}",
+        ], cwd=source, text=True)
+        selected = {(parts[0], parts[1][1:]) for line in tree.splitlines()
+                    if len(parts := line.split()) >= 2 and parts[1].startswith("v")}
+        pkgs = [p for p in pkgs if (p["name"], p["version"]) in selected]
     pkgs.sort(key=lambda p: (p["name"], p["version"]))
 
     apache_text = {}
     unresolved = []
-    sections = [HEADER]
+    sections = [f"NICo hardware health ({package})\n" if package else HEADER]
     for pkg in pkgs:
-        sections.append(crate_entry(pkg, apache_text, unresolved))
+        missing = []
+        entry = crate_entry(pkg, apache_text, missing)
+        # A solely Apache-2.0 dependency can use the shared standard text.
+        # The older MIT/Apache-2.0 expression is an explicit choice of licenses.
+        if package and missing and pkg["license"] in ("Apache-2.0", "MIT/Apache-2.0", "MIT OR Apache-2.0", "Apache-2.0 OR MIT"):
+            apache_text["text"] = Path(ROOT, "LICENSE").read_text()
+            entry += "\nRedistributed under Apache-2.0; terms in the appendix below.\n"
+        else:
+            unresolved.extend(missing)
+        sections.append(entry)
     if unresolved:
         sys.exit(
             "No legal text for: "
@@ -233,13 +277,28 @@ def generate():
 
 def main():
     """Rewrite NOTICE, or with --check verify it is current."""
-    new = generate()
-    if "--check" in sys.argv:
-        with open(NOTICE, encoding="utf-8") as f:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--package")
+    parser.add_argument("--target")
+    parser.add_argument("--source", default=ROOT)
+    parser.add_argument("--output", default=NOTICE)
+    args = parser.parse_args()
+    if args.package and not args.target:
+        parser.error("--package requires --target")
+    new = generate(args.package, args.target, args.source)
+    # Component notices are maintained with the source pins, independently of
+    # collector Cargo.lock refreshes. Never silently overwrite those sections.
+    if not args.package and os.path.exists(args.output):
+        previous = Path(args.output).read_text()
+        if BUNDLED_MARKER in previous:
+            new += BUNDLED_MARKER + previous.split(BUNDLED_MARKER, 1)[1]
+    if args.check:
+        with open(args.output, encoding="utf-8") as f:
             if f.read() != new:
                 sys.exit("NOTICE is out of date: run scripts/generate-notice.py")
         return
-    with open(NOTICE, "w", encoding="utf-8") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         f.write(new)
 
 

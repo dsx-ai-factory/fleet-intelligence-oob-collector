@@ -50,12 +50,6 @@ sha256sum -c "$work/alternate-accounts.sha256"
 [ -s /usr/share/doc/fleetint-oob/copyright ]
 [ "$(dpkg-deb -f "$archive" Maintainer)" = "NVIDIA Fleet Intelligence Team" ]
 docs=/usr/share/doc/fleetint-oob
-for component in collector-dependencies nico-dependencies; do
-    [ -n "$(find "$docs/$component" -name 'dependencies.txt*' -type f -size +0c -print -quit)" ]
-    [ -n "$(find "$docs/$component/licenses" -type f -print -quit)" ]
-done
-[ -s "$docs/nico-NOTICES" ]
-[ -s "$docs/gateway-NOTICES" ]
 systemd-analyze verify /usr/lib/systemd/system/fleetint-oob-collector.service /usr/lib/systemd/system/fleetint-nico-health.service /usr/lib/systemd/system/fleetint-otel-gateway.service /usr/lib/systemd/system/fleetint-oob.target
 for unit in fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service; do
     [ ! -e "/etc/systemd/system/multi-user.target.wants/$unit" ]

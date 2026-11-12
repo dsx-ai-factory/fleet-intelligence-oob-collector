@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const upload = require('../../../scripts/publish-package-assets.cjs');
+const { reserveRelease, uploadAssets: upload } = require('../../../scripts/package-release.cjs');
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'release-assets-'));
@@ -131,7 +131,6 @@ test('rejects an incomplete RPM set before uploading any assets', async () => {
     assert.equal(f.state.uploads, 0);
   } finally { f.cleanup(); }
 });
-const reserveRelease = require('../../../scripts/reserve-package-release.cjs');
 
 function reservationFixture(releases = [], ref = 'refs/tags/v1.2.3') {
   const created = [];

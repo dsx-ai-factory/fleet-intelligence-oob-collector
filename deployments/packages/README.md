@@ -1,4 +1,4 @@
-# Host package prototype
+# Host packages
 
 Build the `fleetint-oob` DEB or RPM package with standalone nFPM. It includes three systemd services and a target to manage them together:
 
@@ -161,9 +161,7 @@ Run `make packages-test-hooks packages-test-build` for isolated lifecycle and bu
 
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
-Real service startup, upgrade/rollback, and shutdown during collection still
-need validation in a disposable VM before production use. Signing and release
-publishing are outside this prototype.
+Validate systemd startup, service sandboxing, reboot behavior, upgrade/rollback, and shutdown during collection in a disposable VM before production use. See the [release process](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for signed DEB/RPM assets, signing prerequisites, verification, and retry instructions.
 
 ## Docker validation
 
@@ -180,5 +178,10 @@ credential symlinks. No customer backend or BMC is contacted.
 The package metadata uses Debian's `~` prerelease ordering; exported filenames
 retain the requested version. Docker builds and tests do not boot systemd as
 PID 1. Validate service sandboxing and musl DNS on disposable target VMs before
-production rollout. RPM lifecycle hooks retain isolated shell coverage; a real
-RPM install and upgrade still require validation on a target distribution.
+production rollout. The RPM container tests execute real installation, upgrade, and removal transactions on Rocky Linux 9 while replacing the systemd manager with a stub.
+
+## License notices
+
+The package installs the repository's checked-in `LICENSE` as `copyright` and its checked-in `NOTICE` under `/usr/share/doc/fleetint-oob/`. `NOTICE` covers the collector, pinned NICo health dependencies, and pinned gateway. There are no dependency license directories or build-time notice generation steps.
+
+When changing dependencies or the NICo/agent source pins, update the corresponding sections of `NOTICE` in the same change. Keep required copyright, license terms, and upstream notices. `scripts/generate-notice.py` refreshes the collector section and preserves the bundled component sections; its `--package`, `--target`, `--source`, and `--output` options can prepare a health-only notice for maintainer review. This maintenance tool is not part of package builds or release jobs.

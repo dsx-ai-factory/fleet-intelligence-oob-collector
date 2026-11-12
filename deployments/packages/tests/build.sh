@@ -39,7 +39,6 @@ printf 'dist: {}\n' > "$test_root/agent/otelcol/otelcol-builder.yaml"
 for project in nico agent; do
     printf 'test license\n' > "$test_root/$project/LICENSE"
     printf 'test notices\n' > "$test_root/$project/NOTICE"
-    printf 'test notices\n' > "$test_root/$project/THIRD-PARTY-LICENSES"
     git -C "$test_root/$project" init -q
     git -C "$test_root/$project" add .
     git -C "$test_root/$project" -c user.name='Package Tests' -c user.email=tests@example.com commit -qm first
@@ -58,10 +57,6 @@ export GIT_CONFIG_VALUE_1=https://github.com/dsx-ai-factory/fleet-intelligence-a
 cat > "$test_root/bin/cargo" <<'EOF'
 #!/bin/sh
 set -eu
-if [ "$1" = tree ]; then
-    echo 'fixture v0.1.0: Apache-2.0'
-    exit 0
-fi
 while [ "$1" != --target ]; do shift; done
 target=$2
 mkdir -p "$CARGO_TARGET_DIR/$target/release"

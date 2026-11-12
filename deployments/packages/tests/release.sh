@@ -27,6 +27,8 @@ cp deployments/packages/tests/fixtures/nvsec.sh "$root/bin/nvsec"
 chmod 755 "$root/bin/"*
 export PATH="$root/bin:$PATH" NVSEC_BIN="$root/bin/nvsec"
 export NVSEC_SSA_CLIENT_ID=test-client NVSEC_SSA_CLIENT_SECRET=test-client-secret
+export RUNNER_TEMP="$root/signing-scratch"
+mkdir -p "$RUNNER_TEMP"
 export SIGN_LOG="$root/sign-log"
 : > "$SIGN_LOG"
 cd "$project"
@@ -35,7 +37,7 @@ key="$project/deployments/packages/keys/fleet-intelligence.pub.asc"
 for arch in amd64 arm64; do
     tree="$root/$arch"
     mkdir -p "$tree/DEBIAN"
-    printf 'Package: fleetint-oob\nVersion: 1.2.3\nArchitecture: %s\nMaintainer: Test <test@example.test>\nDescription: offline signing fixture\n' "$arch" > "$tree/DEBIAN/control"
+    printf 'Package: fleetint-oob\nVersion: 1.2.3-1\nArchitecture: %s\nMaintainer: Test <test@example.test>\nDescription: offline signing fixture\n' "$arch" > "$tree/DEBIAN/control"
     printf fixture > "$tree/payload"
     dpkg-deb --build --root-owner-group "$tree" "$dist/fleetint-oob_1.2.3_$arch.deb"
 done
@@ -63,8 +65,9 @@ for pair in amd64:x86_64 arm64:aarch64; do
     cp "$dist/fleetint-oob_1.2.3_$arch.rpm" "$root/original/"
 done
 : > "$SIGN_LOG"
-scripts/prepare-package-release.sh "$dist" 1.2.3
+scripts/package-signing.sh release "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq 5 ]
+[ -z "$(ls -A "$RUNNER_TEMP")" ]
 scripts/verify-package-release.sh "$dist"
 cp -r "$dist" "$root/baseline"
 restore() {
@@ -76,12 +79,22 @@ reject() {
         printf 'Unexpected success: %s\n' "$*" >&2
         exit 1
     fi
+    [ -z "$(ls -A "$RUNNER_TEMP")" ]
 }
+# Bad command/argument combinations must fail before any signing request.
+sign_count=$(wc -l < "$SIGN_LOG")
+reject scripts/package-signing.sh
+for mode in release packages manifest unknown; do
+    reject scripts/package-signing.sh "$mode"
+done
+reject scripts/package-signing.sh release "$dist" invalid-version
+[ "$(wc -l < "$SIGN_LOG")" -eq "$sign_count" ]
+
 # Missing both RPMs must fail before any signing request.
 rm "$dist/"*.rpm
 reject scripts/verify-package-release.sh "$dist"
 sign_count=$(wc -l < "$SIGN_LOG")
-reject scripts/prepare-package-release.sh "$dist" 1.2.3
+reject scripts/package-signing.sh release "$dist" 1.2.3
 [ "$(wc -l < "$SIGN_LOG")" -eq "$sign_count" ]
 restore
 for arch in amd64 arm64; do
@@ -98,7 +111,7 @@ for mode in empty missing; do
     cp "$root/original/${rpm_package##*/}" "$rpm_fixture"
     : > "$SIGN_LOG"
     export SIGN_MODE=$mode
-    reject scripts/sign-linux-packages.sh "$rpm_failure_dist" "$key"
+    reject scripts/package-signing.sh packages "$rpm_failure_dist" "$key"
     [ "$(wc -l < "$SIGN_LOG")" -eq 1 ]
     grep -Fxq "LINUX_PACKAGE_FLEET_INTELLIGENCE ${rpm_package##*/}" "$SIGN_LOG"
     cmp "$root/original/${rpm_package##*/}" "$rpm_fixture"
@@ -110,7 +123,7 @@ restore
 # A correctly signed manifest cannot hide an architecture/version mismatch.
 mv "$dist/fleetint-oob_1.2.3_amd64.rpm" "$dist/fleetint-oob_1.2.4_amd64.rpm"
 sed -i 's/fleetint-oob_1.2.3_amd64.rpm/fleetint-oob_1.2.4_amd64.rpm/' "$dist/checksums.txt"
-scripts/sign-checksum-manifest.sh "$dist/checksums.txt" "$key"
+scripts/package-signing.sh manifest "$dist/checksums.txt" "$key"
 reject scripts/verify-package-release.sh "$dist"
 restore
 mv "$dist/fleetint-oob_1.2.3_amd64.rpm" "$root/swapped.rpm"
@@ -118,14 +131,14 @@ mv "$dist/fleetint-oob_1.2.3_arm64.rpm" "$dist/fleetint-oob_1.2.3_amd64.rpm"
 mv "$root/swapped.rpm" "$dist/fleetint-oob_1.2.3_arm64.rpm"
 (cd "$dist" && sha256sum fleetint-oob_*.deb fleetint-oob_*.rpm \
     fleet-intelligence.pub.asc verify-linux-package-signature.sh > checksums.txt)
-scripts/sign-checksum-manifest.sh "$dist/checksums.txt" "$key"
+scripts/package-signing.sh manifest "$dist/checksums.txt" "$key"
 reject scripts/verify-package-release.sh "$dist"
 restore
 package="$dist/fleetint-oob_1.2.3_amd64.deb"
 for mode in empty missing; do
     cp "$root/original/${package##*/}" "$package"
     export SIGN_MODE=$mode
-    reject scripts/sign-linux-packages.sh "$dist" "$key"
+    reject scripts/package-signing.sh packages "$dist" "$key"
     cmp "$root/original/${package##*/}" "$package"
     unset SIGN_MODE
     restore
@@ -144,6 +157,24 @@ restore
 printf '%064d  fake.deb\n' 0 > "$dist/checksums.txt"
 reject scripts/verify-package-release.sh "$dist"
 restore
+# Valid signatures and checksums must not hide incorrect Debian metadata.
+for field in Package Version Architecture; do
+    cp "$root/original/"* "$dist/"
+    fixture="$root/metadata-$field"
+    cp -r "$root/amd64" "$fixture"
+    case "$field" in
+        Package) value=wrong-package ;;
+        Version) value=9.9.9-1 ;;
+        Architecture) value=arm64 ;;
+    esac
+    sed -i "s/^$field: .*/$field: $value/" "$fixture/DEBIAN/control"
+    dpkg-deb --build --root-owner-group "$fixture" "$dist/fleetint-oob_1.2.3_amd64.deb"
+    scripts/package-signing.sh release "$dist" 1.2.3 > "$root/metadata.log" 2>&1 && {
+        echo "Accepted incorrect DEB $field" >&2; exit 1;
+    }
+    grep -F 'DEB metadata does not match its release name' "$root/metadata.log"
+    restore
+done
 # RC package metadata uses '~' while downloadable names retain the tag.
 rc_dist="$root/prerelease"
 mkdir -p "$rc_dist"
@@ -151,11 +182,11 @@ sed 's/^Version: .*/Version: 1.2.3~rc.1/' "$root/rpmbuild/SPECS/fixture.spec" > 
 for pair in amd64:x86_64 arm64:aarch64; do
     arch=${pair%:*}
     rpm_arch=${pair#*:}
-    sed -i 's/^Version: .*/Version: 1.2.3~rc.1/' "$root/$arch/DEBIAN/control"
+    sed -i 's/^Version: .*/Version: 1.2.3~rc.1-1/' "$root/$arch/DEBIAN/control"
     dpkg-deb --build --root-owner-group "$root/$arch" "$rc_dist/fleetint-oob_1.2.3-rc.1_$arch.deb"
     rpmbuild -bb --target "$rpm_arch" --define "_topdir $root/rpmbuild" "$root/rpmbuild/SPECS/prerelease.spec"
     cp "$root/rpmbuild/RPMS/$rpm_arch/fleetint-oob-1.2.3~rc.1-1.$rpm_arch.rpm" "$rc_dist/fleetint-oob_1.2.3-rc.1_$arch.rpm"
 done
-scripts/prepare-package-release.sh "$rc_dist" 1.2.3-rc.1
+scripts/package-signing.sh release "$rc_dist" 1.2.3-rc.1
 scripts/verify-package-release.sh "$rc_dist"
 printf 'Offline signing and tamper rejection checks passed\n'
