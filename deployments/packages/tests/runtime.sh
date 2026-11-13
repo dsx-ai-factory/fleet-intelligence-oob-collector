@@ -108,7 +108,7 @@ tls_pid=$!
 wait_for "$tls_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18889' 2>/dev/null
 wait_for "$backend_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18888' 2>/dev/null
 credentials=$(mktemp -d /tmp/collector-credentials.XXXXXX)
-printf 'test-token\n' > "$credentials/enrollment-token"
+printf ' \ttest-token\r\n' > "$credentials/enrollment-token"
 chmod 640 "$credentials/enrollment-token"
 chown root:fleetint-oob "$credentials" "$credentials/enrollment-token"
 chmod 750 "$credentials"
