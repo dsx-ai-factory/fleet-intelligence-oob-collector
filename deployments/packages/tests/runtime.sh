@@ -116,7 +116,7 @@ start=$(sed -n 's/^ExecStart=//p' /usr/lib/systemd/system/fleetint-oob-collector
 start=${start//\$\$/\$}
 # Parse the installed unit's shell quoting; exec preserves the collector PID.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_ENROLLMENT_TOKEN_FILE="$credentials/enrollment-token" FLEETINT_ENROLLMENT_TOKEN=wrong-legacy-token FLEETINT_DISABLE_LATENCY_PROBE=true \
+    env FLEETINT_ENROLLMENT_TOKEN_FILE="$credentials/enrollment-token" FLEETINT_ENROLLMENT_TOKEN=wrong-environment-token FLEETINT_DISABLE_LATENCY_PROBE=true \
     FLEETINT_TARGET_CONCURRENCY=3 FLEETINT_BMC_MAX_IN_FLIGHT=1 FLEETINT_BMC_REQUESTS_PER_SECOND=4 FLEETINT_TIMEOUT_SECONDS=5 \
     FLEETINT_BACKEND_URL=http://127.0.0.1:18888 \
     /bin/sh -ec "exec $start" > "$work/collector.log" 2>&1 &

@@ -28,7 +28,6 @@ RUN --mount=type=cache,target=/src/dist/package-sources,sharing=locked \
 COPY . .
 ARG PACKAGE_VERSION
 ARG PACKAGE_FORMAT=deb
-ARG PACKAGE_TEST_UPGRADE=0
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -45,9 +44,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     make packages-test-linking "$PACKAGE_FORMAT" "packages-check-$PACKAGE_FORMAT" NICO_REF="$NICO_SOURCE_REF" VERSION="$package_version" OUTPUTDIR=/out && \
     set -- /out/*."$PACKAGE_FORMAT" && test "$#" = 1 && \
     mv "$1" "/out/fleetint-oob_${version}_$(dpkg --print-architecture).$PACKAGE_FORMAT" && \
-    (cd /out && sha256sum ./*."$PACKAGE_FORMAT" > checksums.txt) && \
-    if [ "$PACKAGE_TEST_UPGRADE" = 1 ]; then \
-        make -o package-binaries "$PACKAGE_FORMAT" NICO_REF="$NICO_SOURCE_REF" VERSION="$package_version+test1" OUTPUTDIR=/out/test-fixtures; \
-    fi
+    (cd /out && sha256sum ./*."$PACKAGE_FORMAT" > checksums.txt)
 FROM scratch AS export
 COPY --from=build /out/ /

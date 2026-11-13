@@ -25,9 +25,9 @@ for shell in sh bash; do
         expect_missing_token
         expect_missing_token FLEETINT_ENROLLMENT_TOKEN=
         expect_missing_token FLEETINT_ENROLLMENT_TOKEN_FILE="$test_root/empty-token" \
-            FLEETINT_ENROLLMENT_TOKEN=legacy-token
+            FLEETINT_ENROLLMENT_TOKEN=environment-token
         expect_missing_token FLEETINT_ENROLLMENT_TOKEN_FILE="$test_root/missing-token" \
-            FLEETINT_ENROLLMENT_TOKEN=legacy-token
+            FLEETINT_ENROLLMENT_TOKEN=environment-token
     done
 done
 for unit in fleetint-oob-collector.service fleetint-otel-gateway.service fleetint-nico-health.service; do
