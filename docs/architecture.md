@@ -30,7 +30,7 @@ Each machine is identified by its BMC MAC address, from configuration through in
 
 ## A collection cycle
 
-When the collector starts, it exchanges its bootstrap token for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
+When the collector starts, it exchanges its collector token for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
 
 1. **Reload configuration.** The collector re-reads the target list and credentials file, so edits take effect at the next cycle. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
 2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `bmcCollector.targetConcurrency`, after 30 seconds, or when inventory collection ends.
@@ -50,7 +50,7 @@ The collector keeps whatever it could collect, and reports failures node by node
 - **A whole BMC fails.** If the BMC can't be read at all, for example because its Redfish service is down or it rejected the password, the collector holds the node back, waits five minutes, reloads the credentials file, and collects it once more. Attestation does the same for a BMC that rejected the password, or where the BMC or any GPU's evidence kept failing transiently. Only the second result is uploaded, unless it read nothing and the first read part of the node's inventory, in which case the first is kept. If neither read anything, the node is uploaded with a `targetError` and no inventory. On shutdown during the wait or the second attempt, held inventory nodes whose second attempt hasn't finished are uploaded as they were; attestation stops without uploading.
 - **An upload is partly rejected.** The collector logs whether Fleet Intelligence accepted or rejected each node, or didn't confirm it either way. One bad node doesn't hold back the rest of its batch, and later batches still run unless the collector is shutting down or can't enroll again.
 - **A nonce request fails.** That BMC's attestation is skipped until the next cycle. Skipped BMCs are logged and counted.
-- **The Fleet Intelligence session expires.** If an upload or nonce request is rejected with `401 Unauthorized`, the collector enrolls again with the bootstrap token and retries once. This also applies to the attestation retry pass.
+- **The Fleet Intelligence session expires.** If an upload or nonce request is rejected with `401 Unauthorized`, the collector enrolls again with the collector token and retries once. This also applies to the attestation retry pass.
 - **A BMC password changes.** If a BMC rejects the login during attestation, the collector reloads the credentials file and, if the password changed, retries once, using the same nonce and evidence.
 
 ## Request limits

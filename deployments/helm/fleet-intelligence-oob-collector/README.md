@@ -18,14 +18,14 @@ credentials:
   secretKey: credentials.json
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  agentToken:
-    existingSecret: fleet-intelligence-oob-collector-agent-token
-    secretKey: agent-token
+  collectorToken:
+    existingSecret: fleet-intelligence-oob-collector-token
+    secretKey: collector-token
 ```
 
 Each target needs a unique BMC MAC and an IP address in `address`. Set `port` separately if the BMC doesn't use the HTTPS default. `kind` is `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default).
 
-The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the bootstrap token. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
+The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the collector token. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
 
 ## Choosing components
 
