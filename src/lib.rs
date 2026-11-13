@@ -177,6 +177,7 @@ fn parse_optional_setting(
 ) -> Result<Option<String>, Box<dyn Error>> {
     match value {
         Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value.is_empty() => Ok(None),
         Ok(value) if allowed.contains(&value.as_str()) => Ok(Some(value)),
         _ => Err(format!("{name} has an unsupported value").into()),
     }
@@ -1562,6 +1563,36 @@ mod tests {
             let gateway = report.otel_gateway.unwrap();
             assert!(!gateway.enabled);
             assert_eq!(gateway.log_level.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn behavior_reporting_treats_empty_optional_settings_as_unset() {
+        let options = reporting_options();
+        for enabled in [None, Some("true"), Some("false")] {
+            let report = options
+                .collector_config_from_env(|name| match name {
+                    "FLEETINT_NICO_LOG_LEVEL"
+                    | "FLEETINT_NICO_TELEMETRY_DESTINATION"
+                    | "FLEETINT_OTEL_GATEWAY_LOG_LEVEL" => Ok(String::new()),
+                    "FLEETINT_NICO_ENABLED" | "FLEETINT_OTEL_GATEWAY_ENABLED" => enabled
+                        .map(str::to_owned)
+                        .ok_or(std::env::VarError::NotPresent),
+                    _ => Err(std::env::VarError::NotPresent),
+                })
+                .unwrap();
+            if let Some(enabled) = enabled {
+                let nico = report.nico_health.unwrap();
+                assert_eq!(nico.enabled, enabled == "true");
+                assert!(nico.log_level.is_none());
+                assert!(nico.telemetry_destination.is_none());
+                let gateway = report.otel_gateway.unwrap();
+                assert_eq!(gateway.enabled, enabled == "true");
+                assert!(gateway.log_level.is_none());
+            } else {
+                assert!(report.nico_health.is_none());
+                assert!(report.otel_gateway.is_none());
+            }
         }
     }
 
