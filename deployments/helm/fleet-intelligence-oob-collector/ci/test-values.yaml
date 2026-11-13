@@ -27,7 +27,7 @@ credentials:
 backend:
   url: https://fleet.test.example
   enrollmentToken:
-    existingSecret: fleet-intelligence-oob-collector-enrollment-token-test
+    existingSecret: fleet-intelligence-enrollment-token-test
     secretKey: enrollment-token
 imagePullSecrets:
 - name: ghcr-pull-secret-test

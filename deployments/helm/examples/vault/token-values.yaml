@@ -3,5 +3,5 @@
 # The collector and bundled gateway share this collector credential.
 backend:
   enrollmentToken:
-    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    existingSecret: fleet-intelligence-enrollment-token
     secretKey: enrollment-token

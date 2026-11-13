@@ -100,6 +100,12 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
         })
 
     def test_enrollment_token_secret_is_shared_by_both_workloads(self):
+        for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
+            with self.subTest(default_secret=template):
+                rendered = self.helm(template=template)
+                self.assertRegex(rendered, r'secretKeyRef:\s+'
+                                 r'name: "fleet-intelligence-enrollment-token"\s+'
+                                 r'key: "enrollment-token"')
         settings = {"backend.enrollmentToken.existingSecret": "collector-enrollment",
                     "backend.enrollmentToken.secretKey": "credential"}
         for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
