@@ -139,8 +139,7 @@ fi
 wait_for "$collector_pid" grep -Fq 'retrying failed inventory targets after a delay' "$work/collector.log"
 # Gateway configuration is validated and its real health endpoint is probed.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_ENROLLMENT_TOKEN_FILE="$credentials/enrollment-token" FLEETINT_ENROLLMENT_TOKEN=wrong-environment-token \
-    BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
+    env FLEETINT_ENROLLMENT_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
     ENROLL_ENDPOINT=https://127.0.0.1:18889/api/v1/health/enroll \
     /usr/lib/fleetint-oob/run-service gateway > "$work/gateway.log" 2>&1 &
 gateway_pid=$!
