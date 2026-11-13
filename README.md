@@ -42,8 +42,8 @@ Read the [collector documentation](https://docs.nvidia.com/fleet-intel/oob-colle
 
 - [Installation](docs/installation.md): Kubernetes setup, verification, and removal.
 - [Configuration](docs/configuration.md): Helm values for targets, credentials, telemetry, and collection.
-- [Install on Linux](docs/host-installation.md): signed package verification, installation, service checks, upgrades, and removal.
-- [Configure Linux packages](docs/host-configuration.md): TOML, credentials, service environment settings, and local telemetry.
+- [Install on Linux](docs/host-installation.md): release downloads, installation, target setup, and service checks.
+- [Configure Linux packages](docs/host-configuration.md): TOML, credentials, service settings, local telemetry, troubleshooting, upgrades, and removal.
 - [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
 - [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
 

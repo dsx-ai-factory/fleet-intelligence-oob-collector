@@ -194,3 +194,56 @@ When running the collector CLI directly, certificate verification is enabled unl
 Use `sudo systemctl restart fleetint-oob.target` after changing shared configuration or environment settings. For changes limited to NICo controls, restart only NICo with `sudo systemctl restart fleetint-nico-health.service`. Check the individual service states and logs afterward, as described in [installation verification](host-installation.md#start-and-verify-collection).
 
 For password and token rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| Service stops with exit status `2` | Invalid settings or an unreadable token file. Check the service log, correct the setting, and restart the affected service. |
+| Collector repeatedly fails to enroll | Bootstrap token, backend addresses, host connectivity, proxy, and backend certificate trust. |
+| Inventory cannot read a BMC | Target address/MAC, credential profile or MAC override, and BMC certificate trust if you enabled verification. See [proxy and TLS](host-configuration.md#proxy-and-tls). |
+| NICo fails before starting | TOML syntax, a readable credentials file, and valid `[nico_health]` settings. |
+| Services run but telemetry is absent | BMC credentials, NICo logs, the OTLP destination, all gateway URLs, and gateway enrollment/export errors. |
+
+Optional local health checks are available at `http://127.0.0.1:9009/livez` for NICo and `http://127.0.0.1:13133/` for the gateway. Confirm fresh inventory and telemetry in Fleet Intelligence to verify collection and export.
+
+## Upgrade
+
+Download the new package from [GitHub Releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases), then follow the [installation commands](host-installation.md#install) with the new file. Modified package configuration is preserved. Review package-manager prompts and merge any new configuration defaults into your local settings as needed.
+
+An upgrade restarts services that were already active and leaves stopped services stopped. Review each service after the transaction. Service-management failures are reported as warnings; a completed package transaction alone does not prove that a restart succeeded.
+
+## Remove a target
+
+Before deleting a machine in Fleet Intelligence, remove its `[[targets]]` entry from `/etc/fleetint-oob/config.toml` and restart the stack:
+
+```bash
+sudo systemctl restart fleetint-oob.target
+```
+
+Confirm that collection continues for the remaining targets. A few uploads already in progress can still arrive. If you remove the last target, stop or uninstall the stack instead of starting it with an empty target list. Remove unused per-MAC credential overrides only after nothing else uses them. Existing backend data remains.
+
+## Stop or uninstall
+
+Stop collection and disable startup:
+
+```bash
+sudo systemctl disable --now fleetint-oob.target \
+  fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
+```
+
+Stopping the collector can take up to 300 seconds while it finishes pending inventory uploads. Remove the package with your package manager:
+
+For DEB systems:
+
+```bash
+sudo apt remove fleetint-oob
+```
+
+For RPM systems:
+
+```bash
+sudo dnf remove fleetint-oob
+```
+
+Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential/token files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
