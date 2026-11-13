@@ -10,15 +10,15 @@ number() {
     fi
 }
 # Preserve existing EnvironmentFile tokens while supporting a protected file.
-if [ -n "${FLEETINT_COLLECTOR_TOKEN_FILE:-}" ]; then
-    if ! FLEETINT_COLLECTOR_TOKEN=$(cat -- "$FLEETINT_COLLECTOR_TOKEN_FILE"); then
-        echo 'Could not read FLEETINT_COLLECTOR_TOKEN_FILE' >&2
+if [ -n "${FLEETINT_ENROLLMENT_TOKEN_FILE:-}" ]; then
+    if ! FLEETINT_ENROLLMENT_TOKEN=$(cat -- "$FLEETINT_ENROLLMENT_TOKEN_FILE"); then
+        echo 'Could not read FLEETINT_ENROLLMENT_TOKEN_FILE' >&2
         exit 2
     fi
-    export FLEETINT_COLLECTOR_TOKEN
+    export FLEETINT_ENROLLMENT_TOKEN
 fi
-if [ -z "${FLEETINT_COLLECTOR_TOKEN:-}" ]; then
-    echo 'Configure FLEETINT_COLLECTOR_TOKEN_FILE or FLEETINT_COLLECTOR_TOKEN' >&2
+if [ -z "${FLEETINT_ENROLLMENT_TOKEN:-}" ]; then
+    echo 'Configure FLEETINT_ENROLLMENT_TOKEN_FILE or FLEETINT_ENROLLMENT_TOKEN' >&2
     exit 2
 fi
 case "${1:-}" in

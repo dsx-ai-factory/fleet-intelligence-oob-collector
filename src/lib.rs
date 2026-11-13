@@ -82,7 +82,7 @@ pub struct InventoryOptions {
 pub struct RuntimeOptions {
     pub inventory: InventoryOptions,
     pub backend_url: Option<String>,
-    pub collector_token: Option<String>,
+    pub enrollment_token: Option<String>,
     pub interval_seconds: u64,
     /// Delay before the retry pass at targets that failed as a whole; `None`
     /// skips the retry pass.
@@ -238,14 +238,14 @@ async fn run_runtime_until_shutdown(
     )?);
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
-    let collector_token =
-        required_backend_option(options.collector_token.take(), "collector token")?;
+    let enrollment_token =
+        required_backend_option(options.enrollment_token.take(), "enrollment token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
     let mut session = tokio::select! {
         biased;
         () = shutdown.wait() => return Ok(()),
-        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), collector_token) => session?,
+        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), enrollment_token) => session?,
     };
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
@@ -1509,7 +1509,7 @@ mod tests {
                 latency_probe: false,
             },
             backend_url: Some("https://private.example.com".to_string()),
-            collector_token: Some("must-not-be-reported".into()),
+            enrollment_token: Some("must-not-be-reported".into()),
             interval_seconds: 0,
             target_retry_delay: None,
             log_level: "info".to_string(),

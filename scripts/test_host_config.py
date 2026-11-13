@@ -25,7 +25,7 @@ printf '%s\\n' "$@"
 printf 'rust_log=%s\\n' "${RUST_LOG-}"
 printf 'gateway_log=%s\\n' "${FLEETINT_OTEL_GATEWAY_LOG_LEVEL-}"
 printf 'gateway_config=%s\\n' "${FLEETINT_GATEWAY_LOG_CONFIG-}"
-printf 'token=%s\\n' "${FLEETINT_COLLECTOR_TOKEN-}"
+printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
 ''')
         self.mock.chmod(0o755)
         self.launcher = self.directory / "run-service"
@@ -47,7 +47,7 @@ printf 'token=%s\\n' "${FLEETINT_COLLECTOR_TOKEN-}"
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("FLEETINT_") and key != "RUST_LOG"}
         env.update(settings or {})
-        env.setdefault("FLEETINT_COLLECTOR_TOKEN", "test-token")
+        env.setdefault("FLEETINT_ENROLLMENT_TOKEN", "test-token")
         env["TEST_RENDER_ARGS"] = str(self.directory / "render-args")
         command = [shell, str(self.nico if nico else self.launcher)]
         if not nico:
@@ -78,7 +78,7 @@ printf 'token=%s\\n' "${FLEETINT_COLLECTOR_TOKEN-}"
 
     def test_defaults_match_helm_with_old_and_new_service_files(self):
         self.compare_collector({})
-        settings = self.defaults | {"FLEETINT_COLLECTOR_TOKEN": "test-token"}
+        settings = self.defaults | {"FLEETINT_ENROLLMENT_TOKEN": "test-token"}
         self.compare_collector(settings)
         rendered = self.helm()
         for name, expected in (("RUST_LOG", self.defaults["RUST_LOG"]),
@@ -99,16 +99,16 @@ printf 'token=%s\\n' "${FLEETINT_COLLECTOR_TOKEN-}"
             "bmcCollector.latencyProbe.enabled": "false",
         })
 
-    def test_collector_token_secret_is_shared_by_both_workloads(self):
-        settings = {"backend.collectorToken.existingSecret": "collector-enrollment",
-                    "backend.collectorToken.secretKey": "credential"}
+    def test_enrollment_token_secret_is_shared_by_both_workloads(self):
+        settings = {"backend.enrollmentToken.existingSecret": "collector-enrollment",
+                    "backend.enrollmentToken.secretKey": "credential"}
         for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
             with self.subTest(template=template):
                 rendered = self.helm(settings, template)
-                self.assertRegex(rendered, r'- name: FLEETINT_COLLECTOR_TOKEN\s+valueFrom:\s+'
+                self.assertRegex(rendered, r'- name: FLEETINT_ENROLLMENT_TOKEN\s+valueFrom:\s+'
                                  r'secretKeyRef:\s+name: "collector-enrollment"\s+key: "credential"')
         config = self.helm(settings, "otel-gateway-configmap.yaml")
-        self.assertIn("sak_token: ${env:FLEETINT_COLLECTOR_TOKEN}", config)
+        self.assertIn("sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}", config)
 
     def test_empty_collector_settings_use_defaults(self):
         self.compare_collector({name: "" for name in (
@@ -142,7 +142,7 @@ printf 'token=%s\\n' "${FLEETINT_COLLECTOR_TOKEN-}"
     def test_token_file_precedence_and_secret_stays_out_of_arguments(self):
         token = self.directory / "token"
         token.write_text("file-token\n")
-        result = self.launch({"FLEETINT_COLLECTOR_TOKEN_FILE": str(token), "FLEETINT_COLLECTOR_TOKEN": "legacy-token"})
+        result = self.launch({"FLEETINT_ENROLLMENT_TOKEN_FILE": str(token), "FLEETINT_ENROLLMENT_TOKEN": "legacy-token"})
         args = self.arguments(result)
         self.assertNotIn("file-token", " ".join(args))
         self.assertNotIn("legacy-token", result.stdout)

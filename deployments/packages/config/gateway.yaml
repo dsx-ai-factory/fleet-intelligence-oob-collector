@@ -3,7 +3,7 @@
 extensions:
   sakauth:
     enroll_endpoint: ${env:ENROLL_ENDPOINT}
-    sak_token: ${env:FLEETINT_COLLECTOR_TOKEN}
+    sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}
   health_check:
     endpoint: 127.0.0.1:13133
 receivers:

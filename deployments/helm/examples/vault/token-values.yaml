@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The collector and bundled gateway share this collector credential.
 backend:
-  collectorToken:
-    existingSecret: fleet-intelligence-oob-collector-token
-    secretKey: collector-token
+  enrollmentToken:
+    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    secretKey: enrollment-token

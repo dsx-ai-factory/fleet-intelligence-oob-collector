@@ -51,10 +51,10 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "collectorToken"],
+      "required": ["url", "enrollmentToken"],
       "properties": {
         "url": {"$ref": "#/definitions/httpUrl"},
-        "collectorToken": {"$ref": "#/definitions/secretRef"}
+        "enrollmentToken": {"$ref": "#/definitions/secretRef"}
       }
     },
     "telemetry": {
