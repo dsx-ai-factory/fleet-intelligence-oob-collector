@@ -19,12 +19,12 @@ credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 
-# Fleet Intelligence destination and shared bootstrap token.
+# Fleet Intelligence destination and shared collector token.
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  agentToken:
-    existingSecret: fleet-intelligence-oob-collector-agent-token
-    secretKey: agent-token
+  collectorToken:
+    existingSecret: fleet-intelligence-oob-collector-token
+    secretKey: collector-token
 
 # External OTLP/gRPC endpoint; requires otelGateway.enabled=false.
 telemetry:

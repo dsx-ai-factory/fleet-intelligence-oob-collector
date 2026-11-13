@@ -45,7 +45,7 @@ pub struct CollectionOutcome {
     pub batch: BatchAttestation,
     /// Targets skipped because their nonce request failed.
     pub skipped_targets: usize,
-    /// A rotated agent token, if the backend issued one on a nonce response, so the
+    /// A rotated session JWT, if the backend issued one on a nonce response, so the
     /// caller can refresh its session and authenticate the upload with it.
     pub refreshed_jwt: Option<String>,
     /// BMCs whose collection failed in a way a later attempt this cycle could
@@ -119,7 +119,7 @@ pub async fn collect(
                         return Ok((None, None, false));
                     }
                 };
-                // The backend may rotate the agent token on a nonce response.
+                // The backend may rotate the session JWT on a nonce response.
                 let refreshed_jwt = nonce
                     .jwt_assertion
                     .clone()

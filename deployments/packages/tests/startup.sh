@@ -11,7 +11,7 @@ trap 'rm -rf "$test_root"' EXIT HUP INT TERM
 
 expect_missing_token() {
     status=0
-    env -u FLEETINT_AGENT_TOKEN -u FLEETINT_AGENT_TOKEN_FILE "$@" \
+    env -u FLEETINT_COLLECTOR_TOKEN -u FLEETINT_COLLECTOR_TOKEN_FILE "$@" \
         "$shell" "$launcher" "$service" > "$test_root/stdout" 2> "$test_root/stderr" || status=$?
     if [ "$status" -ne 2 ]; then
         echo "Missing token returned $status under $shell for $service; expected 2" >&2
@@ -23,11 +23,11 @@ expect_missing_token() {
 for shell in sh bash; do
     for service in collector gateway; do
         expect_missing_token
-        expect_missing_token FLEETINT_AGENT_TOKEN=
-        expect_missing_token FLEETINT_AGENT_TOKEN_FILE="$test_root/empty-token" \
-            FLEETINT_AGENT_TOKEN=legacy-token
-        expect_missing_token FLEETINT_AGENT_TOKEN_FILE="$test_root/missing-token" \
-            FLEETINT_AGENT_TOKEN=legacy-token
+        expect_missing_token FLEETINT_COLLECTOR_TOKEN=
+        expect_missing_token FLEETINT_COLLECTOR_TOKEN_FILE="$test_root/empty-token" \
+            FLEETINT_COLLECTOR_TOKEN=legacy-token
+        expect_missing_token FLEETINT_COLLECTOR_TOKEN_FILE="$test_root/missing-token" \
+            FLEETINT_COLLECTOR_TOKEN=legacy-token
     done
 done
 for unit in fleetint-oob-collector.service fleetint-otel-gateway.service fleetint-nico-health.service; do

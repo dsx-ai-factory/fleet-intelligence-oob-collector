@@ -1,7 +1,7 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# The collector and bundled gateway share this bootstrap credential.
+# The collector and bundled gateway share this collector credential.
 backend:
-  agentToken:
-    existingSecret: fleet-intelligence-oob-collector-agent-token
-    secretKey: agent-token
+  collectorToken:
+    existingSecret: fleet-intelligence-oob-collector-token
+    secretKey: collector-token

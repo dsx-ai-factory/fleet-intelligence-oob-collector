@@ -110,7 +110,7 @@ pub async fn enroll(
         jwt_assertion: String,
     }
     if token.trim().is_empty() {
-        return Err("agent token cannot be empty".into());
+        return Err("collector token cannot be empty".into());
     }
     let response = request(client, Method::POST, endpoint)
         .bearer_auth(token)

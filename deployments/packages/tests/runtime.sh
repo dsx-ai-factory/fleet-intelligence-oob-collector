@@ -108,15 +108,15 @@ tls_pid=$!
 wait_for "$tls_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18889' 2>/dev/null
 wait_for "$backend_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18888' 2>/dev/null
 credentials=$(mktemp -d /tmp/collector-credentials.XXXXXX)
-printf 'test-token\n' > "$credentials/agent-token"
-chmod 640 "$credentials/agent-token"
-chown root:fleetint-oob "$credentials" "$credentials/agent-token"
+printf 'test-token\n' > "$credentials/collector-token"
+chmod 640 "$credentials/collector-token"
+chown root:fleetint-oob "$credentials" "$credentials/collector-token"
 chmod 750 "$credentials"
 start=$(sed -n 's/^ExecStart=//p' /usr/lib/systemd/system/fleetint-oob-collector.service)
 start=${start//\$\$/\$}
 # Parse the installed unit's shell quoting; exec preserves the collector PID.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_AGENT_TOKEN_FILE="$credentials/agent-token" FLEETINT_AGENT_TOKEN=wrong-legacy-token FLEETINT_DISABLE_LATENCY_PROBE=true \
+    env FLEETINT_COLLECTOR_TOKEN_FILE="$credentials/collector-token" FLEETINT_COLLECTOR_TOKEN=wrong-legacy-token FLEETINT_DISABLE_LATENCY_PROBE=true \
     FLEETINT_TARGET_CONCURRENCY=3 FLEETINT_BMC_MAX_IN_FLIGHT=1 FLEETINT_BMC_REQUESTS_PER_SECOND=4 FLEETINT_TIMEOUT_SECONDS=5 \
     FLEETINT_BACKEND_URL=http://127.0.0.1:18888 \
     /bin/sh -ec "exec $start" > "$work/collector.log" 2>&1 &
@@ -139,7 +139,7 @@ fi
 wait_for "$collector_pid" grep -Fq 'retrying failed inventory targets after a delay' "$work/collector.log"
 # Gateway configuration is validated and its real health endpoint is probed.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_AGENT_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
+    env FLEETINT_COLLECTOR_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
     ENROLL_ENDPOINT=https://127.0.0.1:18889/api/v1/health/enroll \
     /usr/lib/fleetint-oob/run-service gateway > "$work/gateway.log" 2>&1 &
 gateway_pid=$!

@@ -51,10 +51,10 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "agentToken"],
+      "required": ["url", "collectorToken"],
       "properties": {
         "url": {"$ref": "#/definitions/httpUrl"},
-        "agentToken": {"$ref": "#/definitions/secretRef"}
+        "collectorToken": {"$ref": "#/definitions/secretRef"}
       }
     },
     "telemetry": {

@@ -21,13 +21,13 @@ sh /startup.sh /usr/lib/fleetint-oob/run-service /usr/lib/systemd/system
 for shell in /bin/sh /bin/bash; do
     for service in collector gateway; do
         status=0
-        runuser -u fleetint-oob -- env FLEETINT_AGENT_TOKEN=test-token \
-            FLEETINT_AGENT_TOKEN_FILE=/etc/fleetint-oob/service.conf \
+        runuser -u fleetint-oob -- env FLEETINT_COLLECTOR_TOKEN=test-token \
+            FLEETINT_COLLECTOR_TOKEN_FILE=/etc/fleetint-oob/service.conf \
             "$shell" /usr/lib/fleetint-oob/run-service "$service" || status=$?
         [ "$status" = 2 ]
     done
 done
-if runuser -u fleetint-oob -- env -u FLEETINT_AGENT_TOKEN -u FLEETINT_AGENT_TOKEN_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
+if runuser -u fleetint-oob -- env -u FLEETINT_COLLECTOR_TOKEN -u FLEETINT_COLLECTOR_TOKEN_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
 cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 # Execute the real hook against an alternate root without any executable tools.
 alternate_root="$work/alternate-root"
