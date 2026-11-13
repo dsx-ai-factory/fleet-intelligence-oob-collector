@@ -1,6 +1,6 @@
 # Fleet Intelligence Out-of-Band Collector
 
-The Fleet Intelligence out-of-band (OOB) collector gathers hardware inventory and GPU attestation evidence from server BMCs over Redfish. Its Helm deployment includes NICo hardware health for BMC metrics and logs, and an authenticated OpenTelemetry gateway for telemetry export. Collection runs independently of the host operating system, without an in-band host agent.
+The Fleet Intelligence out-of-band (OOB) collector gathers hardware inventory and GPU attestation evidence from server BMCs over Redfish. Its Helm deployment and Linux packages include NICo hardware health for BMC metrics and logs, and an authenticated OpenTelemetry gateway for telemetry export. Collection runs independently of the host operating system, without an in-band host agent.
 
 ## What it provides
 
@@ -10,10 +10,11 @@ The Fleet Intelligence out-of-band (OOB) collector gathers hardware inventory an
 - [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) from the `infra-controller` health crate for metrics and BMC log collection.
 - An authenticated OpenTelemetry gateway for telemetry export.
 - The `fleet-intelligence-oob-collector` Helm chart for Kubernetes deployment from NGC.
+- DEB/RPM host packages that run the collector, NICo health, and gateway with systemd.
 
 ## How it works
 
-The Helm chart deploys three components by default:
+The Helm chart deploys three components by default; the Linux package bundles the same components:
 
 ```text
 OOB collector ──────────────► inventory and attestation APIs
@@ -31,8 +32,8 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 
 ## Getting started
 
-- Follow [Installation](docs/installation.md) to deploy the Helm chart and verify collection.
-- See [Configuration](docs/configuration.md) for targets, credentials, and other Helm values.
+- For Kubernetes, follow [Installation](docs/installation.md) and [Configuration](docs/configuration.md).
+- For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
 
 ## Documentation
@@ -41,6 +42,8 @@ Read the [collector documentation](https://docs.nvidia.com/fleet-intel/oob-colle
 
 - [Installation](docs/installation.md): Kubernetes setup, verification, and removal.
 - [Configuration](docs/configuration.md): Helm values for targets, credentials, telemetry, and collection.
+- [Install on Linux](docs/host-installation.md): release downloads, installation, target setup, service checks, disconnecting targets, and uninstalling.
+- [Configure Linux packages](docs/host-configuration.md): TOML, credentials, service settings, local telemetry, and troubleshooting.
 - [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
 - [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
 
