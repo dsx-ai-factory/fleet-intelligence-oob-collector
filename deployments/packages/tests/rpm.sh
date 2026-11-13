@@ -9,12 +9,14 @@ archive="/packages/$(awk '{print $2}' /packages/checksums.txt)"
 # Real RPM transactions execute the packaged scriptlets. Only the systemd
 # manager is replaced: this container does not boot systemd as PID 1.
 mkdir -p "$work/bin" /run/systemd/system
-export RPM_SERVICE_CALLS="$work/services"
+export RPM_SERVICE_CALLS="$work/services" ACTIVE_SERVICES='' FAIL_RESTART=0
 cat > "$work/bin/systemctl" <<'STUB'
 #!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$RPM_SERVICE_CALLS"
 case "$1" in
+    is-active) case " $ACTIVE_SERVICES " in *" $3 "*) exit 0;; *) exit 3;; esac ;;
+    try-restart) [ "$FAIL_RESTART" = 0 ] ;;
     --no-reload) exec /usr/bin/systemctl.package-test --root=/ "$@" ;;
 esac
 STUB
@@ -75,11 +77,23 @@ chown root:root "$conf/credentials/credentials.json"
 systemd-tmpfiles --create --prefix=/etc/fleetint-oob
 [ "$(stat -c %a "$conf/credentials/credentials.json")" = 600 ]
 /usr/bin/systemctl.package-test --root=/ --no-reload enable fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
-# Apply installation permission rules and retain operator configuration.
-systemd-tmpfiles --create /usr/lib/fleetint-oob/permissions.conf
+export ACTIVE_SERVICES=fleetint-oob-collector.service
+: > "$RPM_SERVICE_CALLS"
+upgrade=$(rpm -qp --qf '/packages/test-fixtures/%{NAME}-%{VERSION}+test1-%{RELEASE}.%{ARCH}.rpm' "$archive")
+[ -s "$upgrade" ] || { echo 'Missing matching RPM upgrade fixture' >&2; exit 1; }
+rpm -Uvh "$upgrade"
+sha256sum -c "$work/config.sha256"
+printf 'try-restart fleetint-oob-collector.service\n' > "$work/expected"
+grep '^try-restart ' "$RPM_SERVICE_CALLS" > "$work/restarts"
+cmp "$work/expected" "$work/restarts"
+[ -L /etc/systemd/system/multi-user.target.wants/fleetint-oob-collector.service ]
 runuser -u fleetint-oob -- test -r "$conf/credentials/credentials.json"
 [ "$(stat -c %a "$work/outside-credential")" = 600 ]
 [ "$(stat -c %g "$work/outside-credential")" = 0 ]
+# A failed restart must warn without aborting the real package transaction.
+export FAIL_RESTART=1
+rpm -Uvh --replacepkgs "$upgrade" > "$work/reinstall.log" 2>&1
+grep -F '[WARNING] Could not restart fleetint-oob-collector.service' "$work/reinstall.log"
 sha256sum -c "$work/config.sha256"
 rpm -e fleetint-oob
 [ ! -e /usr/bin/bmc-collector ]
@@ -90,4 +104,4 @@ rpm -e fleetint-oob
 [ -e "$conf/config.toml.rpmsave" ]
 [ -e "$conf/credentials/credentials.json" ]
 getent passwd fleetint-oob >/dev/null
-printf 'RPM installation, runtime and removal checks passed\n'
+printf 'RPM installation, runtime, upgrade and removal checks passed\n'

@@ -208,18 +208,22 @@ debian-test: debian-package
 	docker build --file deployments/packages/tests/Dockerfile --tag fleetint-oob-debian-test .
 	docker run --rm --mount "type=bind,src=$(abspath $(PACKAGE_OUTPUT)),dst=/packages,readonly" fleetint-oob-debian-test
 
+# RPM test upgrades are fixtures, excluded from published artifact globs.
 .PHONY: rpm-package rpm-test
 RPM_OUTPUT ?= dist/rpm
+PACKAGE_TEST_UPGRADE ?= 0
 rpm-package: package-source-check
 	docker build --file deployments/packages/Dockerfile --target export \
 		--build-arg NICO_SOURCE_REF="$(NICO_REF)" \
 		--build-arg NFPM_VERSION="$$(cat deployments/packages/nfpm.version)" \
 		--build-arg PACKAGE_VERSION="$(PACKAGE_VERSION)" \
 		--build-arg PACKAGE_FORMAT=rpm \
+		--build-arg PACKAGE_TEST_UPGRADE="$(PACKAGE_TEST_UPGRADE)" \
 		--build-arg SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" \
 		--output type=local,dest=$(RPM_OUTPUT) .
 
-rpm-test: rpm-package
+rpm-test:
+	$(MAKE) rpm-package PACKAGE_TEST_UPGRADE=1
 	docker build --file deployments/packages/tests/Dockerfile.rpm --tag fleetint-oob-rpm-test .
 	docker run --rm --mount "type=bind,src=$(abspath $(RPM_OUTPUT)),dst=/packages,readonly" fleetint-oob-rpm-test
 

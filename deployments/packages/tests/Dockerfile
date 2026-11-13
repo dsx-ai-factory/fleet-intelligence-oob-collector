@@ -8,5 +8,6 @@ COPY deployments/packages/tests/smoke.sh /smoke.sh
 COPY deployments/packages/tests/startup.sh /startup.sh
 COPY deployments/packages/tests/runtime.sh /runtime.sh
 COPY deployments/packages/tests/fixtures/backend.sh /backend.sh
+COPY deployments/packages/tests/lifecycle.sh /lifecycle.sh
 RUN chmod 755 /backend.sh
 CMD ["/bin/sh", "/smoke.sh"]

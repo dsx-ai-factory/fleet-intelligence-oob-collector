@@ -18,7 +18,7 @@ cat > "$test_root/bin/systemctl" <<'EOF'
 #!/bin/sh
 printf '%s %s\n' "${0##*/}" "$*" >> "$HOOK_TEST_LOG"
 case "$*" in
-    debian-installed*|--quiet*) exit 1 ;;
+    debian-installed*|--quiet*) exit "${HOOK_TEST_EXISTING:-1}" ;;
 esac
 exit "${HOOK_TEST_FAILURE:-0}"
 EOF
@@ -62,11 +62,20 @@ fi
 test "$(grep -c 'update-state' "$HOOK_TEST_LOG")" = 4
 grep -q 'systemctl --system daemon-reload' "$HOOK_TEST_LOG"
 
+export HOOK_TEST_EXISTING=0
+run_hook deb/postinst configure
+test "$(grep -c 'deb-systemd-helper enable' "$HOOK_TEST_LOG")" = 4
+unset HOOK_TEST_EXISTING
+
+run_hook deb/prerm upgrade
+test ! -s "$HOOK_TEST_LOG"
 run_hook deb/prerm remove
 grep -Fx "deb-systemd-invoke stop $units" "$HOOK_TEST_LOG"
 if grep -q 'disable' "$HOOK_TEST_LOG"; then
     echo 'Debian removal discarded enablement state' >&2; exit 1
 fi
+run_hook deb/prerm failed-upgrade
+grep -q 'deb-systemd-invoke stop' "$HOOK_TEST_LOG"
 
 run_hook deb/postrm remove
 grep -Fx "deb-systemd-helper mask $units" "$HOOK_TEST_LOG"
@@ -95,6 +104,8 @@ unset DPKG_ROOT
 run_hook rpm/postinstall 1
 grep -Fx -- '--create /usr/lib/fleetint-oob/permissions.conf' "$HOOK_TEST_PERMISSION_LOG"
 test "$(cat "$HOOK_TEST_LOG")" = 'systemctl daemon-reload'
+run_hook rpm/preremove 1
+test ! -s "$HOOK_TEST_LOG"
 run_hook rpm/preremove 0
 grep -Fx "systemctl --no-reload disable $units" "$HOOK_TEST_LOG"
 grep -Fx "systemctl stop $units" "$HOOK_TEST_LOG"
@@ -122,6 +133,11 @@ grep -q 'disable' "$HOOK_TEST_LOG"
 if grep -q 'systemctl stop' "$HOOK_TEST_LOG"; then
     echo 'A hook stopped services without a running systemd instance' >&2; exit 1
 fi
+# Deleted conffiles remain deleted on upgrade, without breaking dpkg/rpm.
+rm "$test_root/etc/fleetint-oob/service.conf"
+run_hook deb/postinst configure
+run_hook rpm/postinstall 2
+test ! -e "$test_root/etc/fleetint-oob/service.conf"
 echo 'Package lifecycle hook checks passed.'
 
 export HOOK_TEST_BAD_ACCOUNT=0

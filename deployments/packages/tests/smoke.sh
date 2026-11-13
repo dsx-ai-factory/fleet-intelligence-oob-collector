@@ -96,10 +96,22 @@ systemd-tmpfiles --create /usr/lib/fleetint-oob/permissions.conf
 [ "$(stat -c %g "$work/outside-credential")" = 0 ]
 runuser -u fleetint-oob -- test -r "$conf/credentials/credentials.json"
 /bin/bash /runtime.sh
-# Removal retains operator edits; purge removes package-owned configuration.
-printf '\n# local operator setting\n' >> "$conf/service.conf"
-sha256sum "$conf/service.conf" > "$work/config.sha256"
+/bin/sh /lifecycle.sh
+# Debian owns service lifecycle, and conffiles survive reinstall and removal.
+printf '\n# local operator setting\n' >> /etc/fleetint-oob/service.conf
+sha256sum /etc/fleetint-oob/service.conf > "$work/config.sha256"
 systemctl enable fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
+apt-get install -y --reinstall "$archive"
+sha256sum -c "$work/config.sha256"
+# Exercise dpkg's upgrade paths without rebuilding either binary.
+dpkg-deb --raw-extract "$archive" "$work/upgrade"
+version=$(dpkg-deb -f "$archive" Version)
+sed -i "s/^Version: .*/Version: ${version}+test1/" "$work/upgrade/DEBIAN/control"
+dpkg-deb --root-owner-group --build "$work/upgrade" "$work/upgrade.deb"
+apt-get install -y "$work/upgrade.deb"
+sha256sum -c "$work/config.sha256"
+[ -L /etc/systemd/system/multi-user.target.wants/fleetint-oob-collector.service ]
+[ -L /etc/systemd/system/multi-user.target.wants/fleetint-nico-health.service ]
 apt-get remove -y "$pkg"
 sha256sum -c "$work/config.sha256"
 [ ! -e /usr/lib/fleetint-oob/nico-hardware-health ]
