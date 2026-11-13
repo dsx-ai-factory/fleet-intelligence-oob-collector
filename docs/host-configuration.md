@@ -154,6 +154,14 @@ The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, 
 
 Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`, including in preserved local configurations. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same collector token as the collector but enrolls separately.
 
+Keep the gateway's token binding when editing its configuration so it reads the collector token from the service environment:
+
+```yaml
+extensions:
+  sakauth:
+    sak_token: ${env:FLEETINT_COLLECTOR_TOKEN}
+```
+
 ### Component reporting
 
 Systemd reads `service.conf` before starting each service and passes its values through the process environment. The collector launcher turns the collection settings into CLI arguments, and the collector includes supported configuration fields in its inventory uploads under `collector.config`.
@@ -212,38 +220,3 @@ Optional local health checks are available at `http://127.0.0.1:9009/livez` for 
 Download the new package from [GitHub Releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases), then follow the [installation commands](host-installation.md#install) with the new file. Modified package configuration is preserved. Review package-manager prompts and merge any new configuration defaults into your local settings as needed.
 
 An upgrade restarts services that were already active and leaves stopped services stopped. Review each service after the transaction. Service-management failures are reported as warnings; a completed package transaction alone does not prove that a restart succeeded.
-
-## Remove a target
-
-Before deleting a machine in Fleet Intelligence, remove its `[[targets]]` entry from `/etc/fleetint-oob/config.toml` and restart the stack:
-
-```bash
-sudo systemctl restart fleetint-oob.target
-```
-
-Confirm that collection continues for the remaining targets. A few uploads already in progress can still arrive. If you remove the last target, stop or uninstall the stack instead of starting it with an empty target list. Remove unused per-MAC credential overrides only after nothing else uses them. Existing backend data remains.
-
-## Stop or uninstall
-
-Stop collection and disable startup:
-
-```bash
-sudo systemctl disable --now fleetint-oob.target \
-  fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
-```
-
-Stopping the collector can take up to 300 seconds while it finishes pending inventory uploads. Remove the package with your package manager:
-
-For DEB systems:
-
-```bash
-sudo apt remove fleetint-oob
-```
-
-For RPM systems:
-
-```bash
-sudo dnf remove fleetint-oob
-```
-
-Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential/token files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.

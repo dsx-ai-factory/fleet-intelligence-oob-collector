@@ -113,4 +113,46 @@ sudo journalctl -u fleetint-oob-collector.service \
 
 Check for successful inventory collection and uploads, and address any NICo or gateway errors. Confirm fresh inventory and telemetry for your target in Fleet Intelligence.
 
-For troubleshooting, configuration changes, upgrades, and removal, use [Configure Linux packages](host-configuration.md#troubleshooting).
+For troubleshooting, collection settings, and upgrades, use [Configure Linux packages](host-configuration.md#troubleshooting).
+
+## Disconnect a BMC or target
+
+To stop collecting from a BMC, remove its `[[targets]]` entry from `/etc/fleetint-oob/config.toml`:
+
+```bash
+sudoedit /etc/fleetint-oob/config.toml
+```
+
+If other targets remain, restart the stack and check that collection continues for them:
+
+```bash
+sudo systemctl restart fleetint-oob.target
+sudo journalctl -u fleetint-oob-collector.service -n 100 --no-pager
+```
+
+If you removed the last target, stop and disable the services using the first command in [Uninstall](#uninstall) instead of restarting with an empty target list. You can leave the package installed. Disconnecting a target keeps its existing data in Fleet Intelligence; uploads already in progress can still arrive.
+
+## Uninstall
+
+Stop collection and disable startup:
+
+```bash
+sudo systemctl disable --now fleetint-oob.target \
+  fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service
+```
+
+Stopping the collector can take up to 300 seconds while it finishes pending inventory uploads. Remove the package with your package manager:
+
+For DEB systems:
+
+```bash
+sudo apt remove fleetint-oob
+```
+
+For RPM systems:
+
+```bash
+sudo dnf remove fleetint-oob
+```
+
+Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential/token files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
