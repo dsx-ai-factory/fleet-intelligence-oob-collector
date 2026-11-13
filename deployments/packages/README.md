@@ -51,28 +51,22 @@ For installation, service configuration, target disconnect, and removal, use [In
 
 ## Package validation
 
-Run `make packages-test-hooks packages-test-build` for isolated lifecycle and build regression tests. They use mocked service/compiler commands and local Git fixtures; they never manage host services or fetch remote sources.
+Run `python3 -m unittest discover -s scripts -p 'test_deployment_config.py'` for Helm rendering and Linux launcher configuration checks, including shared defaults and overrides. Run `make packages-test-hooks packages-test-build` for isolated installation/removal hook and build regression tests. They use mocked service/compiler commands and local Git fixtures; they never manage host services or fetch remote sources.
 
 Package checks run with `make packages-check-deb` or `make packages-check-rpm`
 using the distribution's inspection tools. They never install packages.
-Validate systemd startup, service sandboxing, reboot behavior, upgrade/rollback, and shutdown during collection in a disposable VM before production use. See the [release process](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for signed DEB/RPM assets, signing prerequisites, verification, and retry instructions.
+Validate systemd startup, service sandboxing, reboot behavior, and shutdown during collection in a disposable VM before production use. See the [release process](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/RELEASE.md) for signed DEB/RPM assets, signing prerequisites, verification, and retry instructions.
 
 ## Docker validation
 
-`make debian-test` builds the same pinned native sources and nFPM manifest in
-Docker, installs the actual package in Debian 12, starts all three daemons under
-the service account, verifies enrollment and authenticated gateway export against
-a loopback fixture, and checks configuration preservation, upgrades, removal,
-and purge. The shell tests also cover environment/file token selection, active-only
-restarts, visible failure reporting, and permission migration without following
-credential symlinks. No customer backend or BMC is contacted.
+`make debian-test` builds the pinned native sources and nFPM manifest in Docker, installs the actual package in Debian 12, starts all three daemons under the service account, and verifies enrollment and authenticated gateway export against a loopback fixture. It checks removal and purge, retention of operator configuration and credentials, environment/file token selection, configuration-failure handling, and permission rules without following credential symlinks. No customer backend or BMC is contacted.
 
 `make package-snapshot` writes an unsigned snapshot to `dist/snapshot/`.
 `make debian-package PACKAGE_VERSION=1.2.3-rc.1` overrides the release version.
 The package metadata uses Debian's `~` prerelease ordering; exported filenames
 retain the requested version. Docker builds and tests do not boot systemd as
 PID 1. Validate service sandboxing and musl DNS on disposable target VMs before
-production rollout. The RPM container tests execute real installation, upgrade, and removal transactions on Rocky Linux 9 while replacing the systemd manager with a stub.
+production rollout. The RPM container tests execute real installation and removal transactions on Rocky Linux 9 while replacing the systemd manager with a stub.
 
 ## License notices
 
