@@ -1,6 +1,6 @@
 # Install on Linux (DEB/RPM)
 
-Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and a Fleet Intelligence collector token. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
+Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and a Fleet Intelligence enrollment token. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
 
 ## Download the package
 
@@ -75,20 +75,20 @@ credentials_profile = "bmc"
 
 Add one `[[targets]]` entry per BMC. The collector and NICo use this shared target list and credential file.
 
-### Set the collector token
+### Set the enrollment token
 
-Create a protected file containing only your collector token:
+Create a protected file containing only your enrollment token:
 
 ```bash
-sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/collector-token
-sudoedit /etc/fleetint-oob/collector-token
+sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/enrollment-token
+sudoedit /etc/fleetint-oob/enrollment-token
 sudoedit /etc/fleetint-oob/service.conf
 ```
 
 Set this line in `service.conf`:
 
 ```ini
-FLEETINT_COLLECTOR_TOKEN_FILE=/etc/fleetint-oob/collector-token
+FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/enrollment-token
 ```
 
 The collector and gateway use the same token. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).

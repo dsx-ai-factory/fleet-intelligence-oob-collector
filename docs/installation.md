@@ -10,7 +10,7 @@ For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 - Helm 3
 - Network access from the cluster to your BMCs and to Fleet Intelligence
 - The IP and MAC address of each BMC, and its login credentials
-- A Fleet Intelligence collector token
+- A Fleet Intelligence enrollment token
 
 ## Choose a namespace
 
@@ -22,7 +22,7 @@ export NAMESPACE=fleet-intelligence
 
 ## Configure targets and Secrets
 
-You give the chart two things: your target list, in a values file, and two Kubernetes Secrets holding the BMC credentials file and the collector token. The chart never stores passwords; it only references the Secrets.
+You give the chart two things: your target list, in a values file, and two Kubernetes Secrets holding the BMC credentials file and the enrollment token. The chart never stores passwords; it only references the Secrets.
 
 The steps below create the Secrets by hand. To sync them from Vault or OpenBao instead, follow [Credentials](credentials.md) and then continue at [Save your values file](#save-your-values-file).
 
@@ -30,7 +30,7 @@ The steps below create the Secrets by hand. To sync them from Vault or OpenBao i
 
 Copy [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json) to a private directory, for example `/secure/path/to/credentials.json`, set its mode to `0600`, and fill in your BMC usernames and passwords. [Configuration](configuration.md#bmc-credentials-file) explains the file format.
 
-Get the collector token from your Fleet Intelligence administrator. Save it to `/secure/path/to/collector-token` with nothing else in the file, not even a trailing newline, and set its mode to `0600`.
+Get the enrollment token from your Fleet Intelligence administrator. Save it to `/secure/path/to/enrollment-token` with nothing else in the file, not even a trailing newline, and set its mode to `0600`.
 
 Create the Secrets from those files:
 
@@ -38,9 +38,9 @@ Create the Secrets from those files:
 kubectl create namespace "$NAMESPACE" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl create secret generic fleet-intelligence-oob-collector-token \
+kubectl create secret generic fleet-intelligence-oob-collector-enrollment-token \
   --namespace "$NAMESPACE" \
-  --from-file=collector-token=/secure/path/to/collector-token
+  --from-file=enrollment-token=/secure/path/to/enrollment-token
 
 kubectl create secret generic fleet-intelligence-bmc-credentials \
   --namespace "$NAMESPACE" \
@@ -65,9 +65,9 @@ credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 backend:
-  collectorToken:
-    existingSecret: fleet-intelligence-oob-collector-token
-    secretKey: collector-token
+  enrollmentToken:
+    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    secretKey: enrollment-token
 ```
 
 `backend.url` defaults to the production endpoint, `https://data.fleet-intelligence.nvidia.com`. Set it in your values file when using a different Fleet Intelligence endpoint.
@@ -128,7 +128,7 @@ If something fails:
 | Problem | What to check |
 | --- | --- |
 | A BMC rejects the login | The target's `credentialsProfile`, any override for its MAC, and the account on the BMC itself |
-| The collector or gateway can't enroll | That the collector token is valid and `backend.url` is correct |
+| The collector or gateway can't enroll | That the enrollment token is valid and `backend.url` is correct |
 | The gateway can't export telemetry | That the backend is reachable from the cluster and its TLS certificate is trusted |
 
 To change settings later, edit your values file and run the same `helm upgrade --install` command. See [Rotation and ownership](credentials.md#rotation-and-ownership) for which changes take effect on their own and which need a restart.
@@ -175,7 +175,7 @@ Uninstalling stops collection for every target in the release. Data that was alr
 3. Delete unused credential Secrets:
 
    ```bash
-   kubectl delete secret fleet-intelligence-oob-collector-token \
+   kubectl delete secret fleet-intelligence-oob-collector-enrollment-token \
      fleet-intelligence-bmc-credentials --namespace "$NAMESPACE"
    ```
 

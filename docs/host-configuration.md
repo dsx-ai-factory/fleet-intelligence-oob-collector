@@ -9,7 +9,7 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 | `/etc/fleetint-oob/config.toml` | Shared targets, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/service.conf` | Backend/token settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
 | `/etc/fleetint-oob/credentials/credentials.json` | Operator-created BMC credentials | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/collector-token` | Optional operator-created collector token file | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/enrollment-token` | Optional operator-created enrollment token file | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/gateway.yaml` | OTLP receivers, backend export, and gateway processing | Installed root-owned, `0644` |
 
 Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Installation grants service access to standard configuration and credential paths. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
@@ -81,12 +81,12 @@ Set these variables in `service.conf`:
 | `FLEETINT_BACKEND_URL` | `https://data.fleet-intelligence.nvidia.com` | Collector API origin, without an API path. |
 | `BACKEND_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health` | Gateway telemetry base; exports use `/metrics` and `/logs` beneath it. |
 | `ENROLL_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health/enroll` | Gateway enrollment URL. |
-| `FLEETINT_COLLECTOR_TOKEN_FILE` | Empty | Protected collector token file used by the collector and gateway. |
-| `FLEETINT_COLLECTOR_TOKEN` | Empty | Alternative inline environment-file token. Prefer the token file. |
+| `FLEETINT_ENROLLMENT_TOKEN_FILE` | Empty | Protected enrollment token file used by the collector and gateway. |
+| `FLEETINT_ENROLLMENT_TOKEN` | Empty | Alternative inline environment-file token. Prefer the token file. |
 
 When using another backend, set all three URL variables explicitly. Systemd environment files do not expand variable references, so `BACKEND_ENDPOINT=${FLEETINT_BACKEND_URL}/api/v1/health` does not construct a URL.
 
-The token file takes precedence over `FLEETINT_COLLECTOR_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline token. The launchers load the token into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
+The token file takes precedence over `FLEETINT_ENROLLMENT_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline token. The launchers load the token into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
 
 ## Collection settings
 
@@ -152,14 +152,14 @@ System and Chassis status follow discovery cadence; Manager status follows manag
 
 The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, OTLP HTTP at `127.0.0.1:4318`, and gateway health at `127.0.0.1:13133`. NICo's Prometheus endpoint is `http://127.0.0.1:9009/metrics`. Keep these local listeners private to the host.
 
-Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same collector token as the collector but enrolls separately.
+Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same enrollment token as the collector but enrolls separately.
 
-Keep the gateway's token binding when editing its configuration so it reads the collector token from the service environment:
+Keep the gateway's token binding when editing its configuration so it reads the enrollment token from the service environment:
 
 ```yaml
 extensions:
   sakauth:
-    sak_token: ${env:FLEETINT_COLLECTOR_TOKEN}
+    sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}
 ```
 
 ### Component reporting
@@ -208,7 +208,7 @@ For password and token rotation, follow [rotation and ownership](credentials.md#
 | Problem | What to check |
 | --- | --- |
 | Service stops with exit status `2` | Invalid settings or an unreadable token file. Check the service log, correct the setting, and restart the affected service. |
-| Collector repeatedly fails to enroll | Collector token, backend addresses, host connectivity, proxy, and backend certificate trust. |
+| Collector repeatedly fails to enroll | Enrollment token, backend addresses, host connectivity, proxy, and backend certificate trust. |
 | Inventory cannot read a BMC | Target address/MAC, credential profile or MAC override, and BMC certificate trust if you enabled verification. See [proxy and TLS](host-configuration.md#proxy-and-tls). |
 | NICo fails before starting | TOML syntax, a readable credentials file, and valid `[nico_health]` settings. |
 | Services run but telemetry is absent | BMC credentials, NICo logs, the OTLP destination, all gateway URLs, and gateway enrollment/export errors. |

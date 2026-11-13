@@ -153,14 +153,14 @@ You can change passwords without restarting anything: the collector and NICo bot
 ```yaml
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  collectorToken:
-    existingSecret: fleet-intelligence-oob-collector-token
-    secretKey: collector-token
+  enrollmentToken:
+    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    secretKey: enrollment-token
 ```
 
 `backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
 
-`backend.collectorToken` points to the Secret that holds the collector token. The collector and the bundled gateway both use it.
+`backend.enrollmentToken` points to the Secret that holds the enrollment token. The collector and the bundled gateway both use it.
 
 ## Components and telemetry
 
