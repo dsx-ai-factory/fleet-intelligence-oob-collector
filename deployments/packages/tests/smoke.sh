@@ -21,13 +21,13 @@ sh /startup.sh /usr/lib/fleetint-oob/run-service /usr/lib/systemd/system
 for shell in /bin/sh /bin/bash; do
     for service in collector gateway; do
         status=0
-        runuser -u fleetint-oob -- env FLEETINT_AGENT_TOKEN=test-token \
-            FLEETINT_AGENT_TOKEN_FILE=/etc/fleetint-oob/service.conf \
+        runuser -u fleetint-oob -- env FLEETINT_ENROLLMENT_TOKEN=test-token \
+            FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/service.conf \
             "$shell" /usr/lib/fleetint-oob/run-service "$service" || status=$?
         [ "$status" = 2 ]
     done
 done
-if runuser -u fleetint-oob -- env -u FLEETINT_AGENT_TOKEN -u FLEETINT_AGENT_TOKEN_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
+if runuser -u fleetint-oob -- env -u FLEETINT_ENROLLMENT_TOKEN -u FLEETINT_ENROLLMENT_TOKEN_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
 cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 # Execute the real hook against an alternate root without any executable tools.
 alternate_root="$work/alternate-root"
@@ -49,7 +49,6 @@ DPKG_ROOT="$alternate_root" /bin/sh "$work/control/postinst" configure
 sha256sum -c "$work/alternate-accounts.sha256"
 [ -s /usr/share/doc/fleetint-oob/copyright ]
 [ "$(dpkg-deb -f "$archive" Maintainer)" = "NVIDIA Fleet Intelligence Team" ]
-docs=/usr/share/doc/fleetint-oob
 systemd-analyze verify /usr/lib/systemd/system/fleetint-oob-collector.service /usr/lib/systemd/system/fleetint-nico-health.service /usr/lib/systemd/system/fleetint-otel-gateway.service /usr/lib/systemd/system/fleetint-oob.target
 for unit in fleetint-oob.target fleetint-oob-collector.service fleetint-nico-health.service fleetint-otel-gateway.service; do
     [ ! -e "/etc/systemd/system/multi-user.target.wants/$unit" ]
@@ -87,7 +86,7 @@ chown root:root "$conf/config.toml" "$conf/credentials/credentials.json"
 printf 'outside fixture' > "$work/outside-credential"
 chmod 600 "$work/outside-credential"
 ln -s "$work/outside-credential" "$conf/credentials/symlink"
-# Permission migration runs only from package hooks, not during boot.
+# Package permission rules run at installation, not during boot.
 [ ! -e /usr/lib/tmpfiles.d/fleetint-oob.conf ]
 systemd-tmpfiles --create --prefix=/etc/fleetint-oob
 [ "$(stat -c %a "$conf/credentials/credentials.json")" = 600 ]

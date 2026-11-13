@@ -82,7 +82,7 @@ pub struct InventoryOptions {
 pub struct RuntimeOptions {
     pub inventory: InventoryOptions,
     pub backend_url: Option<String>,
-    pub agent_token: Option<String>,
+    pub enrollment_token: Option<String>,
     pub interval_seconds: u64,
     /// Delay before the retry pass at targets that failed as a whole; `None`
     /// skips the retry pass.
@@ -177,6 +177,7 @@ fn parse_optional_setting(
 ) -> Result<Option<String>, Box<dyn Error>> {
     match value {
         Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value.is_empty() => Ok(None),
         Ok(value) if allowed.contains(&value.as_str()) => Ok(Some(value)),
         _ => Err(format!("{name} has an unsupported value").into()),
     }
@@ -237,13 +238,14 @@ async fn run_runtime_until_shutdown(
     )?);
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
-    let agent_token = required_backend_option(options.agent_token.take(), "agent token")?;
+    let enrollment_token =
+        required_backend_option(options.enrollment_token.take(), "enrollment token")?;
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
     let mut session = tokio::select! {
         biased;
         () = shutdown.wait() => return Ok(()),
-        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), agent_token) => session?,
+        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), enrollment_token) => session?,
     };
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
@@ -1507,7 +1509,7 @@ mod tests {
                 latency_probe: false,
             },
             backend_url: Some("https://private.example.com".to_string()),
-            agent_token: Some("must-not-be-reported".into()),
+            enrollment_token: Some("must-not-be-reported".into()),
             interval_seconds: 0,
             target_retry_delay: None,
             log_level: "info".to_string(),
@@ -1561,6 +1563,36 @@ mod tests {
             let gateway = report.otel_gateway.unwrap();
             assert!(!gateway.enabled);
             assert_eq!(gateway.log_level.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn behavior_reporting_treats_empty_optional_settings_as_unset() {
+        let options = reporting_options();
+        for enabled in [None, Some("true"), Some("false")] {
+            let report = options
+                .collector_config_from_env(|name| match name {
+                    "FLEETINT_NICO_LOG_LEVEL"
+                    | "FLEETINT_NICO_TELEMETRY_DESTINATION"
+                    | "FLEETINT_OTEL_GATEWAY_LOG_LEVEL" => Ok(String::new()),
+                    "FLEETINT_NICO_ENABLED" | "FLEETINT_OTEL_GATEWAY_ENABLED" => enabled
+                        .map(str::to_owned)
+                        .ok_or(std::env::VarError::NotPresent),
+                    _ => Err(std::env::VarError::NotPresent),
+                })
+                .unwrap();
+            if let Some(enabled) = enabled {
+                let nico = report.nico_health.unwrap();
+                assert_eq!(nico.enabled, enabled == "true");
+                assert!(nico.log_level.is_none());
+                assert!(nico.telemetry_destination.is_none());
+                let gateway = report.otel_gateway.unwrap();
+                assert_eq!(gateway.enabled, enabled == "true");
+                assert!(gateway.log_level.is_none());
+            } else {
+                assert!(report.nico_health.is_none());
+                assert!(report.otel_gateway.is_none());
+            }
         }
     }
 

@@ -2,25 +2,70 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 set -eu
+
+number() {
+    case "$2" in ''|*[!0-9]*) echo "$1 must be an integer" >&2; exit 2 ;; esac
+    if [ "$3" = positive ]; then
+        case "$2" in *[1-9]*) ;; *) echo "$1 must be positive" >&2; exit 2 ;; esac
+    fi
+}
 # Preserve existing EnvironmentFile tokens while supporting a protected file.
-if [ -n "${FLEETINT_AGENT_TOKEN_FILE:-}" ]; then
-    if ! FLEETINT_AGENT_TOKEN=$(cat -- "$FLEETINT_AGENT_TOKEN_FILE"); then
-        echo 'Could not read FLEETINT_AGENT_TOKEN_FILE' >&2
+if [ -n "${FLEETINT_ENROLLMENT_TOKEN_FILE:-}" ]; then
+    if ! FLEETINT_ENROLLMENT_TOKEN=$(cat -- "$FLEETINT_ENROLLMENT_TOKEN_FILE"); then
+        echo 'Could not read FLEETINT_ENROLLMENT_TOKEN_FILE' >&2
         exit 2
     fi
-    export FLEETINT_AGENT_TOKEN
+    export FLEETINT_ENROLLMENT_TOKEN
 fi
-if [ -z "${FLEETINT_AGENT_TOKEN:-}" ]; then
-    echo 'Configure FLEETINT_AGENT_TOKEN_FILE or FLEETINT_AGENT_TOKEN' >&2
+if [ -z "${FLEETINT_ENROLLMENT_TOKEN:-}" ]; then
+    echo 'Configure FLEETINT_ENROLLMENT_TOKEN_FILE or FLEETINT_ENROLLMENT_TOKEN' >&2
     exit 2
 fi
 case "${1:-}" in
     collector)
+        : "${FLEETINT_INTERVAL_SECONDS:=86400}"
+        : "${FLEETINT_TARGET_CONCURRENCY:=64}"
+        : "${FLEETINT_BMC_MAX_IN_FLIGHT:=2}"
+        : "${FLEETINT_BMC_REQUESTS_PER_SECOND:=10}"
+        : "${FLEETINT_TIMEOUT_SECONDS:=30}"
+        : "${FLEETINT_DISABLE_LATENCY_PROBE:=false}"
+        number FLEETINT_INTERVAL_SECONDS "$FLEETINT_INTERVAL_SECONDS" nonnegative
+        number FLEETINT_TARGET_CONCURRENCY "$FLEETINT_TARGET_CONCURRENCY" positive
+        number FLEETINT_BMC_MAX_IN_FLIGHT "$FLEETINT_BMC_MAX_IN_FLIGHT" positive
+        number FLEETINT_BMC_REQUESTS_PER_SECOND "$FLEETINT_BMC_REQUESTS_PER_SECOND" positive
+        number FLEETINT_TIMEOUT_SECONDS "$FLEETINT_TIMEOUT_SECONDS" positive
+        set --
+        case "${FLEETINT_BMC_INSECURE_TLS:-true}" in
+            true) set -- "$@" --insecure-tls ;;
+            false) ;;
+            *) echo 'FLEETINT_BMC_INSECURE_TLS must be true or false' >&2; exit 2 ;;
+        esac
+        case "${FLEETINT_DISABLE_LATENCY_PROBE:-false}" in
+            true) set -- "$@" --disable-latency-probe ;;
+            false) ;;
+            *) echo 'FLEETINT_DISABLE_LATENCY_PROBE must be true or false' >&2; exit 2 ;;
+        esac
         exec /usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml \
-            --interval-seconds "${FLEETINT_INTERVAL_SECONDS:-86400}"
+            --interval-seconds "$FLEETINT_INTERVAL_SECONDS" \
+            --target-concurrency "$FLEETINT_TARGET_CONCURRENCY" \
+            --bmc-max-in-flight "$FLEETINT_BMC_MAX_IN_FLIGHT" \
+            --bmc-requests-per-second "$FLEETINT_BMC_REQUESTS_PER_SECOND" \
+            --bmc-burst "$FLEETINT_BMC_REQUESTS_PER_SECOND" \
+            --timeout-seconds "$FLEETINT_TIMEOUT_SECONDS" "$@"
         ;;
     gateway)
-        exec /usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml
+        : "${FLEETINT_OTEL_GATEWAY_LOG_LEVEL:=warn}"
+        case "$FLEETINT_OTEL_GATEWAY_LOG_LEVEL" in
+            debug|info|warn|error) ;;
+            *) echo 'FLEETINT_OTEL_GATEWAY_LOG_LEVEL must be debug, info, warn, or error' >&2; exit 2 ;;
+        esac
+        export FLEETINT_OTEL_GATEWAY_LOG_LEVEL
+        # The bundled gateway supports file/env providers; its --set flag needs
+        # a YAML provider that is not included. Merge a validated env override.
+        FLEETINT_GATEWAY_LOG_CONFIG="service: {telemetry: {logs: {level: $FLEETINT_OTEL_GATEWAY_LOG_LEVEL}}}"
+        export FLEETINT_GATEWAY_LOG_CONFIG
+        exec /usr/lib/fleetint-oob/otel-gateway --config=/etc/fleetint-oob/gateway.yaml \
+            --config=env:FLEETINT_GATEWAY_LOG_CONFIG
         ;;
     *) echo 'Unknown host service' >&2; exit 2 ;;
 esac

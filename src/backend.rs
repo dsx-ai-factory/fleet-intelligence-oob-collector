@@ -76,10 +76,10 @@ pub fn required_backend_option(
         .ok_or_else(|| format!("{name} is required when running backend runtime").into())
 }
 
-/// Owns the agent's authenticated backend session: the current JWT and the
+/// Owns the collector's authenticated backend session: the current JWT and the
 /// enrollment timestamp, plus the credentials needed to re-enroll.
 pub struct BackendSession {
-    agent_token: String,
+    enrollment_token: String,
     enroll_endpoint: String,
     jwt: String,
     enrolled_at: String,
@@ -90,7 +90,7 @@ impl BackendSession {
     /// Perform the initial enrollment and capture the issued JWT + timestamp.
     pub async fn enroll(
         enroll_endpoint: String,
-        agent_token: String,
+        enrollment_token: String,
     ) -> Result<Self, Box<dyn Error>> {
         let client = http_client_builder(
             Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
@@ -98,9 +98,9 @@ impl BackendSession {
         )?
         .build()?;
         let Enrollment { jwt, enrolled_at } =
-            enroll_once(&client, &enroll_endpoint, agent_token.as_str()).await?;
+            enroll_once(&client, &enroll_endpoint, enrollment_token.as_str()).await?;
         Ok(Self {
-            agent_token,
+            enrollment_token,
             enroll_endpoint,
             jwt,
             enrolled_at,
@@ -122,13 +122,13 @@ impl BackendSession {
         self.jwt = jwt;
     }
 
-    /// Re-enroll with the bootstrap token, refreshing both the JWT and the
+    /// Re-enroll with the enrollment token, refreshing both the JWT and the
     /// enrollment timestamp.
     pub async fn reenroll(&mut self) -> Result<(), Box<dyn Error>> {
         let Enrollment { jwt, enrolled_at } = enroll_once(
             &self.client,
             &self.enroll_endpoint,
-            self.agent_token.as_str(),
+            self.enrollment_token.as_str(),
         )
         .await?;
         self.jwt = jwt;
@@ -145,10 +145,10 @@ struct Enrollment {
 async fn enroll_once(
     client: &reqwest::Client,
     enroll_endpoint: &str,
-    agent_token: &str,
+    enrollment_token: &str,
 ) -> Result<Enrollment, Box<dyn Error>> {
     let endpoint = BackendUrl::parse(enroll_endpoint)?;
-    let jwt = backend_client::enroll(client, endpoint.as_url(), agent_token).await?;
+    let jwt = backend_client::enroll(client, endpoint.as_url(), enrollment_token).await?;
     Ok(Enrollment {
         jwt,
         enrolled_at: now_rfc3339(),
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn required_backend_option_rejects_blank_values() {
         assert!(required_backend_option(None::<String>, "backend URL").is_err());
-        assert!(required_backend_option(Some("   ".to_string()), "agent token").is_err());
+        assert!(required_backend_option(Some("   ".to_string()), "enrollment token").is_err());
         assert_eq!(
             required_backend_option(Some("value".to_string()), "backend URL").expect("value"),
             "value"

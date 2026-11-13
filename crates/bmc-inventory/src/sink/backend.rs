@@ -176,10 +176,10 @@ impl HttpBackendClient {
         })
     }
 
-    pub async fn enroll(endpoint: &str, agent_token: &str) -> Result<String, Box<dyn Error>> {
+    pub async fn enroll(endpoint: &str, enrollment_token: &str) -> Result<String, Box<dyn Error>> {
         Self::enroll_with_timeout(
             endpoint,
-            agent_token,
+            enrollment_token,
             Duration::from_secs(DEFAULT_BACKEND_TIMEOUT_SECONDS),
         )
         .await
@@ -187,13 +187,13 @@ impl HttpBackendClient {
 
     pub async fn enroll_with_timeout(
         endpoint: &str,
-        agent_token: &str,
+        enrollment_token: &str,
         request_timeout: Duration,
     ) -> Result<String, Box<dyn Error>> {
         let endpoint = BackendUrl::parse(endpoint)?;
         let client =
             http_client_builder(request_timeout, reqwest::redirect::Policy::default())?.build()?;
-        backend_client::enroll(&client, endpoint.as_url(), agent_token).await
+        backend_client::enroll(&client, endpoint.as_url(), enrollment_token).await
     }
 
     fn set_jwt(&mut self, jwt: impl Into<String>) {

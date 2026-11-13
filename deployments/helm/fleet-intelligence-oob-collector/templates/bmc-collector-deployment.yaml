@@ -87,11 +87,11 @@ spec:
               value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}
             - name: FLEETINT_BACKEND_URL
               value: {{ required "backend.url is required" .Values.backend.url | quote }}
-            - name: FLEETINT_AGENT_TOKEN
+            - name: FLEETINT_ENROLLMENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "backend.agentToken.existingSecret is required" .Values.backend.agentToken.existingSecret | quote }}
-                  key: {{ .Values.backend.agentToken.secretKey | quote }}
+                  name: {{ required "backend.enrollmentToken.existingSecret is required" .Values.backend.enrollmentToken.existingSecret | quote }}
+                  key: {{ .Values.backend.enrollmentToken.secretKey | quote }}
             {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.bmcCollector.resources | nindent 12 }}

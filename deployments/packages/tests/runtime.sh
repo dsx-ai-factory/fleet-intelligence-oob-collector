@@ -108,20 +108,27 @@ tls_pid=$!
 wait_for "$tls_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18889' 2>/dev/null
 wait_for "$backend_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18888' 2>/dev/null
 credentials=$(mktemp -d /tmp/collector-credentials.XXXXXX)
-printf 'test-token\n' > "$credentials/agent-token"
-chmod 640 "$credentials/agent-token"
-chown root:fleetint-oob "$credentials" "$credentials/agent-token"
+printf 'test-token\n' > "$credentials/enrollment-token"
+chmod 640 "$credentials/enrollment-token"
+chown root:fleetint-oob "$credentials" "$credentials/enrollment-token"
 chmod 750 "$credentials"
 start=$(sed -n 's/^ExecStart=//p' /usr/lib/systemd/system/fleetint-oob-collector.service)
 start=${start//\$\$/\$}
 # Parse the installed unit's shell quoting; exec preserves the collector PID.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_AGENT_TOKEN_FILE="$credentials/agent-token" FLEETINT_AGENT_TOKEN=wrong-legacy-token FLEETINT_DISABLE_LATENCY_PROBE=true \
+    env FLEETINT_ENROLLMENT_TOKEN_FILE="$credentials/enrollment-token" FLEETINT_ENROLLMENT_TOKEN=wrong-environment-token FLEETINT_DISABLE_LATENCY_PROBE=true \
+    FLEETINT_TARGET_CONCURRENCY=3 FLEETINT_BMC_MAX_IN_FLIGHT=1 FLEETINT_BMC_REQUESTS_PER_SECOND=4 FLEETINT_TIMEOUT_SECONDS=5 \
     FLEETINT_BACKEND_URL=http://127.0.0.1:18888 \
     /bin/sh -ec "exec $start" > "$work/collector.log" 2>&1 &
 collector_pid=$!
 wait_for "$collector_pid" test -e "$work/collector-enrolled"
 tr '\0' ' ' < "/proc/$collector_pid/cmdline" > "$work/collector-arguments"
+grep -Fq -- '--insecure-tls' "$work/collector-arguments"
+grep -Fq -- '--target-concurrency 3' "$work/collector-arguments"
+grep -Fq -- '--bmc-max-in-flight 1' "$work/collector-arguments"
+grep -Fq -- '--bmc-requests-per-second 4' "$work/collector-arguments"
+grep -Fq -- '--bmc-burst 4' "$work/collector-arguments"
+grep -Fq -- '--timeout-seconds 5' "$work/collector-arguments"
 if grep -Fq test-token "$work/collector-arguments"; then
     echo 'Collector exposed its token in process arguments' >&2; exit 1
 else
@@ -132,7 +139,7 @@ fi
 wait_for "$collector_pid" grep -Fq 'retrying failed inventory targets after a delay' "$work/collector.log"
 # Gateway configuration is validated and its real health endpoint is probed.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_AGENT_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
+    env FLEETINT_ENROLLMENT_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
     ENROLL_ENDPOINT=https://127.0.0.1:18889/api/v1/health/enroll \
     /usr/lib/fleetint-oob/run-service gateway > "$work/gateway.log" 2>&1 &
 gateway_pid=$!

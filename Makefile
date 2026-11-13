@@ -135,7 +135,7 @@ packages-check-deb:
 		for config in /etc/fleetint-oob/config.toml /etc/fleetint-oob/service.conf /etc/fleetint-oob/gateway.yaml; do \
 			dpkg-deb --ctrl-tarfile "$$package" | tar --wildcards -xOf - '*conffiles' | grep -Fx "$$config"; \
 		done; \
-		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)(agent-token|username|password)$$'; then \
+		if dpkg-deb --fsys-tarfile "$$package" | tar -tf - | grep -E '(^|/)([^/]*-token|username|password)$$'; then \
 			echo 'Credential file found in package' >&2; exit 1; \
 		fi; \
 	done
@@ -148,7 +148,7 @@ packages-check-rpm:
 	@set -e; for package in "$(OUTPUTDIR)"/fleetint-oob-*.rpm; do \
 		test -f "$$package" || continue; \
 		rpm --checksig --nosignature "$$package"; \
-		if rpm -qpl "$$package" | grep -E '(^|/)(agent-token|username|password)$$'; then \
+		if rpm -qpl "$$package" | grep -E '(^|/)([^/]*-token|username|password)$$'; then \
 			echo 'Credential file found in package' >&2; exit 1; \
 		fi; \
 	done

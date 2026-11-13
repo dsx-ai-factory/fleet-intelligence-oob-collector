@@ -95,8 +95,9 @@ struct RuntimeArgs {
     #[arg(long, env = "FLEETINT_BACKEND_URL")]
     backend_url: Option<String>,
 
-    #[arg(long, env = "FLEETINT_AGENT_TOKEN", hide_env_values = true)]
-    agent_token: Option<String>,
+    /// Enrollment token used to enroll with Fleet Intelligence.
+    #[arg(long, env = "FLEETINT_ENROLLMENT_TOKEN", hide_env_values = true)]
+    enrollment_token: Option<String>,
 
     #[arg(long, default_value_t = DEFAULT_INVENTORY_INTERVAL_SECONDS)]
     interval_seconds: u64,
@@ -200,7 +201,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             run_runtime(RuntimeOptions {
                 inventory: args.collector.into_inventory_options(false, format),
                 backend_url: args.backend_url,
-                agent_token: args.agent_token,
+                enrollment_token: args.enrollment_token,
                 interval_seconds: args.interval_seconds,
                 target_retry_delay: (args.target_retry_delay_seconds > 0)
                     .then(|| std::time::Duration::from_secs(args.target_retry_delay_seconds)),

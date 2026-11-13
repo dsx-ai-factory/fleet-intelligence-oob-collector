@@ -41,8 +41,8 @@ jobs:
         run: helm lint deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml
       - name: Render Helm chart
         run: helm template test deployments/helm/fleet-intelligence-oob-collector --values deployments/helm/fleet-intelligence-oob-collector/ci/test-values.yaml > /dev/null
-      - name: Test NICo configuration overrides
-        run: python3 -m unittest discover -s scripts -p 'test_nico_helm.py'
+      - name: Test deployment configuration and shared defaults
+        run: python3 -m unittest discover -s scripts -p 'test_deployment_config.py'
       - name: Check generated configuration snapshot
         run: |
           helm template test deployments/helm/fleet-intelligence-oob-collector \
