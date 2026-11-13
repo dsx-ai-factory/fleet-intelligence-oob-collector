@@ -17,6 +17,8 @@ Three separate logins are involved, and it helps to keep them apart:
 
 For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
 
+The collector trims leading and trailing whitespace from the enrollment token before enrollment and rejects an empty result. On Linux, the service launcher applies the same normalization before starting the collector or gateway. Keep Kubernetes token Secret values free of surrounding whitespace because the Helm gateway reads them directly.
+
 ## Before you start
 
 Pick one operator for each Secret. The examples pair Vault with the Vault Secrets Operator (VSO) and OpenBao with the External Secrets Operator (ESO):

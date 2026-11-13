@@ -108,7 +108,7 @@ tls_pid=$!
 wait_for "$tls_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18889' 2>/dev/null
 wait_for "$backend_pid" bash -c 'exec 3<>/dev/tcp/127.0.0.1/18888' 2>/dev/null
 credentials=$(mktemp -d /tmp/collector-credentials.XXXXXX)
-printf 'test-token\n' > "$credentials/enrollment-token"
+printf ' \ttest-token\r\n' > "$credentials/enrollment-token"
 chmod 640 "$credentials/enrollment-token"
 chown root:fleetint-oob "$credentials" "$credentials/enrollment-token"
 chmod 750 "$credentials"
@@ -139,7 +139,8 @@ fi
 wait_for "$collector_pid" grep -Fq 'retrying failed inventory targets after a delay' "$work/collector.log"
 # Gateway configuration is validated and its real health endpoint is probed.
 setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
-    env FLEETINT_ENROLLMENT_TOKEN=test-token BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
+    env FLEETINT_ENROLLMENT_TOKEN_FILE="$credentials/enrollment-token" FLEETINT_ENROLLMENT_TOKEN=wrong-environment-token \
+    BACKEND_ENDPOINT=https://127.0.0.1:18889/api/v1/health \
     ENROLL_ENDPOINT=https://127.0.0.1:18889/api/v1/health/enroll \
     /usr/lib/fleetint-oob/run-service gateway > "$work/gateway.log" 2>&1 &
 gateway_pid=$!

@@ -15,12 +15,16 @@ if [ -n "${FLEETINT_ENROLLMENT_TOKEN_FILE:-}" ]; then
         echo 'Could not read FLEETINT_ENROLLMENT_TOKEN_FILE' >&2
         exit 2
     fi
-    export FLEETINT_ENROLLMENT_TOKEN
 fi
+# Normalize surrounding whitespace from environment values and edited files.
+FLEETINT_ENROLLMENT_TOKEN="${FLEETINT_ENROLLMENT_TOKEN:-}"
+FLEETINT_ENROLLMENT_TOKEN="${FLEETINT_ENROLLMENT_TOKEN#"${FLEETINT_ENROLLMENT_TOKEN%%[![:space:]]*}"}"
+FLEETINT_ENROLLMENT_TOKEN="${FLEETINT_ENROLLMENT_TOKEN%"${FLEETINT_ENROLLMENT_TOKEN##*[![:space:]]}"}"
 if [ -z "${FLEETINT_ENROLLMENT_TOKEN:-}" ]; then
     echo 'Configure FLEETINT_ENROLLMENT_TOKEN_FILE or FLEETINT_ENROLLMENT_TOKEN' >&2
     exit 2
 fi
+export FLEETINT_ENROLLMENT_TOKEN
 case "${1:-}" in
     collector)
         : "${FLEETINT_INTERVAL_SECONDS:=86400}"

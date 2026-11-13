@@ -109,7 +109,8 @@ pub async fn enroll(
     struct EnrollResponse {
         jwt_assertion: String,
     }
-    if token.trim().is_empty() {
+    let token = token.trim();
+    if token.is_empty() {
         return Err("enrollment token cannot be empty".into());
     }
     let response = request(client, Method::POST, endpoint)
@@ -337,6 +338,70 @@ mod tests {
             );
             assert!(error.to_string().contains("example-request"));
             server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn enrollment_trims_surrounding_token_whitespace() {
+        let cases = [
+            ("example-token", "example-token"),
+            ("example-token\n", "example-token"),
+            ("example-token\r\n", "example-token"),
+            (" \t\r\nexample-token \t\r\n", "example-token"),
+            ("first second", "first second"),
+        ];
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/enroll", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move {
+            for (_, expected) in cases {
+                let (mut socket, _) =
+                    tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut part = [0; 4096];
+                    let count = socket.read(&mut part).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&part[..count]);
+                    if bytes.windows(4).any(|value| value == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let authorization = request
+                    .split("\r\n")
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                    .unwrap()
+                    .1;
+                assert_eq!(authorization, format!(" Bearer {expected}"));
+                socket
+                    .write_all(response(200, "", r#"{"jwtAssertion":"example-jwt"}"#).as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = local_client(reqwest::redirect::Policy::none());
+        for (input, _) in cases {
+            assert_eq!(
+                enroll(&client, &endpoint, input).await.unwrap(),
+                "example-jwt"
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enrollment_rejects_whitespace_only_tokens() {
+        let endpoint = "http://127.0.0.1:9/enroll".parse().unwrap();
+        let client = local_client(reqwest::redirect::Policy::none());
+        for input in ["", "\n", " \t\r\n"] {
+            let error = enroll(&client, &endpoint, input).await.unwrap_err();
+            assert_eq!(error.to_string(), "enrollment token cannot be empty");
         }
     }
 
