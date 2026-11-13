@@ -12,9 +12,9 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 | `/etc/fleetint-oob/collector-token` | Optional operator-created collector token file | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/gateway.yaml` | OTLP receivers, backend export, and gateway processing | Installed root-owned, `0644` |
 
-Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Package hooks grant service access to standard configuration/credential paths during installation and upgrade. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
+Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Installation grants service access to standard configuration and credential paths. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
 
-The package preserves modified configuration on upgrade. Use `sudoedit` to edit root-owned files. See [rotation and ownership](credentials.md#rotation-and-ownership) for credential reload behavior and restart requirements.
+Use `sudoedit` to edit root-owned files. See [rotation and ownership](credentials.md#rotation-and-ownership) for credential reload behavior and restart requirements.
 
 ## Targets and placement
 
@@ -105,7 +105,7 @@ Set collector options in `/etc/fleetint-oob/service.conf`. The packaged services
 | `FLEETINT_NICO_LOG_LEVEL` | `warn` | `nicoHardwareHealth.logLevel` | NICo log level: `trace`, `debug`, `info`, `warn`, `error`, or `off`. |
 | `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` | `warn` | `otelGateway.logLevel` | Gateway log level: `debug`, `info`, `warn`, or `error`. |
 
-Boolean settings accept `true` or `false`. Missing or empty launcher settings use their packaged defaults, including when an existing `service.conf` lacks a newly added variable. Invalid values stop startup with a configuration error. For example, to reduce BMC load and enable certificate verification:
+Boolean settings accept `true` or `false`. Missing or empty launcher settings use their packaged defaults. Invalid values stop startup with a configuration error. For example, to reduce BMC load and enable certificate verification:
 
 ```ini
 FLEETINT_TARGET_CONCURRENCY=16
@@ -152,7 +152,7 @@ System and Chassis status follow discovery cadence; Manager status follows manag
 
 The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, OTLP HTTP at `127.0.0.1:4318`, and gateway health at `127.0.0.1:13133`. NICo's Prometheus endpoint is `http://127.0.0.1:9009/metrics`. Keep these local listeners private to the host.
 
-Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`, including in preserved local configurations. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same collector token as the collector but enrolls separately.
+Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same collector token as the collector but enrolls separately.
 
 Keep the gateway's token binding when editing its configuration so it reads the collector token from the service environment:
 
@@ -172,7 +172,7 @@ Systemd reads `service.conf` before starting each service and passes its values 
 | `collector.config.nicoHealth` | Component enablement, log level, telemetry destination, and explicitly configured `[nico_health]` controls in camelCase. |
 | `collector.config.otelGateway` | Component enablement and log level. |
 
-The runtime report describes the effective collector arguments. Component log levels are reported when their environment variables are present; keep `FLEETINT_NICO_LOG_LEVEL` and `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` explicitly set in `service.conf` for complete reports. Only supported, non-sensitive settings are included; tokens and passwords are excluded. Restart affected services after changing their environment settings so the running configuration and subsequent reports use the new values.
+The runtime report describes the effective collector arguments. Component log levels are reported when their environment variables are present and non-empty; keep `FLEETINT_NICO_LOG_LEVEL` and `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` explicitly set in `service.conf` for complete reports. Only supported, non-sensitive settings are included; tokens and passwords are excluded. Restart affected services after changing their environment settings so the running configuration and subsequent reports use the new values.
 
 These environment variables describe the deployment in the collector's backend report:
 
@@ -214,9 +214,3 @@ For password and token rotation, follow [rotation and ownership](credentials.md#
 | Services run but telemetry is absent | BMC credentials, NICo logs, the OTLP destination, all gateway URLs, and gateway enrollment/export errors. |
 
 Optional local health checks are available at `http://127.0.0.1:9009/livez` for NICo and `http://127.0.0.1:13133/` for the gateway. Confirm fresh inventory and telemetry in Fleet Intelligence to verify collection and export.
-
-## Upgrade
-
-Download the new package from [GitHub Releases](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/releases), then follow the [installation commands](host-installation.md#install) with the new file. Modified package configuration is preserved. Review package-manager prompts and merge any new configuration defaults into your local settings as needed.
-
-An upgrade restarts services that were already active and leaves stopped services stopped. Review each service after the transaction. Service-management failures are reported as warnings; a completed package transaction alone does not prove that a restart succeeded.

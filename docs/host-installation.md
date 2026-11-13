@@ -113,7 +113,7 @@ sudo journalctl -u fleetint-oob-collector.service \
 
 Check for successful inventory collection and uploads, and address any NICo or gateway errors. Confirm fresh inventory and telemetry for your target in Fleet Intelligence.
 
-For troubleshooting, collection settings, and upgrades, use [Configure Linux packages](host-configuration.md#troubleshooting).
+For troubleshooting and collection settings, use [Configure Linux packages](host-configuration.md#troubleshooting).
 
 ## Disconnect a BMC or target
 

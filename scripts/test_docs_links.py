@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,8 +16,67 @@ spec = importlib.util.spec_from_file_location(
 links = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(links)
 
+GIT_ENV = {
+    key: value for key, value in os.environ.items()
+    if key not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"}
+}
+
+
+def commit_fixture(root):
+    subprocess.run(["git", "init", "-q", str(root)], check=True, env=GIT_ENV)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True, env=GIT_ENV)
+    subprocess.run([
+        "git", "-C", str(root), "-c", "user.name=Docs Tests",
+        "-c", "user.email=tests@example.test", "commit", "-qm", "fixture",
+    ], check=True, env=GIT_ENV)
+
 
 class PublicationLinksTest(unittest.TestCase):
+    def test_fixture_git_commands_ignore_inherited_repository_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            caller = Path(directory) / "caller"
+            caller.mkdir()
+            (caller / "caller.txt").write_text("caller data\n")
+            commit_fixture(caller)
+            caller_index = (caller / ".git/index").read_bytes()
+            caller_head = subprocess.run(
+                ["git", "-C", str(caller), "rev-parse", "HEAD"],
+                check=True, capture_output=True, text=True, env=GIT_ENV,
+            ).stdout
+            fixture = Path(directory) / "fixture"
+            fixture.mkdir()
+            (fixture / "fixture.txt").write_text("fixture data\n")
+            hostile_env = os.environ | {
+                "GIT_DIR": str(caller / ".git"),
+                "GIT_WORK_TREE": str(caller),
+                "GIT_INDEX_FILE": str(caller / ".git/index"),
+                "GIT_OBJECT_DIRECTORY": str(caller / ".git/objects"),
+            }
+            # Import with the hostile environment, as a Git hook would, without
+            # changing this process's environment or touching the working repo.
+            subprocess.run([
+                sys.executable, "-c",
+                "import runpy, sys; from pathlib import Path; "
+                "runpy.run_path(sys.argv[1])['commit_fixture'](Path(sys.argv[2]))",
+                str(Path(__file__).resolve()), str(fixture),
+            ], check=True, env=hostile_env)
+            self.assertTrue((fixture / ".git").is_dir())
+            files = subprocess.run(
+                ["git", "-C", str(fixture), "ls-files"],
+                check=True, capture_output=True, text=True, env=GIT_ENV,
+            ).stdout.splitlines()
+            self.assertEqual(files, ["fixture.txt"])
+            content = subprocess.run(
+                ["git", "-C", str(fixture), "show", "HEAD:fixture.txt"],
+                check=True, capture_output=True, text=True, env=GIT_ENV,
+            ).stdout
+            self.assertEqual(content, "fixture data\n")
+            self.assertEqual((caller / ".git/index").read_bytes(), caller_index)
+            self.assertEqual(subprocess.run(
+                ["git", "-C", str(caller), "rev-parse", "HEAD"],
+                check=True, capture_output=True, text=True, env=GIT_ENV,
+            ).stdout, caller_head)
+
     def test_existing_repository_file_is_not_a_published_page(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,12 +95,7 @@ class PublicationLinksTest(unittest.TestCase):
             package_dir.mkdir(parents=True)
             content = f"[Configuration]({links.REPO_URL}/blob/main/docs/configuration.md)"
             (package_dir / "README.md").write_text(content)
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run([
-                "git", "-C", str(root), "-c", "user.name=Docs Tests",
-                "-c", "user.email=tests@example.test", "commit", "-qm", "fixture",
-            ], check=True)
+            commit_fixture(root)
             stager = links.load_stager()
             versions = root / "versions"
             with patch.object(stager, "REPO_ROOT", root), patch.object(stager, "VERSIONS_DIR", versions):
@@ -57,10 +113,7 @@ class PublicationLinksTest(unittest.TestCase):
             legacy = root / "deployments/packages/README.md"
             legacy.parent.mkdir(parents=True)
             legacy.write_text("# Package build instructions\n")
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run(["git", "-C", str(root), "-c", "user.name=Docs Tests",
-                            "-c", "user.email=tests@example.test", "commit", "-qm", "fixture"], check=True)
+            commit_fixture(root)
             stager = links.load_stager()
             with patch.object(stager, "REPO_ROOT", root), patch.object(stager, "VERSIONS_DIR", root / "versions"):
                 files = stager.fetch_version("test", "HEAD")

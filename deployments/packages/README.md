@@ -47,7 +47,7 @@ from glibc, so validate name resolution in the target environment.
 
 ## Operator documentation
 
-For installation, service configuration, upgrades, and removal, use [Install on Linux](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-installation.md) and [Configure Linux packages](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-configuration.md).
+For installation, service configuration, target disconnect, and removal, use [Install on Linux](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-installation.md) and [Configure Linux packages](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/docs/host-configuration.md).
 
 ## Package validation
 
