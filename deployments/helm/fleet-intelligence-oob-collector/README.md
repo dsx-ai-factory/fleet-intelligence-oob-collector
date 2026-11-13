@@ -19,7 +19,7 @@ credentials:
 backend:
   url: https://data.fleet-intelligence.nvidia.com
   enrollmentToken:
-    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    existingSecret: fleet-intelligence-enrollment-token
     secretKey: enrollment-token
 ```
 

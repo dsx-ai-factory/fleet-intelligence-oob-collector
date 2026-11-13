@@ -140,7 +140,7 @@ Either operator produces the same two Secrets:
 | Secret | Key | Copied from (mount / entry / field) |
 | --- | --- | --- |
 | `fleet-intelligence-bmc-credentials` | `credentials.json` | `bmc` / `collector` / `credentials` |
-| `fleet-intelligence-oob-collector-enrollment-token` | `enrollment-token` | `credentials` / `backend` / `token` |
+| `fleet-intelligence-enrollment-token` | `enrollment-token` | `credentials` / `backend` / `token` |
 
 The credentials file is copied exactly, so passwords keep any leading or trailing spaces. The token is trimmed of surrounding whitespace and newlines, and a missing or blank token stops the sync instead of writing an empty Secret. To change this behavior, see [VSO transformations](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/secret-transformation) or [ESO templates](https://external-secrets.io/latest/guides/templating/).
 
@@ -152,18 +152,18 @@ Check status and events. None of these commands print secret values.
 # Vault/VSO
 kubectl get vaultstaticsecret --namespace "$NAMESPACE"
 kubectl describe vaultstaticsecret fleet-intelligence-bmc-credentials \
-  fleet-intelligence-oob-collector-enrollment-token \
+  fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE"
 
 # OpenBao/ESO
 kubectl get externalsecret --namespace "$NAMESPACE"
 kubectl describe externalsecret fleet-intelligence-bmc-credentials \
-  fleet-intelligence-oob-collector-enrollment-token \
+  fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE"
 
 kubectl wait --for=condition=Ready \
   externalsecret/fleet-intelligence-bmc-credentials \
-  externalsecret/fleet-intelligence-oob-collector-enrollment-token \
+  externalsecret/fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" --timeout=120s
 ```
 
@@ -171,12 +171,12 @@ Then confirm each Secret has the right key:
 
 ```bash
 kubectl get secret fleet-intelligence-bmc-credentials \
-  fleet-intelligence-oob-collector-enrollment-token \
+  fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" \
   -o go-template='{{range .items}}{{.metadata.name}}:{{range $key, $value := .data}} {{$key}}{{end}}{{"\n"}}{{end}}'
 ```
 
-You should see `credentials.json` in `fleet-intelligence-bmc-credentials` and `enrollment-token` in `fleet-intelligence-oob-collector-enrollment-token`. Wait until both are present before installing the collector.
+You should see `credentials.json` in `fleet-intelligence-bmc-credentials` and `enrollment-token` in `fleet-intelligence-enrollment-token`. Wait until both are present before installing the collector.
 
 | Problem | What to check |
 | --- | --- |
@@ -193,7 +193,7 @@ credentials:
   secretKey: credentials.json
 backend:
   enrollmentToken:
-    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    existingSecret: fleet-intelligence-enrollment-token
     secretKey: enrollment-token
 ```
 

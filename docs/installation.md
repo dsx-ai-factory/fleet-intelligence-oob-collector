@@ -38,7 +38,7 @@ Create the Secrets from those files:
 kubectl create namespace "$NAMESPACE" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl create secret generic fleet-intelligence-oob-collector-enrollment-token \
+kubectl create secret generic fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" \
   --from-file=enrollment-token=/secure/path/to/enrollment-token
 
@@ -66,7 +66,7 @@ credentials:
   secretKey: credentials.json
 backend:
   enrollmentToken:
-    existingSecret: fleet-intelligence-oob-collector-enrollment-token
+    existingSecret: fleet-intelligence-enrollment-token
     secretKey: enrollment-token
 ```
 
@@ -175,7 +175,7 @@ Uninstalling stops collection for every target in the release. Data that was alr
 3. Delete unused credential Secrets:
 
    ```bash
-   kubectl delete secret fleet-intelligence-oob-collector-enrollment-token \
+   kubectl delete secret fleet-intelligence-enrollment-token \
      fleet-intelligence-bmc-credentials --namespace "$NAMESPACE"
    ```
 
