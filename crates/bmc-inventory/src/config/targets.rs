@@ -77,12 +77,26 @@ pub struct CollectorConfig {
     pub nico_health: NicoHealthSettings,
 }
 
-/// Parsed static endpoint definitions, before BMC credentials are read.
+/// Static endpoint definitions paired with provider-independent settings.
 #[derive(Clone, Debug)]
 pub struct StaticConfig {
     pub source: StaticEndpointSource,
-    // Absolute, rooted at the TOML file's directory and never resolved from CWD
-    // later. Keep private so callers cannot accidentally substitute a relative path.
+    pub settings: EndpointConfig,
+}
+
+impl StaticConfig {
+    /// Discover and resolve one static target snapshot for both workflows.
+    pub async fn resolve(self) -> Result<CollectorConfig, Box<dyn Error>> {
+        self.settings.resolve_from(&self.source).await
+    }
+}
+
+/// Shared collection settings, independent of static targets or provider type.
+/// Load this with `load_endpoint_config` for API-only endpoint discovery.
+#[derive(Clone, Debug)]
+pub struct EndpointConfig {
+    // Absolute and rooted at the config directory. Private so a relative path
+    // cannot be substituted and accidentally resolved from the working directory.
     credentials_file: PathBuf,
     pub nico_health: NicoHealthSettings,
     defaults: EndpointDefaults,
@@ -95,14 +109,9 @@ struct EndpointDefaults {
     labels: BTreeMap<String, String>,
 }
 
-impl StaticConfig {
-    /// Discover and resolve one target snapshot for both collection workflows.
-    pub async fn resolve(self) -> Result<CollectorConfig, Box<dyn Error>> {
-        self.resolve_from(&self.source).await
-    }
-
-    /// Resolve a provider's listing with the same defaults and credentials as
-    /// static targets. Discovery failure/empty listings never become removals.
+impl EndpointConfig {
+    /// Discover from any provider and apply shared Fleet normalization and
+    /// credentials. No static target definitions are needed.
     pub async fn resolve_from(
         &self,
         source: &dyn EndpointSource,
@@ -122,7 +131,7 @@ impl StaticConfig {
         credentials: &SharedCredentials,
     ) -> Result<CollectorConfig, Box<dyn Error>> {
         Ok(CollectorConfig {
-            targets: finalize_endpoints(endpoints, credentials, &self.defaults)?,
+            targets: resolve_endpoints(endpoints, credentials, &self.defaults)?,
             credentials_file: self.credentials_file.clone(),
             nico_health: self.nico_health.clone(),
         })
@@ -206,6 +215,18 @@ struct RawTargetConfig {
     labels: BTreeMap<String, String>,
 }
 
+/// Read shared settings without requiring or constructing static targets.
+pub fn load_endpoint_config(path: &str) -> Result<EndpointConfig, Box<dyn Error>> {
+    let contents = std::fs::read_to_string(path)?;
+    Ok(parse_config_parts(&contents, path)?.settings)
+}
+
+/// Asynchronously load shared settings for an API-only deployment.
+pub async fn load_endpoint_config_async(path: &str) -> Result<EndpointConfig, Box<dyn Error>> {
+    let contents = tokio::fs::read_to_string(path).await?;
+    Ok(parse_config_parts(&contents, path)?.settings)
+}
+
 /// Read static endpoint definitions without loading BMC credential values.
 pub fn load_static_config(path: &str) -> Result<StaticConfig, Box<dyn Error>> {
     let contents = std::fs::read_to_string(path)?;
@@ -236,33 +257,41 @@ pub fn load_target_credentials(
 /// credentials-file-before-target-validation error precedence.
 pub async fn load_config_async(path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let contents = tokio::fs::read_to_string(path).await?;
-    let parsed = parse_config_parts(&contents, path)?;
-    let credentials = SharedCredentials::load_async(&parsed.credentials_file).await?;
+    let parsed = parse_static_parts(&contents, path)?;
+    let credentials = SharedCredentials::load_async(&parsed.settings.credentials_file).await?;
     let config = parsed.into_static()?;
     let endpoints = config
         .source
         .discover()
         .await
         .map_err(|error| error as Box<dyn Error>)?;
-    config.resolve_endpoints(&endpoints, &credentials)
+    config.settings.resolve_endpoints(&endpoints, &credentials)
 }
 
 pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
-    let parsed = parse_config_parts(contents, path)?;
-    let credentials = SharedCredentials::load(&parsed.credentials_file, Path::new("."))?;
+    let parsed = parse_static_parts(contents, path)?;
+    let credentials = SharedCredentials::load(&parsed.settings.credentials_file, Path::new("."))?;
     let config = parsed.into_static()?;
-    config.resolve_endpoints(config.source.endpoints(), &credentials)
+    config
+        .settings
+        .resolve_endpoints(config.source.endpoints(), &credentials)
 }
 
 fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<dyn Error>> {
-    parse_config_parts(contents, path)?.into_static()
+    parse_static_parts(contents, path)?.into_static()
 }
 
 struct ParsedConfig {
     targets: Vec<RawTargetConfig>,
-    credentials_file: PathBuf,
-    nico_health: NicoHealthSettings,
-    defaults: EndpointDefaults,
+    settings: EndpointConfig,
+}
+
+fn parse_static_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
+    let config = parse_raw_config(contents, path)?;
+    if config.targets.is_empty() {
+        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
+    }
+    prepare_config(config, path)
 }
 
 impl ParsedConfig {
@@ -275,22 +304,24 @@ impl ParsedConfig {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(StaticConfig {
             source: StaticEndpointSource::new(endpoints),
-            credentials_file: self.credentials_file,
-            nico_health: self.nico_health,
-            defaults: self.defaults,
+            settings: self.settings,
         })
     }
 }
 
 fn parse_config_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
-    let config: Config = toml::from_str(contents).map_err(|error| {
+    prepare_config(parse_raw_config(contents, path)?, path)
+}
+
+fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>> {
+    toml::from_str(contents).map_err(|error: toml::de::Error| {
         // Invalid input may contain secrets; never echo TOML input.
         let offset = error.span().map(|span| span.start).unwrap_or_default();
-        format!("invalid TOML config {path} at byte {offset}; expected [[targets]] and [credentials].file")
-    })?;
-    if config.targets.is_empty() {
-        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
-    }
+        format!("invalid TOML config {path} at byte {offset}; expected [credentials].file and optional [[targets]]").into()
+    })
+}
+
+fn prepare_config(config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
     config.nico_health.validate()?;
     validate_nico_labels("labels", &config.labels)?;
     let defaults = EndpointDefaults {
@@ -303,9 +334,11 @@ fn parse_config_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dy
     let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
     Ok(ParsedConfig {
         targets: config.targets,
-        credentials_file,
-        nico_health: config.nico_health,
-        defaults,
+        settings: EndpointConfig {
+            credentials_file,
+            nico_health: config.nico_health,
+            defaults,
+        },
     })
 }
 
@@ -318,7 +351,7 @@ fn require_endpoints(endpoints: &[Endpoint]) -> Result<(), Box<dyn Error>> {
 
 // The single discovery-to-target boundary for every provider. Endpoints contain
 // only raw/user labels; normalized fields and derived labels exist on Target.
-fn finalize_endpoints(
+fn resolve_endpoints(
     endpoints: &[Endpoint],
     credentials: &SharedCredentials,
     defaults: &EndpointDefaults,
@@ -328,9 +361,10 @@ fn finalize_endpoints(
     let mut targets = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.iter().enumerate() {
         let context = format!("targets[{index}]");
+        let identity = format!("{context} (BMC {})", endpoint.mac);
         let resolved = credentials
             .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
-            .map_err(|error| format!("{context} (BMC {}): {error}", endpoint.mac))?;
+            .map_err(|error| format!("{identity}: {error}"))?;
         let name = normalize_config_value(&format!("{context}.name"), endpoint.name.clone())?;
         let compute_zone = normalize_config_value(
             &format!("{context}.compute_zone"),
@@ -370,7 +404,7 @@ fn finalize_endpoints(
             }
         }
         if !macs.insert(endpoint.mac) {
-            return Err(format!("{context}.mac duplicates BMC MAC {}", endpoint.mac).into());
+            return Err(format!("{identity}: duplicates BMC MAC {}", endpoint.mac).into());
         }
         targets.push(Target {
             kind: endpoint.kind,
@@ -1304,7 +1338,11 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         std::sync::Arc::make_mut(&mut first)[0].name = Some("changed".into());
         assert!(source.discover().await.unwrap()[0].name.is_none());
-        let error = config.resolve_from(&FailedSource).await.unwrap_err();
+        let error = config
+            .settings
+            .resolve_from(&FailedSource)
+            .await
+            .unwrap_err();
         assert_eq!(error.to_string(), "discovery unavailable");
         assert!(
             config
@@ -1332,7 +1370,7 @@ mod tests {
         endpoint.mac = "00:11:22:33:44:66".parse().unwrap();
         endpoint.ip = "192.0.2.2".parse().unwrap();
         let provider = StaticEndpointSource::new(vec![endpoint.clone()]);
-        let resolved = config.resolve_from(&provider).await.unwrap();
+        let resolved = config.settings.resolve_from(&provider).await.unwrap();
         assert_eq!(resolved.targets.len(), 1);
         assert_eq!(resolved.targets[0].ip, endpoint.ip);
         assert_eq!(resolved.targets[0].username, "shared");
@@ -1340,6 +1378,7 @@ mod tests {
         let duplicate = StaticEndpointSource::new(vec![endpoint.clone(), endpoint]);
         assert!(
             config
+                .settings
                 .resolve_from(&duplicate)
                 .await
                 .unwrap_err()
@@ -1362,25 +1401,45 @@ mod tests {
         }
     }
 
+    fn provider_endpoint() -> Endpoint {
+        Endpoint {
+            kind: TargetKind::Compute,
+            name: Some("original".into()),
+            compute_zone: Some("original-zone".into()),
+            node_group: Some("original-group".into()),
+            ip: "192.0.2.1".parse().unwrap(),
+            port: None,
+            mac: "00:11:22:33:44:55".parse().unwrap(),
+            credentials_profile: Some("bmc".into()),
+            labels: BTreeMap::from([("rack".into(), "rack-1".into())]),
+        }
+    }
+
     #[tokio::test]
-    async fn provider_fields_and_labels_are_finalized_together() {
+    async fn provider_only_config_applies_shared_settings_and_finalization() {
         let contents = with_test_credentials(
             r#"
             compute_zone = "default-zone"
             node_group = "default-group"
-            labels = { site = "shared" }
-            [[targets]]
-            name = "original"
-            compute_zone = "original-zone"
-            node_group = "original-group"
-            ip = "192.0.2.1"
-            mac = "00:11:22:33:44:55"
-            credentials_profile = "bmc"
-            labels = { rack = "rack-1" }
+            labels = { site = "shared", facility = "dc1" }
+            [nico_health]
+            sensor_fetch_interval_seconds = 120
             "#,
         );
-        let config = parse_static_config(&contents, "config.toml").unwrap();
-        let original = &config.source.endpoints()[0];
+        let path = write_config("provider-only", &contents);
+        let _cleanup = TestFileCleanup(path.clone());
+        let path = path.to_str().unwrap();
+        // Both public shared-settings loaders work with no [[targets]] at all.
+        let config = load_endpoint_config_async(path).await.unwrap();
+        let sync_config = load_endpoint_config(path).unwrap();
+        assert_eq!(config.credentials_file, sync_config.credentials_file);
+        assert!(
+            load_static_config(path)
+                .unwrap_err()
+                .to_string()
+                .contains("no BMC targets")
+        );
+        let original = provider_endpoint();
         assert!(!original.labels.contains_key("oob"));
         assert!(!original.labels.contains_key("machine_name"));
         let mut endpoint = original.clone();
@@ -1390,6 +1449,14 @@ mod tests {
         endpoint.labels.insert("site".into(), "provider".into());
         let source = ProviderSource(vec![endpoint.clone()].into());
         let resolved = config.resolve_from(&source).await.unwrap();
+        assert_eq!(
+            resolved
+                .nico_health
+                .sensor_fetch_interval_seconds
+                .unwrap()
+                .get(),
+            120
+        );
         let target = &resolved.targets[0];
         assert_eq!(target.name.as_deref(), Some("new-name"));
         assert_eq!(target.compute_zone.as_deref(), Some("new-zone"));
@@ -1400,6 +1467,7 @@ mod tests {
             ("compute_zone", "new-zone"),
             ("node_group", "default-group"),
             ("site", "provider"),
+            ("facility", "dc1"),
             ("rack", "rack-1"),
         ] {
             assert_eq!(target.labels.get(key).map(String::as_str), Some(value));
@@ -1414,11 +1482,11 @@ mod tests {
 
     #[tokio::test]
     async fn provider_label_validation_and_credential_errors_have_target_context() {
-        let contents = with_test_credentials(
-            "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'",
-        );
-        let config = parse_static_config(&contents, "config.toml").unwrap();
-        let endpoint = &config.source.endpoints()[0];
+        let contents = with_test_credentials("");
+        let config = parse_config_parts(&contents, "config.toml")
+            .unwrap()
+            .settings;
+        let endpoint = provider_endpoint();
         let cases = [
             (BTreeMap::from([("oob".into(), "false".into())]), "reserved"),
             (
@@ -1455,13 +1523,50 @@ mod tests {
 
     #[tokio::test]
     async fn empty_provider_is_rejected_before_reading_credentials() {
-        let config = parse_static_config(
-            "[credentials]\nfile='nonexistent-endpoint-credentials.json'\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'",
+        let config = parse_config_parts(
+            "[credentials]\nfile='nonexistent-endpoint-credentials.json'",
             "config.toml",
-        ).unwrap();
+        )
+        .unwrap()
+        .settings;
         let empty = ProviderSource(Vec::new().into());
         let error = config.resolve_from(&empty).await.unwrap_err().to_string();
         assert!(error.contains("no BMC targets"));
+    }
+
+    #[tokio::test]
+    async fn provider_and_static_identity_errors_use_the_same_mac_context() {
+        for profile in ["missing", "bmc"] {
+            let mut contents = format!(
+                "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='{profile}'\n"
+            );
+            if profile == "bmc" {
+                contents.push_str(&contents.clone());
+            }
+            let contents = with_test_credentials(&contents);
+            let config = parse_static_config(&contents, "config.toml").unwrap();
+            let provider = ProviderSource(config.source.discover().await.unwrap());
+            let provider_error = config
+                .settings
+                .resolve_from(&provider)
+                .await
+                .unwrap_err()
+                .to_string();
+            let static_error = parse_config(&contents, "config.toml")
+                .unwrap_err()
+                .to_string();
+            assert_eq!(provider_error, static_error);
+            assert!(
+                provider_error.contains("(BMC 00:11:22:33:44:55):"),
+                "{provider_error}"
+            );
+            let expected = if profile == "bmc" {
+                "duplicates BMC MAC"
+            } else {
+                "unknown credentials_profile"
+            };
+            assert!(provider_error.contains(expected), "{provider_error}");
+        }
     }
 
     #[tokio::test]
@@ -1479,11 +1584,11 @@ mod tests {
         std::fs::write(&path, "[credentials]\nfile='credentials.json'\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'").unwrap();
         let path = path.to_str().unwrap();
         let parsed = load_static_config(path).unwrap();
-        assert!(parsed.credentials_file.is_absolute());
+        assert!(parsed.settings.credentials_file.is_absolute());
         let provider = ProviderSource(parsed.source.discover().await.unwrap());
         for config in [
             load_config_async(path).await.unwrap(),
-            parsed.resolve_from(&provider).await.unwrap(),
+            parsed.settings.resolve_from(&provider).await.unwrap(),
         ] {
             assert_eq!(config.targets[0].username, "user");
             assert_eq!(config.targets[0].password, "secret");
