@@ -1,6 +1,9 @@
 # Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# Deprecated inline-target example, retained for compatibility.
+# For new configuration use config.static.example.toml and targets.example.json.
+
 # Fleet Intelligence placement; inherited by targets and mirrored to telemetry.
 compute_zone = "us-west-dc1"
 node_group = "gb200-training"

@@ -6,7 +6,8 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 
 | File | Purpose | Ownership and mode |
 | --- | --- | --- |
-| `/etc/fleetint-oob/config.toml` | Shared targets, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/config.toml` | Endpoint-source selection, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/targets.json` | Operator-created static BMC endpoint records | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/service.conf` | Backend/token settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
 | `/etc/fleetint-oob/credentials/credentials.json` | Operator-created BMC credentials | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/enrollment-token` | Optional operator-created enrollment token file | `root:fleetint-oob`, `0640` |
@@ -18,7 +19,7 @@ Use `sudoedit` to edit root-owned files. See [rotation and ownership](credential
 
 ## Targets and placement
 
-A minimal shared configuration is:
+Use `/etc/fleetint-oob/targets.json` for endpoint records and keep shared placement, labels, and credentials in `config.toml`. Follow [Endpoint sources](endpoint-sources.md) for the JSON format and per-target fields. A minimal `config.toml` is:
 
 ```toml
 compute_zone = "us-west-dc1"
@@ -28,32 +29,14 @@ labels = { site = "dc1" }
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 
-[[targets]]
-kind = "compute"
-name = "node-01"
-ip = "192.0.2.10"
-mac = "02:00:00:00:00:01"
-credentials_profile = "bmc"
-labels = { rack = "rack-12" }
+[endpoint_source]
+type = "static"
+file = "targets.json"
 ```
 
-Replace the example values before starting services. Both the collector and NICo read this file.
+The shared rules for [target identity](configuration.md#target-identity), [placement](configuration.md#placement), and [label limits](configuration.md#labels) apply to JSON endpoints. Keep passwords in the credentials file. Both the collector and NICo health configuration generator resolve the selected target file.
 
-| TOML field | Required | Description |
-| --- | --- | --- |
-| `credentials.file` | Yes | Path to the shared JSON credentials file. Relative paths resolve beside `config.toml`. |
-| `targets` | Yes | One or more `[[targets]]` entries. |
-| `targets[].ip` | Yes | BMC IPv4/IPv6 address, without scheme or port. The TOML name is `ip`; Helm uses `address`. |
-| `targets[].mac` | Yes | Real BMC MAC address; duplicate MACs are rejected. |
-| `targets[].credentials_profile` | Usually | Name of a credential profile. A per-MAC override can provide credentials instead. |
-| `targets[].kind` | No | `compute`, `nvswitch`, `power_shelf`, or `unknown` (default). |
-| `targets[].name` | No | Inventory display name and NICo `machine_name` label. |
-| `targets[].port` | No | Redfish port; omission uses HTTPS port 443. |
-| `compute_zone`, `node_group` | No | Defaults for placement; use names from your Fleet Intelligence account. |
-| `targets[].compute_zone`, `targets[].node_group` | No | Override placement for one target. |
-| `labels`, `targets[].labels` | No | Shared and per-target telemetry labels; a target value overrides the shared value. |
-
-The shared rules for [target identity](configuration.md#target-identity), [placement](configuration.md#placement), and [label limits](configuration.md#labels) apply to TOML too. TOML uses snake_case field names. Keep passwords in the JSON credentials file.
+Inline `[[targets]]` entries are deprecated and retained for compatibility. Remove them when selecting a JSON source; the two forms cannot be combined.
 
 ## BMC credentials
 
@@ -118,7 +101,7 @@ Restart the affected services as described in [apply changes](#apply-changes). H
 
 ## NICo health collection
 
-Add optional snake_case controls under `[nico_health]` in `config.toml`, before any `[[targets]]` entries. For example:
+Add optional snake_case controls under `[nico_health]` in `config.toml`. For example:
 
 ```toml
 [nico_health]

@@ -1,6 +1,6 @@
 # Endpoint sources
 
-You can keep BMC endpoints in a separate JSON file while keeping collection settings in `config.toml`. Select a static file source when a separate process maintains your target list or you want to manage endpoints independently.
+Keep static BMC endpoints in `targets.json` and shared collection settings in `config.toml`. This is the recommended static configuration.
 
 ## Select a static JSON file
 
@@ -41,6 +41,6 @@ Use this configuration with `inventory`, `run`, or `render-nico-config`. The col
 
 An unreadable file, invalid JSON, empty array, invalid endpoint, duplicate MAC, or unresolved credential causes configuration loading to fail. Errors omit JSON contents and passwords.
 
-## Inline TOML targets
+## Deprecated inline targets
 
-Existing configurations with `[[targets]]` continue to work without an `endpoint_source` section. Choose one target definition per configuration: combining `endpoint_source` with nonempty `[[targets]]` is rejected. Helm and the bundled Linux package configuration continue to use inline targets.
+Inline `[[targets]]` entries in `config.toml` are deprecated and remain supported for compatibility. For new or updated configurations, move those endpoint records to `targets.json` and select the static file source above. Remove inline entries when adding `endpoint_source`; combining both forms is rejected. Helm-generated configuration and the installed package template still use the compatibility format.
