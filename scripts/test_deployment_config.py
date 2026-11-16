@@ -315,6 +315,17 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
             "FLEETINT_TIMEOUT_SECONDS", "FLEETINT_BMC_INSECURE_TLS",
             "FLEETINT_DISABLE_LATENCY_PROBE")})
 
+    def test_collector_config_override_leaves_nico_health_on_static_config(self):
+        settings = {"FLEETINT_COLLECTOR_CONFIG": "/etc/fleetint-oob/discovery config.toml"}
+        for shell in ("sh", "bash"):
+            with self.subTest(shell=shell):
+                args = self.arguments(self.launch(settings, shell=shell))
+                self.assertEqual(args[args.index("--config") + 1], settings["FLEETINT_COLLECTOR_CONFIG"])
+                result = self.launch(settings, shell=shell, nico=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = (self.directory / "render-args").read_text().splitlines()
+                self.assertEqual(rendered[rendered.index("--config") + 1], "/etc/fleetint-oob/config.toml")
+
     def test_zero_interval_is_preserved_and_burst_tracks_rate(self):
         args = self.arguments(self.launch({"FLEETINT_INTERVAL_SECONDS": "0", "FLEETINT_BMC_REQUESTS_PER_SECOND": "17"}))
         self.assertEqual(args[args.index("--interval-seconds") + 1], "0")
