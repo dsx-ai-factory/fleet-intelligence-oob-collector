@@ -2,7 +2,6 @@
 /dist/
 /.config
 /config.toml
-/targets.json
 /credentials.json
 /.env
 /.env.*

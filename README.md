@@ -32,7 +32,6 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 
 ## Getting started
 
-- For static BMC endpoints, use `targets.json` as described in [Endpoint sources](docs/endpoint-sources.md).
 - For Kubernetes, follow [Installation](docs/installation.md) and [Configuration](docs/configuration.md).
 - For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
