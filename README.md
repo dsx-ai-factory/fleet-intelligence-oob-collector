@@ -33,6 +33,7 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 ## Getting started
 
 - For Kubernetes, follow [Installation](docs/installation.md) and [Configuration](docs/configuration.md).
+- To discover BMC targets from NICo REST, follow [NICo REST discovery](docs/nico-discovery.md).
 - For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
 

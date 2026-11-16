@@ -40,6 +40,9 @@ navigation:
       - page: Linux packages (DEB/RPM)
         path: ../docs/host-configuration.md
         slug: host-configuration
+      - page: NICo REST discovery
+        path: ../docs/nico-discovery.md
+        slug: nico-discovery
   - page: Credentials
     path: ../docs/credentials.md
     slug: credentials
