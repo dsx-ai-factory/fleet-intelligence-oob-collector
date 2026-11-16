@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use mac_address::MacAddress;
@@ -30,6 +31,7 @@ pub struct Endpoint {
     pub mac: MacAddress,
     /// A reference into the separate credential store, never credential values.
     pub credentials_profile: Option<String>,
+    /// Provider/user labels only. Derived labels are built during finalization.
     pub labels: BTreeMap<String, String>,
 }
 
@@ -49,24 +51,29 @@ impl Endpoint {
 /// must omit credentials, response bodies, and sensitive URLs from errors.
 pub type EndpointSourceError = Box<dyn Error + Send + Sync>;
 
+/// Shared immutable listing. Cloning a snapshot does not copy its endpoints.
+pub type EndpointSnapshot = Arc<[Endpoint]>;
+
 /// Provider-independent discovery boundary for static configuration and future
 /// API integrations. Implementations must be safe to share between Tokio tasks.
 /// Credential resolution, collection scheduling, and transport are separate.
 #[async_trait]
 pub trait EndpointSource: Send + Sync {
-    async fn discover(&self) -> Result<Vec<Endpoint>, EndpointSourceError>;
+    async fn discover(&self) -> Result<EndpointSnapshot, EndpointSourceError>;
 }
 
 /// A single parsed static configuration snapshot. File reloads are owned by
 /// the caller, so inventory and attestation share the same endpoint listing.
 #[derive(Clone, Debug)]
 pub struct StaticEndpointSource {
-    endpoints: Vec<Endpoint>,
+    endpoints: EndpointSnapshot,
 }
 
 impl StaticEndpointSource {
     pub fn new(endpoints: Vec<Endpoint>) -> Self {
-        Self { endpoints }
+        Self {
+            endpoints: endpoints.into(),
+        }
     }
 
     /// Borrow the configured definitions for synchronous configuration tools.
@@ -77,7 +84,7 @@ impl StaticEndpointSource {
 
 #[async_trait]
 impl EndpointSource for StaticEndpointSource {
-    async fn discover(&self) -> Result<Vec<Endpoint>, EndpointSourceError> {
+    async fn discover(&self) -> Result<EndpointSnapshot, EndpointSourceError> {
         Ok(self.endpoints.clone())
     }
 }

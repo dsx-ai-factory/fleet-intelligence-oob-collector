@@ -15,7 +15,7 @@ Target
 
 Each observation is identified by its required configured BMC MAC in `source.mac`, formatted as uppercase colon-separated text. The collector gathers managers, systems, processors, memory modules, storage/drives, secure boot, chassis, PCIe devices, power supplies, firmware, fabrics, and switches.
 
-Before collection, `endpoint::EndpointSource` discovers credential-free BMC endpoints. `StaticEndpointSource` supplies the existing TOML targets; credential resolution produces the `Target` values consumed by the inventory pipeline. The runtime shares one resolved snapshot between inventory and attestation. Future API providers implement endpoint discovery without changing hardware collection or BMC identity. See the [implementation notes](../../CONTRIBUTING.md#implementation-notes) for the provider contract.
+Before collection, `endpoint::EndpointSource` discovers credential-free BMC endpoints. `StaticEndpointSource` supplies the existing TOML targets; a shared finalizer applies defaults, validates labels and identities, builds derived labels, and resolves credentials to produce the `Target` values consumed by the inventory pipeline. The runtime shares one resolved snapshot between inventory and attestation. Future API providers implement endpoint discovery without changing hardware collection or BMC identity. See the [implementation notes](../../CONTRIBUTING.md#implementation-notes) for the provider contract.
 
 A configured target name provides a display label. System hostnames come from the Redfish ComputerSystem resource.
 
