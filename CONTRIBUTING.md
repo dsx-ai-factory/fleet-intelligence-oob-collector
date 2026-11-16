@@ -71,12 +71,13 @@ Copy the example configuration, replace its example values, and print BMC invent
 
 ```bash
 umask 077
-cp config.example.toml config.toml
+cp config.static.example.toml config.toml
+cp targets.example.json targets.json
 cp credentials.example.json credentials.json
-chmod 600 config.toml credentials.json
+chmod 600 config.toml targets.json credentials.json
 ```
 
-Before running inventory, edit `config.toml` with your BMC targets and set `credentials.file = "credentials.json"`. Edit `credentials.json` with your BMC credentials and matching profiles or MAC overrides. The relative credential path resolves beside `config.toml`. Keep both files private and outside commits. Then collect inventory:
+Before running inventory, edit `targets.json` with your BMC endpoints. In `config.toml`, set `endpoint_source.file = "targets.json"`, configure shared placement and labels, and set `credentials.file = "credentials.json"`. Edit `credentials.json` with your BMC credentials and matching profiles or MAC overrides. Relative file paths resolve beside `config.toml`. Keep all three files private and outside commits. Then collect inventory:
 
 ```bash
 cargo run --locked -- inventory
@@ -96,7 +97,7 @@ The CLI reads the enrollment token from `FLEETINT_ENROLLMENT_TOKEN`, keeping it 
 
 ### Collector TOML
 
-In Kubernetes, the Helm chart generates this file from `inventory` values. When running from source, you write it yourself. It has the same fields as the [Helm targets](docs/configuration.md#targets), in snake_case, and follows the same rules for MACs, labels, placement, and credentials:
+Keep shared settings in `config.toml` and static endpoint records in `targets.json`:
 
 ```toml
 compute_zone = "us-west-dc1"
@@ -106,32 +107,16 @@ labels = { site = "dc1" }
 [credentials]
 file = "credentials.json"
 
-[[targets]]
-kind = "compute"
-name = "node-01"
-ip = "192.0.2.10"
-port = 443
-mac = "00:11:22:33:44:55"
-credentials_profile = "bmc"
-labels = { rack = "rack-12" }
+[endpoint_source]
+type = "static"
+file = "targets.json"
 ```
 
-| TOML field | Helm value |
-| --- | --- |
-| `compute_zone`, `node_group`, `labels` | `inventory.computeZone`, `inventory.nodeGroup`, `inventory.labels` |
-| `credentials.file` | Set by the chart to the mounted Secret. A relative path is resolved from the directory containing the TOML file. |
-| `targets[].ip` | `inventory.targets[].address` |
-| `targets[].credentials_profile` | `inventory.targets[].credentialsProfile` |
-| `targets[].compute_zone`, `targets[].node_group` | `inventory.targets[].computeZone`, `inventory.targets[].nodeGroup` |
-| `targets[].kind`, `name`, `port`, `mac`, `labels` | Same names under `inventory.targets[]` |
+`targets.json` is an array of endpoint records with `ip`, `mac`, and optional `kind`, `name`, `port`, `credentials_profile`, labels, and placement overrides. See [Endpoint sources](docs/endpoint-sources.md) for the format and the root `config.static.example.toml` / `targets.example.json` examples. The collector reports MACs as uppercase with colons and does not rewrite the files.
 
-Unlike Helm, the TOML file accepts a MAC with mixed separators. The collector reports MACs as uppercase with colons and doesn't rewrite the file.
+Inline `[[targets]]` entries are deprecated and retained for compatibility. The Helm chart and installed package template still generate that format; Helm values are documented in [Configuration](docs/configuration.md).
 
 Configure NICo with flat fields under `[nico_health]`, using snake_case equivalents of the Helm fields under `nicoHardwareHealth.config`. See [NICo collection controls](docs/configuration.md#nico-collection-controls) for supported fields, defaults, and validation. The shared settings model drives both `render-nico-config` and the camelCase `collector.config.nicoHealth` report. Regenerate the NICo file and restart NICo after editing.
-
-### Static JSON source
-
-Use `[endpoint_source] type = "static"` and `file = "targets.json"` to read a JSON array instead of `[[targets]]`. Shared settings stay in TOML. See [Endpoint sources](docs/endpoint-sources.md) and the root `config.static.example.toml` / `targets.example.json` examples. Existing inline TOML configuration remains supported; mixing both forms is rejected.
 
 ### CLI reference
 
@@ -190,7 +175,7 @@ These notes describe how the collector works internally. Read them before changi
 
 **Endpoint discovery.** `bmc_inventory::endpoint::EndpointSource` is the asynchronous, `Send + Sync` interface for listing BMC endpoints. It returns a shared immutable `EndpointSnapshot` (`Arc<[Endpoint]>`) containing credential-free records with IP, optional port, BMC MAC, kind, name, placement, user labels, and an optional credential profile reference. Snapshot cloning shares storage; consumers borrow the list rather than copying it. `StaticEndpointSource` holds parsed `[[targets]]` TOML entries; `StaticFileEndpointSource` reads a JSON array asynchronously on each discovery. NICo and NetBox adapters are separate future work; provider authentication, filters, and pagination belong inside those implementations, not in this interface. A source must return a complete listing or an error; an unavailable source must not become a successful empty list.
 
-`EndpointConfig` owns provider-independent settings: the credential-file path, NICo health settings, global user labels, and default zone/group. `load_endpoint_config` and `load_endpoint_config_async` load it without requiring `[[targets]]`. An API-only integration can call `load_endpoint_config_async(path).await?.resolve_from(&provider).await?` without constructing any static source. `StaticConfig` pairs a `StaticEndpointSource` with these shared settings; only static loaders require TOML targets. `load_source_config` returns the selected source with shared settings before discovery or BMC credential loading. The optional `[endpoint_source]` selector accepts `type = "static"` with a file path; omitting it selects existing inline targets. The asynchronous runtime discovers JSON endpoints through the same resolver, while synchronous tools read the file synchronously. API adapters are separate additions to this selector.
+`EndpointConfig` owns provider-independent settings: the credential-file path, NICo health settings, global user labels, and default zone/group. `load_endpoint_config` and `load_endpoint_config_async` load it without requiring `[[targets]]`. An API-only integration can call `load_endpoint_config_async(path).await?.resolve_from(&provider).await?` without constructing any static source. `StaticConfig` pairs a `StaticEndpointSource` with these shared settings; static loaders accept either JSON endpoints or deprecated inline TOML targets. `load_source_config` returns the selected source with shared settings before discovery or BMC credential loading. The optional `[endpoint_source]` selector accepts `type = "static"` with a file path; omitting it selects deprecated inline targets for compatibility. The asynchronous runtime discovers JSON endpoints through the same resolver, while synchronous tools read the file synchronously. API adapters are separate additions to this selector.
 
 `EndpointConfig::resolve_from` feeds every provider into the same `resolve_endpoints` finalizer: normalize names/placement, apply global defaults and user-label merging, validate reserved label names and limits, derive internal labels, resolve profile/per-MAC credentials, and reject empty or duplicate-MAC listings. Endpoints carry only user labels; generated `oob`, machine-name, zone, and group labels exist only on resolved `Target` values, so changing endpoint fields cannot retain stale generated labels. Credential and duplicate-MAC errors use the same target-index/BMC-MAC context for every provider. The credential path is rooted at the config file's directory when parsed and kept private; there is no public resolver that reads relative paths from the working directory.
 

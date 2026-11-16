@@ -38,7 +38,7 @@ Ask before adding or upgrading dependencies; changing public JSON or backend API
 
 ## Required Invariants
 
-- Configure targets through `[[targets]]` or a selected static JSON endpoint source, and credentials through a separate shared JSON file. Resolve all credential values from its profiles and per-MAC overrides.
+- Document the selected static JSON endpoint source as the recommended static configuration; inline `[[targets]]` is deprecated but supported for compatibility. Configure endpoint records through the selected source, and credentials through a separate shared JSON file. Resolve all credential values from its profiles and per-MAC overrides.
 - Route inventory and attestation Redfish work through `bmc-dispatch`; do not create a separate path that bypasses shared per-BMC limits.
 - Preserve successfully collected inventory when one Redfish domain fails. `domainErrors[].domain` is a backend control-flow key, and consumers must not parse its human-readable `message`.
 - Identify inventory observations by the required configured BMC MAC; use the configured BMC MAC for attestation nonce requests and uploaded records.

@@ -50,13 +50,14 @@ Fill in the `bmc` credential profile used by the target below. Keep passwords in
 
 ### Set the target list
 
-Edit the shared target configuration:
+Keep shared settings in `/etc/fleetint-oob/config.toml` and create a protected endpoint file:
 
 ```bash
-sudoedit /etc/fleetint-oob/config.toml
+sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/targets.json
+sudoedit /etc/fleetint-oob/config.toml /etc/fleetint-oob/targets.json
 ```
 
-Replace the commented example with your target, using its real BMC IP and MAC address. Use the compute zone and node group from your Fleet Intelligence account:
+Set `config.toml` to the following, using the compute zone and node group from your Fleet Intelligence account:
 
 ```toml
 compute_zone = "us-west-dc1"
@@ -65,15 +66,26 @@ node_group = "gb200-training"
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 
-[[targets]]
-kind = "compute"
-name = "node-01"
-ip = "192.0.2.10"
-mac = "02:00:00:00:00:01"
-credentials_profile = "bmc"
+[endpoint_source]
+type = "static"
+file = "targets.json"
 ```
 
-Add one `[[targets]]` entry per BMC. The collector and NICo use this shared target list and credential file.
+Put one record per BMC in the `targets.json` array, using real BMC IP and MAC addresses:
+
+```json
+[
+  {
+    "kind": "compute",
+    "name": "node-01",
+    "ip": "192.0.2.10",
+    "mac": "02:00:00:00:00:01",
+    "credentials_profile": "bmc"
+  }
+]
+```
+
+See [Endpoint sources](endpoint-sources.md) for optional fields. Inline `[[targets]]` entries are deprecated but supported for compatibility; remove any inline entries when selecting the JSON file.
 
 ### Set the enrollment token
 
@@ -117,10 +129,10 @@ For troubleshooting and collection settings, use [Configure Linux packages](host
 
 ## Disconnect a BMC or target
 
-To stop collecting from a BMC, remove its `[[targets]]` entry from `/etc/fleetint-oob/config.toml`:
+To stop collecting from a BMC, remove its record from the `/etc/fleetint-oob/targets.json` array:
 
 ```bash
-sudoedit /etc/fleetint-oob/config.toml
+sudoedit /etc/fleetint-oob/targets.json
 ```
 
 If other targets remain, restart the stack and check that collection continues for them:
