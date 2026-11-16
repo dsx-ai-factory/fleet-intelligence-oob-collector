@@ -24,7 +24,6 @@ use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::{NicoHealthSettings, TargetKind};
-use crate::endpoint::static_file::{RawTargetConfig, StaticFileEndpointSource};
 use crate::endpoint::{Endpoint, EndpointSource, StaticEndpointSource};
 
 const MAX_NICO_LABELS: usize = 32;
@@ -76,12 +75,6 @@ pub struct CollectorConfig {
     pub targets: Vec<Target>,
     pub credentials_file: PathBuf,
     pub nico_health: NicoHealthSettings,
-}
-
-/// Selected discovery source and shared settings, before discovery or credentials.
-pub struct SourceConfig {
-    pub source: Box<dyn EndpointSource>,
-    pub settings: EndpointConfig,
 }
 
 /// Static endpoint definitions paired with provider-independent settings.
@@ -192,14 +185,6 @@ struct Config {
     credentials: CredentialsConfig,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
-    #[serde(default)]
-    endpoint_source: Option<SourceSelection>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum SourceSelection {
-    Static { file: PathBuf },
 }
 
 #[derive(Deserialize)]
@@ -208,10 +193,26 @@ struct CredentialsConfig {
     file: PathBuf,
 }
 
-/// Load the selected source without discovering targets or loading BMC passwords.
-pub async fn load_source_config(path: &str) -> Result<SourceConfig, Box<dyn Error>> {
-    let contents = tokio::fs::read_to_string(path).await?;
-    parse_config_parts(&contents, path)?.into_source()
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTargetConfig {
+    #[serde(default)]
+    kind: Option<TargetKind>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    compute_zone: Option<String>,
+    #[serde(default)]
+    node_group: Option<String>,
+    ip: IpAddr,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    mac: Option<String>,
+    #[serde(default)]
+    credentials_profile: Option<String>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
 }
 
 /// Read shared settings without requiring or constructing static targets.
@@ -256,16 +257,7 @@ pub fn load_target_credentials(
 /// credentials-file-before-target-validation error precedence.
 pub async fn load_config_async(path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let contents = tokio::fs::read_to_string(path).await?;
-    let raw = parse_raw_config(&contents, path)?;
-    if raw.endpoint_source.is_some() {
-        let selected = prepare_config(raw, path)?.into_source()?;
-        return selected
-            .settings
-            .resolve_from(selected.source.as_ref())
-            .await;
-    }
-    require_static_targets(&raw, path)?;
-    let parsed = prepare_config(raw, path)?;
+    let parsed = parse_static_parts(&contents, path)?;
     let credentials = SharedCredentials::load_async(&parsed.settings.credentials_file).await?;
     let config = parsed.into_static()?;
     let endpoints = config
@@ -290,60 +282,26 @@ fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<d
 }
 
 struct ParsedConfig {
-    source: Option<SourceSelection>,
     targets: Vec<RawTargetConfig>,
     settings: EndpointConfig,
 }
 
 fn parse_static_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
     let config = parse_raw_config(contents, path)?;
-    require_static_targets(&config, path)?;
+    if config.targets.is_empty() {
+        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
+    }
     prepare_config(config, path)
 }
 
-fn require_static_targets(config: &Config, path: &str) -> Result<(), Box<dyn Error>> {
-    if config.targets.is_empty() && config.endpoint_source.is_none() {
-        return Err(format!(
-            "no BMC targets found in {path}; configure [[targets]] or a static endpoint_source"
-        )
-        .into());
-    }
-    Ok(())
-}
-
 impl ParsedConfig {
-    fn into_source(self) -> Result<SourceConfig, Box<dyn Error>> {
-        match self.source {
-            Some(SourceSelection::Static { file }) => Ok(SourceConfig {
-                source: Box::new(
-                    StaticFileEndpointSource::new(file).map_err(|error| error as Box<dyn Error>)?,
-                ),
-                settings: self.settings,
-            }),
-            None => {
-                require_endpoints_from_raw(&self.targets)?;
-                let config = self.into_static()?;
-                Ok(SourceConfig {
-                    source: Box::new(config.source),
-                    settings: config.settings,
-                })
-            }
-        }
-    }
-
     fn into_static(self) -> Result<StaticConfig, Box<dyn Error>> {
-        let endpoints = match self.source {
-            Some(SourceSelection::Static { file }) => StaticFileEndpointSource::new(file)
-                .and_then(|source| source.read_sync())
-                .map_err(|error| error as Box<dyn Error>)?,
-            None => self
-                .targets
-                .into_iter()
-                .enumerate()
-                .map(|(index, target)| target.into_endpoint(&format!("targets[{index}]")))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error as Box<dyn Error>)?,
-        };
+        let endpoints = self
+            .targets
+            .into_iter()
+            .enumerate()
+            .map(|(index, target)| target.into_endpoint(&format!("targets[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(StaticConfig {
             source: StaticEndpointSource::new(endpoints),
             settings: self.settings,
@@ -363,17 +321,7 @@ fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>
     })
 }
 
-fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
-    if config.endpoint_source.is_some() && !config.targets.is_empty() {
-        return Err("endpoint_source cannot be combined with [[targets]]".into());
-    }
-    if let Some(SourceSelection::Static { file }) = &mut config.endpoint_source {
-        if file.as_os_str().is_empty() {
-            return Err("static endpoint_source.file must not be empty".into());
-        }
-        let directory = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
-        *file = std::path::absolute(directory.join(&*file))?;
-    }
+fn prepare_config(config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
     config.nico_health.validate()?;
     validate_nico_labels("labels", &config.labels)?;
     let defaults = EndpointDefaults {
@@ -385,7 +333,6 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
     // Keep symlinks intact so atomic credential-file replacement still works.
     let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
     Ok(ParsedConfig {
-        source: config.endpoint_source,
         targets: config.targets,
         settings: EndpointConfig {
             credentials_file,
@@ -393,15 +340,6 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
             defaults,
         },
     })
-}
-
-fn require_endpoints_from_raw(targets: &[RawTargetConfig]) -> Result<(), Box<dyn Error>> {
-    if targets.is_empty() {
-        return Err(
-            "no BMC targets found; configure [[targets]] or a static endpoint_source".into(),
-        );
-    }
-    Ok(())
 }
 
 fn require_endpoints(endpoints: &[Endpoint]) -> Result<(), Box<dyn Error>> {
@@ -531,6 +469,33 @@ fn normalize_config_value(
         return Err(format!("{context} exceeds {MAX_NICO_LABEL_VALUE_BYTES} bytes").into());
     }
     Ok(value)
+}
+
+impl RawTargetConfig {
+    fn into_endpoint(self, context: &str) -> Result<Endpoint, Box<dyn Error>> {
+        let mac = self
+            .mac
+            .as_deref()
+            .ok_or_else(|| format!("{context}.mac is required"))?;
+        if mac.trim().is_empty() {
+            return Err(format!("{context}.mac cannot be blank").into());
+        }
+        let mac = mac
+            .trim()
+            .parse::<MacAddress>()
+            .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
+        Ok(Endpoint {
+            kind: self.kind.unwrap_or_default(),
+            name: self.name,
+            compute_zone: self.compute_zone,
+            node_group: self.node_group,
+            ip: self.ip,
+            port: self.port,
+            mac,
+            credentials_profile: self.credentials_profile,
+            labels: self.labels,
+        })
+    }
 }
 
 // Same JSON schema and field precedence as NICo health's static endpoint credentials.
@@ -1655,152 +1620,6 @@ mod tests {
             );
             assert_eq!(async_error, sync_error);
         }
-    }
-
-    #[tokio::test]
-    async fn json_source_shares_finalization_and_reloads_atomically() {
-        let directory =
-            std::env::temp_dir().join(format!("fleetint-json-source-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let _cleanup = TestDirectoryCleanup(directory.clone());
-        let path = directory.join("config.toml");
-        let contents = r#"
-compute_zone = " default-zone "
-node_group = "default-group"
-labels = { site = "shared" }
-[credentials]
-file = "credentials.json"
-[endpoint_source]
-type = "static"
-file = "targets.json"
-"#;
-        std::fs::write(&path, contents).unwrap();
-        let path = path.to_str().unwrap();
-        // Source construction reads neither the endpoint file nor passwords.
-        let selected = load_source_config(path).await.unwrap();
-        assert!(
-            selected
-                .source
-                .discover()
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("cannot read")
-        );
-        let targets = r#"[{"kind":"compute","ip":"2001:db8::1","port":8443,"mac":"02:00:00:00:00:01","name":" node-01 ","credentials_profile":"bmc","labels":{"site":"local"}}]"#;
-        std::fs::write(directory.join("targets.json"), targets).unwrap();
-        let raw = selected.source.discover().await.unwrap();
-        assert_eq!(raw[0].labels.len(), 1);
-        assert_eq!(raw[0].compute_zone, None);
-        assert!(
-            load_config_async(path)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("credentials.file")
-        );
-        std::fs::write(
-            directory.join("credentials.json"),
-            r#"{"profiles":{"bmc":{"username":"user","password":"fixture-secret"}}}"#,
-        )
-        .unwrap();
-        for resolved in [
-            load_config_async(path).await.unwrap(),
-            load_config(path).unwrap(),
-            load_static_config(path).unwrap().resolve().await.unwrap(),
-        ] {
-            let target = &resolved.targets[0];
-            assert_eq!(target.address, "[2001:db8::1]:8443");
-            assert_eq!(target.username, "user");
-            assert_eq!(target.labels["machine_name"], "node-01");
-            assert_eq!(target.labels["oob"], "true");
-            assert_eq!(target.labels["compute_zone"], "default-zone");
-            assert_eq!(target.labels["node_group"], "default-group");
-            assert_eq!(target.labels["site"], "local");
-        }
-        let next = directory.join("next.json");
-        std::fs::write(&next, targets.replace("2001:db8::1", "2001:db8::2")).unwrap();
-        std::fs::rename(next, directory.join("targets.json")).unwrap();
-        assert_eq!(
-            selected.source.discover().await.unwrap()[0].ip.to_string(),
-            "2001:db8::2"
-        );
-        assert_eq!(raw[0].ip.to_string(), "2001:db8::1");
-        for (json, expected) in [
-            ("[]".to_string(), "no BMC targets"),
-            (
-                "{\"password\":\"private-value\"}".to_string(),
-                "invalid static targets JSON",
-            ),
-            (
-                targets.replace("\"name\":", "\"password\":\"private-value\",\"name\":"),
-                "invalid static targets JSON",
-            ),
-            (
-                targets.replace("02:00:00:00:00:01", "bad-mac"),
-                "targets[0].mac",
-            ),
-            (
-                targets.replace("\"site\":\"local\"", "\"oob\":\"false\""),
-                "reserved",
-            ),
-            (
-                format!(
-                    "[{},{}]",
-                    &targets[1..targets.len() - 1],
-                    &targets[1..targets.len() - 1]
-                ),
-                "duplicates BMC MAC",
-            ),
-            (
-                targets.replace("\"bmc\"", "\"missing-profile\""),
-                "BMC 02:00:00:00:00:01",
-            ),
-        ] {
-            std::fs::write(directory.join("targets.json"), json).unwrap();
-            for error in [
-                load_config_async(path).await.unwrap_err(),
-                load_config(path).unwrap_err(),
-            ] {
-                let error = error.to_string();
-                assert!(error.contains(expected), "expected {expected}: {error}");
-                assert!(!error.contains("private-value"));
-                assert!(!error.contains("fixture-secret"));
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn source_selector_rejects_ambiguous_or_invalid_definitions() {
-        let input = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='static'\nfile='targets.json'\n";
-        for invalid in [
-            input.replace("type='static'", "type='netbox'"),
-            input.replace("file='targets.json'", "file=''"),
-            input.replace("file='targets.json'", ""),
-            format!("{input}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'"),
-            format!("{input}\npassword='private-value'"),
-        ] {
-            let error = parse_config_parts(&invalid, "config.toml")
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(!error.contains("private-value"));
-        }
-        assert!(StaticFileEndpointSource::new("relative.json".into()).is_err());
-        let example =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config.static.example.toml");
-        let source = load_source_config(example.to_str().unwrap()).await.unwrap();
-        let snapshot = source.source.discover().await.unwrap();
-        assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].ip.to_string(), "192.0.2.10");
-        // Existing inline TOML selects the same generic factory without a selector.
-        let contents = with_test_credentials(
-            "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'",
-        );
-        let path = write_config("inline-source-factory", &contents);
-        let _cleanup = TestFileCleanup(path.clone());
-        let selected = load_source_config(path.to_str().unwrap()).await.unwrap();
-        assert_eq!(selected.source.discover().await.unwrap().len(), 1);
     }
 
     struct TestDirectoryCleanup(PathBuf);
