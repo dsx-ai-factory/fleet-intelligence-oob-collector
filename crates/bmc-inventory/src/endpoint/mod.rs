@@ -8,6 +8,8 @@
 //! Sources own their scope and authentication; no provider-specific API types
 //! or BMC passwords belong in the shared endpoint model.
 
+pub mod static_file;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::IpAddr;
