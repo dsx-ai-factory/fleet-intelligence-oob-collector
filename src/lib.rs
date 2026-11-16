@@ -231,7 +231,9 @@ async fn run_runtime_until_shutdown(
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let target_config = config::load_config(&options.inventory.config)?;
+    let target_config = config::load_static_config(&options.inventory.config)?
+        .resolve()
+        .await?;
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
@@ -259,7 +261,11 @@ async fn run_runtime_until_shutdown(
         let cycle = async {
             let target_config = match initial_config.take() {
                 Some(config) => config,
-                None => config::load_config(&options.inventory.config)?,
+                None => {
+                    config::load_static_config(&options.inventory.config)?
+                        .resolve()
+                        .await?
+                }
             };
             run_collection_cycle(
                 &options,
@@ -757,7 +763,9 @@ async fn upload_attestation(
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
-    let collector_config = config::load_config(&options.config)?;
+    let collector_config = config::load_static_config(&options.config)?
+        .resolve()
+        .await?;
     let dispatcher = Arc::new(start_dispatcher(&options, &collector_config.targets)?);
     let inventories =
         collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
