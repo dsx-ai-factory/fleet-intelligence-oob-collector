@@ -112,6 +112,10 @@ struct RenderNicoConfigArgs {
     #[arg(short, long, default_value = "config.toml")]
     config: String,
 
+    /// Existing customer-owned NICo TOML to preserve and augment.
+    #[arg(long)]
+    base_config: Option<String>,
+
     #[arg(short, long)]
     output: String,
 
@@ -210,17 +214,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Command::RenderNicoConfig(args) => {
             let collector_config = config::load_config(&args.config)?;
-            let rendered = config::render_nico_config(
-                &collector_config,
-                &NicoConfigOptions {
-                    otlp_endpoint: args.otlp_endpoint,
-                    metrics_endpoint: args.metrics_endpoint,
-                    metrics_prefix: args.metrics_prefix,
-                    resource_status_collection: !args.disable_resource_status_collection,
-                    resource_status_firmware_poll_interval_seconds: args
-                        .resource_status_firmware_poll_interval_seconds,
-                },
-            )?;
+            let options = NicoConfigOptions {
+                otlp_endpoint: args.otlp_endpoint,
+                metrics_endpoint: args.metrics_endpoint,
+                metrics_prefix: args.metrics_prefix,
+                resource_status_collection: !args.disable_resource_status_collection,
+                resource_status_firmware_poll_interval_seconds: args
+                    .resource_status_firmware_poll_interval_seconds,
+            };
+            let rendered = if let Some(base_config) = args.base_config {
+                let base = std::fs::read_to_string(base_config)?;
+                config::merge_nico_config(&base, &collector_config, &options)?
+            } else {
+                config::render_nico_config(&collector_config, &options)?
+            };
             write_private_file(&args.output, &rendered)?;
         }
     }

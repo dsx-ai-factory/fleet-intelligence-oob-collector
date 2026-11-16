@@ -20,7 +20,11 @@ spec:
     - from:
         - podSelector:
             matchLabels:
+              {{- if eq .Values.nicoHardwareHealth.deploymentMode "external" }}
+              fleet-intelligence.nvidia.com/otel-source: {{ .Release.Name | quote }}
+              {{- else }}
               app.kubernetes.io/instance: {{ .Release.Name | quote }}
+              {{- end }}
       ports:
         - protocol: TCP
           port: 4317

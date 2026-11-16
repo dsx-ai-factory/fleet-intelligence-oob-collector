@@ -170,8 +170,11 @@ By default, the chart runs the collector, NICo hardware health, and a gateway th
 | Inventory and attestation only | `nicoHardwareHealth.enabled: false` and `otelGateway.enabled: false` |
 | Health telemetry only | `bmcCollector.enabled: false` |
 | NICo with your own OTLP/gRPC collector | `telemetry.endpoint` (an `http://` or `https://` URL) and `otelGateway.enabled: false` |
+| A pre-existing same-namespace NICo with the FI gateway | `nicoHardwareHealth.deploymentMode: external` |
 
 The gateway requires NICo.
+
+With `deploymentMode: external`, the chart keeps NICo health enabled but does not create a NICo Deployment or Service. Set `nicoHardwareHealth.external.expectedImage` to the existing NICo image and `nicoHardwareHealth.image` to the FI-qualified replacement. The integration preserves customer endpoint sources, plugins, sinks, and unrelated settings while adding FI-owned telemetry configuration; follow the [external NICo integration procedure](external-nico-preserve-configuration.md). The default `managed` deployment mode preserves the bundled deployment.
 
 NICo defaults to automatic log collection: it starts with Redfish SSE streaming, falls back to periodic polling when SSE is unavailable or keeps failing, and retries SSE after 30 minutes of polling. You can select fixed SSE streaming or periodic polling with `nicoHardwareHealth.config.logsMode`. NICo's discovery, manager, and firmware collectors also emit each System, Manager, Chassis, and FirmwareInventory resource's `Status` as an OTLP log. It sends metrics and logs in batches of up to 512 records, at least every two seconds.
 
@@ -259,7 +262,7 @@ These limits apply to the collector only. NICo makes its own requests to the BMC
 
 ## Workload settings
 
-Every workload (`bmcCollector`, `nicoHardwareHealth`, and `otelGateway`) accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. `otelGateway.replicas` sets the number of gateway replicas.
+Every chart-managed workload (`bmcCollector`, managed `nicoHardwareHealth`, and `otelGateway`) accepts `enabled`, `image`, `resources`, `nodeSelector`, `tolerations`, `affinity`, `podAnnotations`, and `logLevel`. `nicoHardwareHealth.deploymentMode` selects `managed` (the default) or `external`, and `otelGateway.replicas` sets the number of gateway replicas.
 
 NICo application logging defaults to `warn` to suppress routine per-reading messages. Set `nicoHardwareHealth.logLevel` to `info` or `debug` when investigating collection. This setting controls application log verbosity; BMC event log collection and telemetry export continue independently.
 

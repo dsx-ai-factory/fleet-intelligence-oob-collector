@@ -1,0 +1,93 @@
+{{- if and .Values.nicoHardwareHealth.enabled (eq .Values.nicoHardwareHealth.deploymentMode "external") }}
+{{- $gatewayEndpoint := "" -}}
+{{- if .Values.otelGateway.enabled -}}
+{{- $gatewayEndpoint = printf "http://%s:4317" (include "fleet-intelligence-oob-collector.otelGatewayName" .) -}}
+{{- else -}}
+{{- $gatewayEndpoint = required "telemetry.endpoint is required when the OTEL gateway is disabled" (.Values.telemetry.endpoint | trim) -}}
+{{- end -}}
+{{- $checksumInput := printf "%s|%s|%s|%s|%s|%s|%v|%v|%s|%s" (include (print $.Template.BasePath "/configmap.yaml") .) (include "fleet-intelligence-oob-collector.image" .) (include "fleet-intelligence-oob-collector.nicoHardwareHealthImage" .) .Values.nicoHardwareHealth.external.expectedImage $gatewayEndpoint .Values.nicoHardwareHealth.logLevel .Values.nicoHardwareHealth.resourceStatus.enabled .Values.nicoHardwareHealth.resourceStatus.firmwarePollIntervalSeconds .Values.credentials.existingSecret .Values.credentials.secretKey -}}
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fleet-intelligence-oob-collector.externalNicoIntegrationName" . }}
+  labels:
+    {{- include "fleet-intelligence-oob-collector.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external-nico-integration
+data:
+  integration.json: |
+    {
+      "qualifiedNicoRevision": "844ae0766b6070ab69b3ca744cb87a72a3b0209a",
+      "qualifiedNicoImage": {{ include "fleet-intelligence-oob-collector.nicoHardwareHealthImage" . | toJson }},
+      "expectedSourceNicoImage": {{ .Values.nicoHardwareHealth.external.expectedImage | trim | toJson }},
+      "sourceLabel": {{ .Release.Name | toJson }},
+      "configChecksum": {{ $checksumInput | sha256sum | toJson }},
+      "imagePullSecrets": {{ .Values.imagePullSecrets | toJson }},
+      "initContainer": {
+        "name": "fleet-intelligence-nico-config",
+        "image": {{ include "fleet-intelligence-oob-collector.image" . | toJson }},
+        "imagePullPolicy": {{ .Values.bmcCollector.image.pullPolicy | toJson }},
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "capabilities": {"drop": ["ALL"]},
+          "readOnlyRootFilesystem": true
+        },
+        "args": [
+          "render-nico-config",
+          "--config", "/etc/fleet-intelligence/config.toml",
+          "--output", "/etc/nico-health/config.toml",
+          "--otlp-endpoint", {{ $gatewayEndpoint | toJson }},
+          "--metrics-endpoint", "0.0.0.0:9009",
+          "--metrics-prefix", "fleetint",
+          "--base-config", "__FLEET_INTELLIGENCE_EXISTING_NICO_CONFIG__",
+          "--resource-status-firmware-poll-interval-seconds",
+          {{ .Values.nicoHardwareHealth.resourceStatus.firmwarePollIntervalSeconds | quote }}
+          {{- if not .Values.nicoHardwareHealth.resourceStatus.enabled }},
+          "--disable-resource-status-collection"
+          {{- end }}
+        ],
+        "volumeMounts": [
+          {"name": "fleet-intelligence-collector-config", "mountPath": "/etc/fleet-intelligence", "readOnly": true},
+          {"name": "fleet-intelligence-bmc-credentials", "mountPath": "/run/secrets/bmc", "readOnly": true},
+          {"name": "fleet-intelligence-nico-config", "mountPath": "/etc/nico-health"}
+        ]
+      },
+      "mainContainer": {
+        "args": ["/etc/nico-health/config.toml"],
+        "env": [
+          {"name": "RUST_LOG", "value": {{ .Values.nicoHardwareHealth.logLevel | toJson }}}
+          {{- if .Values.proxy.enabled }}
+          {{- range $name, $value := dict "HTTP_PROXY" .Values.proxy.httpProxy "HTTPS_PROXY" .Values.proxy.httpsProxy "ALL_PROXY" .Values.proxy.allProxy "NO_PROXY" .Values.proxy.noProxy }}
+          {{- if $value }},
+          {"name": {{ $name | toJson }}, "value": {{ $value | toJson }}}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+        ],
+        "volumeMounts": [
+          {"name": "fleet-intelligence-nico-config", "mountPath": "/etc/nico-health", "readOnly": true},
+          {"name": "fleet-intelligence-nico-tmp", "mountPath": "/tmp"}
+        ]
+      },
+      "volumes": [
+        {
+          "name": "fleet-intelligence-collector-config",
+          "configMap": {
+            "name": {{ printf "%s-config" (include "fleet-intelligence-oob-collector.fullname" .) | toJson }},
+            "items": [{"key": "collector.toml", "path": "config.toml", "mode": 288}]
+          }
+        },
+        {"name": "fleet-intelligence-nico-config", "emptyDir": {}},
+        {"name": "fleet-intelligence-nico-tmp", "emptyDir": {}},
+        {
+          "name": "fleet-intelligence-bmc-credentials",
+          "secret": {
+            "secretName": {{ .Values.credentials.existingSecret | toJson }},
+            "defaultMode": 288,
+            "items": [{"key": {{ .Values.credentials.secretKey | toJson }}, "path": "credentials.json"}]
+          }
+        }
+      ]
+    }
+{{- end }}

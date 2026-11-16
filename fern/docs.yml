@@ -31,6 +31,9 @@ navigation:
   - page: Configuration
     path: ../docs/configuration.md
     slug: configuration
+  - page: External NICo integration
+    path: ../docs/external-nico-preserve-configuration.md
+    slug: external-nico-integration
   - page: Credentials
     path: ../docs/credentials.md
     slug: credentials
