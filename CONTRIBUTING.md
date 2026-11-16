@@ -179,10 +179,12 @@ These notes describe how the collector works internally. Read them before changi
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
 | `crates/backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
 | `crates/bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
-| `crates/bmc-inventory` | Redfish inventory collection, mapping, and output |
+| `crates/bmc-inventory` | Endpoint discovery, Redfish inventory collection, mapping, and output |
 | `crates/bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
 
 **Inventory pipeline.** Inventory flows source → model → sink. The Redfish source builds Fleet Intelligence models directly and keeps vendor-specific Redfish structures inside the source. Inventory node identity resolution is independent of attestation.
+
+**Endpoint discovery.** `bmc_inventory::endpoint::EndpointSource` lists BMC endpoints for a collection cycle. A source returns a complete, credential-free listing or an error; an unavailable source must never become an empty listing. Endpoints carry only user labels and a credential profile reference. A shared finalizer applies placement defaults, validates labels, adds the generated labels, resolves credentials, and rejects empty or duplicate-MAC listings, so every source produces the same `Target` values. `StaticEndpointSource` reads the existing `[[targets]]`. Provider authentication, filtering, and pagination belong in each source, not in the interface. The BMC MAC remains the Fleet Intelligence identity; provider IDs are not identities.
 
 **Configuration snapshot.** Each cycle loads one resolved target and credential snapshot and synchronizes the dispatcher's BMC endpoints before collecting; inventory and attestation share it. Startup validation supplies the first snapshot. During attestation, a target gets at most one credential reload per attempt. The retry pass reloads credentials for the targets it retries.
 
