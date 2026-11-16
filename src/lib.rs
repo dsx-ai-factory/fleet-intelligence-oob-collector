@@ -245,7 +245,25 @@ async fn run_runtime_until_shutdown(
         "starting OOB collector"
     );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let target_config = config::load_config_async(&options.inventory.config).await?;
+    let mut config_loader = config::RuntimeConfigLoader::default();
+    let target_config = loop {
+        let loaded = tokio::select! {
+            biased;
+            () = shutdown.wait() => return Ok(()),
+            result = config_loader.load(&options.inventory.config) => result,
+        };
+        match loaded {
+            Ok(config) => break config,
+            Err(error) if config::is_discovery_unavailable(error.as_ref()) => {
+                tracing::warn!(reason = %error, retry_seconds = 30, "endpoint discovery unavailable at startup; waiting without collecting");
+                tokio::select! {
+                    () = shutdown.wait() => return Ok(()),
+                    () = tokio::time::sleep(Duration::from_secs(30)) => {},
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
@@ -279,7 +297,7 @@ async fn run_runtime_until_shutdown(
         let cycle = async {
             let target_config = match initial_config.take() {
                 Some(config) => config,
-                None => config::load_config_async(&options.inventory.config).await?,
+                None => config_loader.load(&options.inventory.config).await?,
             };
             run_collection_cycle(
                 &options,
@@ -292,10 +310,14 @@ async fn run_runtime_until_shutdown(
             )
             .await
         };
+        let mut next_attempt = interval;
         if let Err(err) = cycle.await {
+            if config::is_discovery_unavailable(err.as_ref()) {
+                next_attempt = interval.min(Duration::from_secs(30));
+            }
             tracing::error!(
                 phase = "cycle", operation = "collection", outcome = "failed",
-                next_attempt_seconds = interval.as_secs(),
+                next_attempt_seconds = next_attempt.as_secs(),
                 error = %err,
                 http_status = backend_http_status(err.as_ref()),
                 "collection cycle failed"
@@ -306,11 +328,11 @@ async fn run_runtime_until_shutdown(
         }
 
         tracing::info!(
-            next_sync_seconds = interval.as_secs(),
+            next_sync_seconds = next_attempt.as_secs(),
             "sleeping until next cycle"
         );
         tokio::select! {
-            _ = tokio::time::sleep(interval) => {}
+            _ = tokio::time::sleep(next_attempt) => {}
             () = shutdown.wait() => return Ok(()),
         }
     }

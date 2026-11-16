@@ -84,6 +84,89 @@ pub struct SourceConfig {
     pub settings: EndpointConfig,
 }
 
+/// Runtime-scoped, credential-free discovery fallback. It is never persisted.
+#[derive(Default)]
+pub struct RuntimeConfigLoader {
+    last_good: Option<LastGoodDiscovery>,
+}
+
+struct LastGoodDiscovery {
+    source: NicoRestConfig,
+    endpoints: crate::endpoint::EndpointSnapshot,
+    discovered_at: std::time::Instant,
+}
+
+/// True only for discovery availability failures, not configuration or identity errors.
+pub fn is_discovery_unavailable(error: &(dyn Error + 'static)) -> bool {
+    error.is::<crate::endpoint::nico::DiscoveryUnavailable>()
+}
+
+impl RuntimeConfigLoader {
+    /// Reload settings and credentials, using a bounded last-good discovery only
+    /// when the same NICo scope is unavailable. Static configuration never caches.
+    pub async fn load(&mut self, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
+        let contents = tokio::fs::read_to_string(path).await?;
+        let raw = parse_raw_config(&contents, path)?;
+        if matches!(raw.endpoint_source, SourceSelection::Static) {
+            self.last_good = None;
+            return load_config_async(path).await;
+        }
+        let parsed = prepare_config(raw, path)?;
+        let SourceSelection::Nico(source_config) = &parsed.source else {
+            unreachable!()
+        };
+        let source_config = source_config.clone();
+        let selected = parsed.into_source()?;
+        let discovered = selected.source.discover().await;
+        self.resolve_discovery(&selected.settings, source_config, discovered)
+            .await
+    }
+
+    async fn resolve_discovery(
+        &mut self,
+        settings: &EndpointConfig,
+        source: NicoRestConfig,
+        discovered: Result<crate::endpoint::EndpointSnapshot, crate::endpoint::EndpointSourceError>,
+    ) -> Result<CollectorConfig, Box<dyn Error>> {
+        let (endpoints, fresh) = match discovered {
+            Ok(endpoints) => {
+                // An authoritative result supersedes old membership immediately,
+                // including empty results and results failing shared validation.
+                self.last_good = None;
+                (endpoints, true)
+            }
+            Err(error) if is_discovery_unavailable(error.as_ref()) => {
+                let cached = self.last_good.as_ref().filter(|cached| {
+                    cached.source == source
+                        && cached.discovered_at.elapsed().as_secs() < source.max_stale_seconds
+                });
+                let Some(cached) = cached else {
+                    self.last_good = None;
+                    return Err(error as Box<dyn Error>);
+                };
+                tracing::warn!(age_seconds = cached.discovered_at.elapsed().as_secs(), max_stale_seconds = source.max_stale_seconds, targets = cached.endpoints.len(), reason = %error, "NICo unavailable; using bounded last-good discovery");
+                (cached.endpoints.clone(), false)
+            }
+            Err(error) => {
+                self.last_good = None;
+                return Err(error as Box<dyn Error>);
+            }
+        };
+        require_endpoints(&endpoints)?;
+        // Never cache BMC passwords or fallback around credential/label errors.
+        let credentials = SharedCredentials::load_async(&settings.credentials_file).await?;
+        let resolved = settings.resolve_endpoints(&endpoints, &credentials)?;
+        if fresh {
+            self.last_good = Some(LastGoodDiscovery {
+                source,
+                endpoints,
+                discovered_at: std::time::Instant::now(),
+            });
+        }
+        Ok(resolved)
+    }
+}
+
 /// Static endpoint definitions paired with provider-independent settings.
 #[derive(Clone, Debug)]
 pub struct StaticConfig {
@@ -327,7 +410,7 @@ fn parse_static_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dy
 
 fn require_static_targets(config: &Config, path: &str) -> Result<(), Box<dyn Error>> {
     if !matches!(config.endpoint_source, SourceSelection::Static) {
-        return Err("this configuration tool supports static targets only; use the async collector or discovery example for NICo REST".into());
+        return Err("render-nico-config requires a separate static targets config for NICo health; use FLEETINT_COLLECTOR_CONFIG for collector-only API discovery and bmc-collector discover to check it (supports static targets only)".into());
     }
     if config.targets.is_empty() {
         return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
@@ -432,7 +515,13 @@ fn resolve_endpoints(
     let mut macs = HashSet::new();
     let mut targets = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.iter().enumerate() {
-        let context = format!("targets[{index}]");
+        let context = match &endpoint.source_reference {
+            Some(reference) => format!(
+                "targets[{index}] (source {})",
+                crate::endpoint::safe_source_reference(reference)
+            ),
+            None => format!("targets[{index}]"),
+        };
         let identity = format!("{context} (BMC {})", endpoint.mac);
         let resolved = credentials
             .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
@@ -557,6 +646,7 @@ impl RawTargetConfig {
             .parse::<MacAddress>()
             .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
         Ok(Endpoint {
+            source_reference: None,
             kind: self.kind.unwrap_or_default(),
             name: self.name,
             compute_zone: self.compute_zone,
@@ -1475,6 +1565,7 @@ mod tests {
 
     fn provider_endpoint() -> Endpoint {
         Endpoint {
+            source_reference: None,
             kind: TargetKind::Compute,
             name: Some("original".into()),
             compute_zone: Some("original-zone".into()),
@@ -1798,6 +1889,112 @@ mod tests {
                 .unwrap()
                 .to_string()
                 .contains("HTTPS")
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_fallback_is_bounded_scoped_and_credential_free() {
+        let directory =
+            std::env::temp_dir().join(format!("fleetint-nico-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let _cleanup = TestDirectoryCleanup(directory.clone());
+        let path = directory.join("config.toml");
+        std::fs::write(&path, "[credentials]\nfile='credentials.json'\n").unwrap();
+        let credentials = directory.join("credentials.json");
+        std::fs::write(
+            &credentials,
+            r#"{"profiles":{"bmc":{"username":"before","password":"fixture"}}}"#,
+        )
+        .unwrap();
+        let settings = load_endpoint_config(path.to_str().unwrap()).unwrap();
+        let key: NicoRestConfig = toml::from_str("api_url='https://nico.example.com/v2'\norg='example'\nsite_id='site'\ntoken_file='/private/token'\ncredentials_profile='bmc'\nmax_stale_seconds=60").unwrap();
+        let mut endpoint = provider_endpoint();
+        endpoint.source_reference = Some("machine-for-cache-test".into());
+        let endpoints: crate::endpoint::EndpointSnapshot = vec![endpoint].into();
+        let unavailable = || Err(crate::endpoint::nico::unavailable("NICo returned HTTP 401"));
+        let mut loader = RuntimeConfigLoader::default();
+        assert!(
+            loader
+                .resolve_discovery(&settings, key.clone(), unavailable())
+                .await
+                .is_err()
+        );
+        loader
+            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
+            .await
+            .unwrap();
+        let first_time = loader.last_good.as_ref().unwrap().discovered_at;
+        std::fs::write(
+            &credentials,
+            r#"{"profiles":{"bmc":{"username":"rotated","password":"new-fixture"}}}"#,
+        )
+        .unwrap();
+        let fallback = loader
+            .resolve_discovery(&settings, key.clone(), unavailable())
+            .await
+            .unwrap();
+        assert_eq!(fallback.targets[0].username, "rotated");
+        assert_eq!(loader.last_good.as_ref().unwrap().discovered_at, first_time);
+        loader.last_good.as_mut().unwrap().discovered_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(61);
+        assert!(
+            loader
+                .resolve_discovery(&settings, key.clone(), unavailable())
+                .await
+                .is_err()
+        );
+        assert!(loader.last_good.is_none());
+        loader
+            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
+            .await
+            .unwrap();
+        let mut other_site = key.clone();
+        other_site.site_id = "another-site".into();
+        assert!(
+            loader
+                .resolve_discovery(&settings, other_site, unavailable())
+                .await
+                .is_err()
+        );
+        loader
+            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
+            .await
+            .unwrap();
+        assert!(
+            loader
+                .resolve_discovery(&settings, key.clone(), Ok(Vec::new().into()))
+                .await
+                .is_err()
+        );
+        assert!(loader.last_good.is_none());
+        loader
+            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
+            .await
+            .unwrap();
+        assert!(
+            loader
+                .resolve_discovery(&settings, key.clone(), Err("duplicate BMC MAC".into()))
+                .await
+                .is_err()
+        );
+        assert!(loader.last_good.is_none());
+        loader
+            .resolve_discovery(&settings, key.clone(), Ok(endpoints))
+            .await
+            .unwrap();
+        std::fs::write(&credentials, r#"{"profiles":{}}"#).unwrap();
+        let error = loader
+            .resolve_discovery(&settings, key.clone(), unavailable())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("machine-for-cache-test"));
+        std::fs::write(&credentials, "invalid JSON").unwrap();
+        assert!(
+            loader
+                .resolve_discovery(&settings, key, unavailable())
+                .await
+                .is_err()
         );
     }
 

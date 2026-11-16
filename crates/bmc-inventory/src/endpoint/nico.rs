@@ -4,7 +4,7 @@
 //! NICo REST machine discovery. BMC credentials and Fleet normalization are
 //! resolved separately by the shared endpoint configuration.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,7 +25,7 @@ const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Non-secret NICo REST settings. The token file contains only an access token,
 /// refreshed by the operator or an external credential service.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NicoRestConfig {
     /// REST prefix including `/v2`, without organization or API-name segments.
@@ -42,11 +42,18 @@ pub struct NicoRestConfig {
     /// Whole-discovery budget, including all pages and reading the token file.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    /// Runtime-only fallback age since the last successful discovery (30 hours).
+    #[serde(default = "default_max_stale")]
+    pub max_stale_seconds: u64,
 }
 
 fn default_api_name() -> String {
     "nico".into()
 }
+fn default_max_stale() -> u64 {
+    108_000
+}
+
 fn default_timeout() -> u64 {
     30
 }
@@ -82,12 +89,13 @@ impl NicoRestEndpointSource {
             || !matches!(config.api_name.as_str(), "nico" | "carbide")
             || !config.token_file.is_absolute()
             || !(1..=3600).contains(&config.timeout_seconds)
+            || !(1..=172_800).contains(&config.max_stale_seconds)
             || config
                 .credentials_profile
                 .as_ref()
                 .is_some_and(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, site ID, an absolute token_file, api_name nico/carbide, and timeout_seconds in 1..=3600; credential profile must not be blank".into());
+            return Err("NICo requires organization, site ID, an absolute token_file, api_name nico/carbide, timeout_seconds in 1..=3600, and max_stale_seconds in 1..=172800; credential profile must not be blank".into());
         }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
@@ -109,7 +117,7 @@ impl NicoRestEndpointSource {
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
         let token = tokio::fs::read_to_string(&self.config.token_file)
             .await
-            .map_err(|_| "cannot read NICo token_file")?;
+            .map_err(|_| unavailable("cannot read NICo token_file"))?;
         let token = token.trim();
         if token.is_empty() || token.len() > 65536 {
             return Err(
@@ -119,9 +127,26 @@ impl NicoRestEndpointSource {
         let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| "invalid NICo bearer token header")?;
         authorization.set_sensitive(true);
+        for attempt in 0..2 {
+            match self.discover_pages(&authorization).await {
+                Err(error) if attempt == 0 && error.is::<ListingChanged>() => {
+                    tracing::warn!(
+                        "NICo listing changed; retrying discovery once within the original deadline"
+                    );
+                }
+                result => return result,
+            }
+        }
+        unreachable!("both discovery attempts return or retry")
+    }
+
+    async fn discover_pages(&self, authorization: &HeaderValue) -> Result<EndpointSnapshot> {
         let mut endpoints = Vec::new();
         let mut ids = HashSet::new();
         let mut total = None;
+        let mut skipped = 0usize;
+        let mut macs = HashMap::new();
+        let mut addresses = HashMap::new();
         for page in 1..=MAX_PAGES {
             let response = self
                 .client
@@ -133,12 +158,28 @@ impl NicoRestEndpointSource {
                     ("pageNumber", page.to_string()),
                     ("pageSize", PAGE_SIZE.to_string()),
                     ("orderBy", "ID_ASC".into()),
+                    ("isMissingOnSite", "false".into()),
+                    ("status", "Ready".into()),
+                    ("status", "InUse".into()),
+                    ("status", "Initializing".into()),
+                    ("status", "Error".into()),
+                    ("status", "Maintenance".into()),
+                    ("status", "Reset".into()),
+                    ("status", "Unknown".into()),
                 ])
                 .send()
                 .await
-                .map_err(|_| "NICo request failed; check connectivity and CA trust")?;
+                .map_err(|_| unavailable("NICo request failed; check connectivity and CA trust"))?;
             if !response.status().is_success() {
-                return Err(format!("NICo returned HTTP {}; check token expiry, carbide scope, and provider/site permissions", response.status().as_u16()).into());
+                let status = response.status();
+                let message = format!(
+                    "NICo returned HTTP {}; check token expiry, carbide scope, and provider/site permissions",
+                    status.as_u16()
+                );
+                if status.is_server_error() || matches!(status.as_u16(), 401 | 403 | 429) {
+                    return Err(unavailable(message));
+                }
+                return Err(message.into());
             }
             let pagination: Pagination = response
                 .headers()
@@ -150,7 +191,7 @@ impl NicoRestEndpointSource {
                 || pagination.page_size != PAGE_SIZE
                 || total.is_some_and(|previous| previous != pagination.total)
             {
-                return Err("NICo pagination changed or is inconsistent; rerun discovery".into());
+                return Err(Box::new(ListingChanged));
             }
             total = Some(pagination.total);
             let machines: Vec<Machine> = read_json(response).await?;
@@ -159,22 +200,55 @@ impl NicoRestEndpointSource {
                 .saturating_sub((page - 1) * PAGE_SIZE)
                 .min(PAGE_SIZE);
             if machines.len() != expected {
-                return Err("NICo page is incomplete or inconsistent; rerun discovery".into());
+                return Err(Box::new(ListingChanged));
             }
             for machine in machines {
-                if machine.site_id != self.config.site_id
-                    || machine.id.trim().is_empty()
-                    || !ids.insert(machine.id.clone())
-                {
+                let machine_id = super::safe_source_reference(&machine.id);
+                if machine.site_id != self.config.site_id || machine.id.trim().is_empty() {
                     return Err(
-                        "NICo returned a different site, empty ID, or duplicate machine".into(),
+                        format!("NICo machine {machine_id}: different site or empty ID").into(),
                     );
                 }
-                endpoints.push(machine.into_endpoint(self.config.credentials_profile.clone())?);
+                if !ids.insert(machine.id.clone()) {
+                    return Err(Box::new(ListingChanged));
+                }
+                let endpoint = match machine.into_endpoint(self.config.credentials_profile.clone())
+                {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        skipped += 1;
+                        if skipped <= 20 {
+                            tracing::warn!(%machine_id, reason = %error, "skipping NICo machine");
+                        }
+                        continue;
+                    }
+                };
+                if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
+                    return Err(format!(
+                        "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
+                        endpoint.mac
+                    )
+                    .into());
+                }
+                if let Some(previous) = addresses.insert(endpoint.ip, machine_id.clone()) {
+                    return Err(format!(
+                        "NICo machines {previous} and {machine_id}: duplicate BMC address"
+                    )
+                    .into());
+                }
+                endpoints.push(endpoint);
             }
             if ids.len() == pagination.total {
+                if skipped > 0 {
+                    tracing::warn!(
+                        skipped_machines = skipped,
+                        usable_machines = endpoints.len(),
+                        total_machines = ids.len(),
+                        "NICo discovery omitted machines; inspect metadata and permissions (first 20 reasons logged)"
+                    );
+                }
                 if endpoints.is_empty() {
-                    return Err("no BMC targets found in NICo endpoint source".into());
+                    return Err("no usable BMC targets found in NICo endpoint source; check metadata and provider permissions".into());
                 }
                 return Ok(endpoints.into());
             }
@@ -182,6 +256,28 @@ impl NicoRestEndpointSource {
         Err("NICo discovery exceeded the page limit".into())
     }
 }
+
+/// Discovery could not reach an authoritative result; runtime retries may recover.
+#[derive(Debug)]
+pub struct DiscoveryUnavailable(String);
+impl std::fmt::Display for DiscoveryUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for DiscoveryUnavailable {}
+pub(crate) fn unavailable(message: impl Into<String>) -> EndpointSourceError {
+    Box::new(DiscoveryUnavailable(message.into()))
+}
+
+#[derive(Debug)]
+struct ListingChanged;
+impl std::fmt::Display for ListingChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NICo pagination changed or is inconsistent after retry; rerun discovery")
+    }
+}
+impl std::error::Error for ListingChanged {}
 
 fn client_builder(timeout: Duration) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
@@ -196,7 +292,7 @@ impl EndpointSource for NicoRestEndpointSource {
     async fn discover(&self) -> Result<EndpointSnapshot> {
         tokio::time::timeout(self.timeout, self.discover_inner())
             .await
-            .map_err(|_| "NICo endpoint discovery timed out")?
+            .map_err(|_| unavailable("NICo endpoint discovery timed out"))?
     }
 }
 
@@ -205,7 +301,7 @@ async fn read_json<T: DeserializeOwned>(mut response: reqwest::Response) -> Resu
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "cannot read NICo response")?
+        .map_err(|_| unavailable("cannot read NICo response"))?
     {
         if chunk.len() > MAX_BODY_BYTES.saturating_sub(bytes.len()) {
             return Err("NICo response exceeds 8 MiB per page".into());
@@ -233,6 +329,10 @@ struct Machine {
     hostname: Option<String>,
     #[serde(default)]
     metadata: Option<Metadata>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -249,6 +349,13 @@ struct BmcInfo {
 
 impl Machine {
     fn into_endpoint(self, credentials_profile: Option<String>) -> Result<Endpoint> {
+        if self
+            .status
+            .as_deref()
+            .is_some_and(|status| matches!(status, "Decommissioned" | "Decommissioning"))
+        {
+            return Err("machine is decommissioned or decommissioning".into());
+        }
         let bmc = self.metadata.and_then(|metadata| metadata.bmc_info).ok_or(
             "NICo machine has no BMC metadata; provider access and includeMetadata are required",
         )?;
@@ -260,16 +367,20 @@ impl Machine {
             .mac
             .and_then(|mac| mac.parse::<MacAddress>().ok())
             .ok_or("NICo machine has no valid BMC MAC")?;
+        let mut labels = self.labels.unwrap_or_default();
+        let compute_zone = labels.remove("compute_zone");
+        let node_group = labels.remove("node_group");
         Ok(Endpoint {
+            source_reference: Some(super::safe_source_reference(&self.id)),
             kind: TargetKind::Compute,
             name: self.hostname.filter(|name| !name.trim().is_empty()),
             ip,
             port: None,
             mac,
             credentials_profile,
-            compute_zone: None,
-            node_group: None,
-            labels: BTreeMap::new(),
+            compute_zone,
+            node_group,
+            labels,
         })
     }
 }
@@ -308,6 +419,7 @@ mod tests {
             api_name: default_api_name(),
             credentials_profile: Some("bmc".into()),
             timeout_seconds: 2,
+            max_stale_seconds: default_max_stale(),
         }
     }
 
@@ -318,6 +430,7 @@ mod tests {
         })
     }
 
+    #[derive(Clone)]
     struct Reply {
         status: u16,
         pagination: Option<String>,
@@ -413,6 +526,9 @@ mod tests {
                 "includeMetadata=true",
                 "pageSize=100",
                 "orderBy=ID_ASC",
+                "isMissingOnSite=false",
+                "status=Ready",
+                "status=InUse",
             ] {
                 assert!(request.contains(value));
             }
@@ -460,8 +576,6 @@ mod tests {
             "changed-total",
             "duplicate-id",
             "wrong-site",
-            "missing-metadata",
-            "invalid-mac",
             "missing-pagination",
             "bad-json",
             "empty",
@@ -482,7 +596,7 @@ mod tests {
                 }
                 "short-page" => {
                     reply.body = "[]".into();
-                    "incomplete".into()
+                    "pagination changed".into()
                 }
                 "changed-total" | "duplicate-id" => {
                     prefix.push(page(1, 101, (0..100).map(machine).collect()));
@@ -495,31 +609,13 @@ mod tests {
                         },
                         vec![machine(0)],
                     );
-                    if scenario == "changed-total" {
-                        "pagination changed".into()
-                    } else {
-                        "duplicate machine".into()
-                    }
+                    "pagination changed".into()
                 }
                 "wrong-site" => {
                     let mut row = machine(0);
                     row["siteId"] = "other-site".into();
                     reply = page(1, 1, vec![row]);
                     "different site".into()
-                }
-                "missing-metadata" | "invalid-mac" => {
-                    let mut row = machine(1);
-                    if scenario == "missing-metadata" {
-                        row["metadata"] = serde_json::Value::Null;
-                    } else {
-                        row["metadata"]["bmcInfo"]["mac"] = "invalid".into();
-                    }
-                    reply = page(1, 2, vec![machine(0), row]);
-                    if scenario == "missing-metadata" {
-                        "no BMC metadata".into()
-                    } else {
-                        "no valid BMC MAC".into()
-                    }
                 }
                 "missing-pagination" => {
                     reply.pagination = None;
@@ -531,7 +627,7 @@ mod tests {
                 }
                 "empty" => {
                     reply = page(1, 0, vec![]);
-                    "no BMC targets".into()
+                    "no usable BMC targets".into()
                 }
                 _ => {
                     reply.body = "x".repeat(MAX_BODY_BYTES + 1);
@@ -539,12 +635,87 @@ mod tests {
                 }
             };
             prefix.push(reply);
+            if matches!(scenario, "short-page" | "changed-total" | "duplicate-id") {
+                prefix.extend(prefix.clone());
+            }
             let (source, _token, server) = fixture(prefix).await;
-            let error = source.discover().await.unwrap_err().to_string();
+            let error = source.discover().await.unwrap_err();
+            if matches!(scenario, "401" | "403" | "500") {
+                assert!(error.is::<DiscoveryUnavailable>());
+            }
+            let error = error.to_string();
             assert!(error.contains(&expected), "{scenario}: {error}");
             assert!(!error.contains("sensitive"));
             assert!(!error.contains("fixture-token"));
             assert!(!error.contains("http://"));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn skips_unready_machines_and_maps_user_labels_without_losing_healthy_hosts() {
+        let mut rows = vec![machine(0)];
+        rows[0]["labels"] =
+            serde_json::json!({"rack":"rack-12", "compute_zone":"zone-a", "node_group":"group-a"});
+        for index in 1..=6 {
+            let mut row = machine(index);
+            match index {
+                1 => row["metadata"] = serde_json::Value::Null,
+                2 => row["metadata"]["bmcInfo"] = serde_json::Value::Null,
+                3 => row["metadata"]["bmcInfo"]["ip"] = serde_json::Value::Null,
+                4 => row["metadata"]["bmcInfo"]["mac"] = "invalid".into(),
+                5 => row["metadata"]["bmcInfo"]["ip"] = "invalid".into(),
+                _ => row["status"] = "Decommissioned".into(),
+            }
+            rows.push(row);
+        }
+        let (source, _token, server) = fixture(vec![page(1, rows.len(), rows)]).await;
+        let endpoints = source.discover().await.unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].labels["rack"], "rack-12");
+        assert_eq!(endpoints[0].compute_zone.as_deref(), Some("zone-a"));
+        assert_eq!(endpoints[0].node_group.as_deref(), Some("group-a"));
+        assert!(!endpoints[0].labels.contains_key("compute_zone"));
+        server.await.unwrap();
+        let mut invalid = machine(1);
+        invalid["metadata"] = serde_json::Value::Null;
+        let (source, _token, server) = fixture(vec![page(1, 1, vec![invalid])]).await;
+        assert!(
+            source
+                .discover()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no usable BMC targets")
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retries_one_complete_listing_after_pagination_changes() {
+        let (source, _token, server) =
+            fixture(vec![page(1, 1, vec![]), page(1, 1, vec![machine(0)])]).await;
+        assert_eq!(source.discover().await.unwrap().len(), 1);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.contains("pageNumber=1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_conflicts_name_both_machines_and_never_return_a_partial_list() {
+        for duplicate_mac in [true, false] {
+            let first = machine(0);
+            let mut second = machine(1);
+            let key = if duplicate_mac { "mac" } else { "ip" };
+            second["metadata"]["bmcInfo"][key] = first["metadata"]["bmcInfo"][key].clone();
+            let (source, _token, server) = fixture(vec![page(1, 2, vec![first, second])]).await;
+            let error = source.discover().await.unwrap_err().to_string();
+            assert!(error.contains("machine-0") && error.contains("machine-1"));
+            assert!(!error.contains("fixture-token"));
             server.await.unwrap();
         }
     }

@@ -41,10 +41,18 @@ struct Cli {
 enum Command {
     #[command(about = "Collect BMC data and write it to local output")]
     Inventory(InventoryArgs),
+    #[command(about = "List discovered endpoints without BMC credentials or hardware queries")]
+    Discover(DiscoverArgs),
     #[command(about = "Continuously collect BMC data and export it to Fleet Intelligence")]
     Run(RuntimeArgs),
     #[command(about = "Generate NICo static configuration from the collector config")]
     RenderNicoConfig(RenderNicoConfigArgs),
+}
+
+#[derive(Debug, Parser)]
+struct DiscoverArgs {
+    #[arg(short, long, default_value = "config.toml")]
+    config: String,
 }
 
 #[derive(Debug, Parser)]
@@ -192,6 +200,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let cli = Cli::parse();
     match cli.command {
+        Command::Discover(args) => {
+            let selected = config::load_source_config(&args.config).await?;
+            let endpoints = selected
+                .source
+                .discover()
+                .await
+                .map_err(|error| error as Box<dyn Error>)?;
+            bmc_inventory::endpoint::write_discovery_json(&endpoints, std::io::stdout().lock())?;
+        }
         Command::Inventory(args) => {
             let format = args.format.into();
             run_inventory(args.collector.into_inventory_options(args.detail, format)).await?
