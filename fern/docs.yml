@@ -40,6 +40,9 @@ navigation:
       - page: Linux packages (DEB/RPM)
         path: ../docs/host-configuration.md
         slug: host-configuration
+      - page: Endpoint sources
+        path: ../docs/endpoint-sources.md
+        slug: endpoint-sources
   - page: Credentials
     path: ../docs/credentials.md
     slug: credentials
