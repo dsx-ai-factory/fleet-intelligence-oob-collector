@@ -18,6 +18,8 @@ use mac_address::MacAddress;
 
 use crate::models::TargetKind;
 
+pub mod nico;
+
 /// Credential-free BMC connection and placement information. The BMC MAC remains
 /// the Fleet Intelligence identity, regardless of where the endpoint came from.
 #[derive(Clone, Debug)]

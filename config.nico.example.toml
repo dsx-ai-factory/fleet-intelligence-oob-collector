@@ -1,0 +1,23 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+compute_zone = "us-west-dc1"
+node_group = "training"
+labels = { site = "dc1" }
+
+[credentials]
+file = "credentials.json"
+
+[endpoint_source]
+type = "nico"
+# REST prefix, not the NICo Core gRPC endpoint.
+api_url = "https://nico.example.com/v2"
+org = "example-org"
+site_id = "00000000-0000-0000-0000-000000000001"
+# File containing only a bearer access token; refresh it externally.
+token_file = "nico-access-token"
+# Default: nico. Use carbide for deployments with the legacy REST route.
+api_name = "nico"
+# Shared BMC credentials, not NICo REST credentials.
+credentials_profile = "bmc"
+timeout_seconds = 30
