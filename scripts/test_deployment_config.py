@@ -380,5 +380,87 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
         self.assertEqual(args[args.index("--resource-status-firmware-poll-interval-seconds") + 1], "90")
 
 
+class DsxPublicationTests(unittest.TestCase):
+    def job(self, name):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:|\Z)",
+                          workflow, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(match, f"Missing release job: {name}")
+        return match[1]
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        dist = self.directory / "dist"
+        dist.mkdir()
+        self.basename = "fleet-intelligence-oob-collector-1.2.3-rc.1.tgz"
+        (dist / self.basename).write_bytes(b"published chart archive")
+        self.existing = self.directory / "registry-chart"
+        step = self.job("publish-dsx").split("      - name: Publish the packaged chart to DSX\n", 1)[1]
+        run = step.split("        run: |\n", 1)[1]
+        self.script = textwrap.dedent(re.split(r"^      - ", run, maxsplit=1, flags=re.MULTILINE)[0])
+        ngc = self.directory / "ngc"
+        ngc.write_text("""#!/bin/sh
+set -eu
+case "$3" in
+  info|create) exit 0 ;;
+  push)
+    [ ! -f "$EXISTING_CHART" ] || exit 1
+    case "$MODE" in missing|auth) exit 1 ;; esac
+    cp "$CHART_BASENAME" "$EXISTING_CHART"
+    [ "$MODE" != interrupted ] || exit 1
+    ;;
+  pull)
+    [ "$MODE" != auth ] && [ -f "$EXISTING_CHART" ] || exit 1
+    while [ "$1" != --dest ]; do shift; done
+    cp "$EXISTING_CHART" "$2/$CHART_BASENAME"
+    ;;
+  *) exit 99 ;;
+esac
+""")
+        ngc.chmod(0o755)
+
+    def publish(self, mode):
+        env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
+                   RUNNER_TEMP=str(self.directory), VERSION="1.2.3-rc.1", MODE=mode,
+                   DSX_NGC_ORG_TEAM="example-org/artifacts", NGC_CLI_API_KEY="fixture-key",
+                   EXISTING_CHART=str(self.existing), CHART_BASENAME=self.basename)
+        return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", self.script],
+                              cwd=self.directory, env=env, capture_output=True, text=True, timeout=5)
+
+    def test_dsx_retry_is_separate_from_public_publication(self):
+        job = self.job("publish-dsx")
+        self.assertRegex(job, r"needs:\s*\[validate,\s*publish-chart\]")
+        self.assertIn("environment: ngc-publish", job)
+        self.assertIn("Download the published Helm chart", job)
+        public = self.job("publish-chart")
+        self.assertNotIn("Copy released images to DSX", public)
+        self.assertNotIn("Publish the packaged chart to DSX", public)
+
+    def test_new_duplicate_and_lost_success_uploads_accept_identical_bytes(self):
+        for mode in ("normal", "duplicate", "interrupted"):
+            with self.subTest(mode=mode):
+                self.existing.unlink(missing_ok=True)
+                if mode == "duplicate":
+                    self.existing.write_bytes(b"published chart archive")
+                result = self.publish(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.existing.read_bytes(), b"published chart archive")
+
+    def test_conflicting_existing_chart_is_rejected_without_replacement(self):
+        self.existing.write_bytes(b"different chart archive")
+        self.assertNotEqual(self.publish("duplicate").returncode, 0)
+        self.assertEqual(self.existing.read_bytes(), b"different chart archive")
+
+    def test_failed_push_requires_successful_pull_before_accepting_existing_chart(self):
+        for mode in ("missing", "auth"):
+            with self.subTest(mode=mode):
+                self.existing.unlink(missing_ok=True)
+                if mode == "auth":
+                    self.existing.write_bytes(b"published chart archive")
+                self.assertNotEqual(self.publish(mode).returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
