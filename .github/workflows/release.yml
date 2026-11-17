@@ -27,8 +27,8 @@ env:
   NICO_IMAGE: nvcr.io/1070195845945670/fleet-intelligence/nico-hardware-health
   # Pin the NICo hardware-health source used for release images.
   # Includes Redfish resource-status OTLP logs from
-  # dsx-ai-factory/infra-controller#8586.
-  NICO_SOURCE_REF: 844ae0766b6070ab69b3ca744cb87a72a3b0209a
+  # dsx-ai-factory/infra-controller#9084.
+  NICO_SOURCE_REF: f5969b486a527d80c60ffc744cd3cad9eebda9c6
 
 jobs:
   validate:

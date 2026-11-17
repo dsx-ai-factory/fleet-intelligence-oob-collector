@@ -8442,7 +8442,7 @@ or bundled dependencies change. Original upstream notices are retained below.
 
 NICo hardware health (carbide-health)
 Source: https://github.com/dsx-ai-factory/infra-controller
-Revision: 844ae0766b6070ab69b3ca744cb87a72a3b0209a
+Revision: f5969b486a527d80c60ffc744cd3cad9eebda9c6
 Targets: x86_64-unknown-linux-musl and aarch64-unknown-linux-musl
 Scope: carbide-health transitive normal/build dependencies for these targets.
 
