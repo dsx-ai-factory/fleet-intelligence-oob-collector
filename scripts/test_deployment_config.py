@@ -443,7 +443,7 @@ elif tool == "skopeo":
             elif stored.exists():
                 sys.stdout.buffer.write(stored.read_bytes())
             else:
-                fail("manifest unknown")
+                fail('time="2026-11-17T22:01:05Z" level=fatal msg="reading manifest: manifest unknown"')
         else:
             sys.stdout.buffer.write(manifest)
     elif args[0] == "copy":

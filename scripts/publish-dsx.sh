@@ -38,7 +38,7 @@ for source in "$IMAGE:$VERSION" "$NICO_IMAGE:$VERSION" "$gateway_image"; do
   if skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" > "$auth_dir/manifest" 2> "$auth_dir/error"; then
     [[ "$(sha256sum "$auth_dir/manifest" | cut -d ' ' -f 1)" == "$digest" ]] || { echo "::error::$destination already contains different content"; exit 1; }
   else
-    if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' "$auth_dir/error" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|$)' "$auth_dir/error"; then
+    if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' "$auth_dir/error" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|"?$)' "$auth_dir/error"; then
       echo '::error::Cannot inspect destination image'
       sed 's/^/Registry inspection: /' "$auth_dir/error" >&2
       exit 1
