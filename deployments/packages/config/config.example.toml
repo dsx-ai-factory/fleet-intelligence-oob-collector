@@ -1,5 +1,11 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+
+# Optional Fleet Intelligence placement; use names from your account.
+# Keep these shared defaults before [credentials]; targets inherit them unless overridden.
+# compute_zone = "us-west-dc1"
+# node_group = "gb200-training"
+
 [credentials]
 file = "/etc/fleetint-oob/credentials/credentials.json"
 
