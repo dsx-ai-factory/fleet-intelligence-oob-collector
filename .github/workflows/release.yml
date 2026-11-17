@@ -347,6 +347,58 @@ jobs:
             ngc registry chart create --org 1070195845945670 --team fleet-intelligence "$CHART_TARGET" --short-desc "Fleet Intelligence out-of-band collector"
           fi
           ngc registry chart push --org 1070195845945670 --team fleet-intelligence "$CHART_TARGET:$VERSION"
+      - name: Copy released images to DSX
+        if: ${{ vars.DSX_NGC_ORG_TEAM != '' }}
+        env:
+          DSX_NGC_ORG_TEAM: ${{ vars.DSX_NGC_ORG_TEAM }}
+          SOURCE_KEY: ${{ secrets.NGC_API_KEY }}
+          DSX_KEY: ${{ secrets.DSX_NGC_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DSX_KEY:?Configure DSX_NGC_API_KEY in the ngc-publish environment}"
+          [[ "$DSX_NGC_ORG_TEAM" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$ ]] || { echo '::error::DSX_NGC_ORG_TEAM must be an NGC org/team path'; exit 1; }
+          auth_dir=$(mktemp -d "$RUNNER_TEMP/dsx-copy.XXXXXX")
+          trap 'rm -rf "$auth_dir"' EXIT
+          printf '%s' "$SOURCE_KEY" | skopeo login --authfile "$auth_dir/source.json" --username '$oauthtoken' --password-stdin nvcr.io
+          printf '%s' "$DSX_KEY" | skopeo login --authfile "$auth_dir/destination.json" --username '$oauthtoken' --password-stdin nvcr.io
+
+          gateway_image=$(helm template dsx-publish "dist/fleet-intelligence-oob-collector-$VERSION.tgz" \
+            --set-json 'inventory.targets=[{"address":"192.0.2.10","mac":"02:00:00:00:00:01"}]' \
+            --show-only templates/otel-gateway-deployment.yaml | sed -n 's/^[[:space:]]*image: "\([^"]*\)"$/\1/p')
+          [[ "$gateway_image" == nvcr.io/nvidia/fleet-intelligence/otel-gateway:* && "$gateway_image" != *$'\n'* ]] || { echo '::error::Expected one FI gateway image in the packaged chart'; exit 1; }
+
+          for source in "$IMAGE:$VERSION" "$NICO_IMAGE:$VERSION" "$gateway_image"; do
+            repository="${source%:*}"
+            destination="nvcr.io/$DSX_NGC_ORG_TEAM/fleet-intelligence-${repository##*/}:${source##*:}"
+            digest=$(skopeo inspect --raw --authfile "$auth_dir/source.json" "docker://$source" | sha256sum | cut -d ' ' -f 1)
+            if skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" > "$auth_dir/manifest" 2> "$auth_dir/error"; then
+              [[ "$(sha256sum "$auth_dir/manifest" | cut -d ' ' -f 1)" == "$digest" ]] || { echo "::error::$destination already contains different content"; exit 1; }
+            else
+              if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' "$auth_dir/error" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|$)' "$auth_dir/error"; then
+                echo '::error::Cannot inspect destination image'; exit 1
+              fi
+              skopeo copy --all --preserve-digests \
+                --src-authfile "$auth_dir/source.json" --dest-authfile "$auth_dir/destination.json" \
+                "docker://$repository@sha256:$digest" "docker://$destination"
+            fi
+            actual=$(skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" | sha256sum | cut -d ' ' -f 1)
+            [[ "$actual" == "$digest" ]] || { echo "::error::Digest verification failed for $destination"; exit 1; }
+          done
+      - name: Publish the packaged chart to DSX
+        if: ${{ vars.DSX_NGC_ORG_TEAM != '' }}
+        env:
+          NGC_CLI_API_KEY: ${{ secrets.DSX_NGC_API_KEY }}
+          DSX_NGC_ORG_TEAM: ${{ vars.DSX_NGC_ORG_TEAM }}
+        run: |
+          set -euo pipefail
+          org="${DSX_NGC_ORG_TEAM%/*}"
+          team="${DSX_NGC_ORG_TEAM#*/}"
+          target="$DSX_NGC_ORG_TEAM/fleet-intelligence-oob-collector"
+          cd dist
+          if ! ngc registry chart info --org "$org" --team "$team" "$target"; then
+            ngc registry chart create --org "$org" --team "$team" "$target" --short-desc "Fleet Intelligence out-of-band collector"
+          fi
+          ngc registry chart push --org "$org" --team "$team" "$target:$VERSION"
       - name: Remove NGC CLI state
         if: always()
         run: |
