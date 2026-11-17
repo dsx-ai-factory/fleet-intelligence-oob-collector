@@ -435,6 +435,8 @@ elif tool == "skopeo":
         destination = reference.startswith("docker://nvcr.io/example-org/artifacts/")
         auth("--authfile", {"destination-key"} if destination else {"source-key", "anonymous"})
         if destination:
+            if os.environ.get("IMAGE_MODE") == "denied":
+                fail("denied: insufficient repository permissions")
             stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(reference.encode()).hexdigest()
             if os.environ.get("IMAGE_MODE") == "conflict":
                 sys.stdout.buffer.write(b"different image manifest")
@@ -602,6 +604,13 @@ elif tool == "ngc":
 
     def test_conflicting_image_digest_stops_before_any_write(self):
         self.assertNotEqual(self.publish(image_mode="conflict").returncode, 0)
+        self.assertEqual(self.calls("skopeo", "copy"), [])
+        self.assertEqual(self.calls("ngc", "push"), [])
+
+    def test_denied_image_read_reports_diagnostic_without_attempting_copy(self):
+        result = self.publish(image_mode="denied")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Registry inspection: denied: insufficient repository permissions", result.stderr)
         self.assertEqual(self.calls("skopeo", "copy"), [])
         self.assertEqual(self.calls("ngc", "push"), [])
 

@@ -39,7 +39,9 @@ for source in "$IMAGE:$VERSION" "$NICO_IMAGE:$VERSION" "$gateway_image"; do
     [[ "$(sha256sum "$auth_dir/manifest" | cut -d ' ' -f 1)" == "$digest" ]] || { echo "::error::$destination already contains different content"; exit 1; }
   else
     if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' "$auth_dir/error" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|$)' "$auth_dir/error"; then
-      echo '::error::Cannot inspect destination image'; exit 1
+      echo '::error::Cannot inspect destination image'
+      sed 's/^/Registry inspection: /' "$auth_dir/error" >&2
+      exit 1
     fi
     skopeo copy --all --preserve-digests \
       --src-authfile "$auth_dir/source.json" --dest-authfile "$auth_dir/destination.json" \
