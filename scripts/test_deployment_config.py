@@ -3,7 +3,6 @@
 
 """Verify Helm configuration and Linux service settings, including shared defaults."""
 
-from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
@@ -398,6 +397,9 @@ class DsxPublicationTests(unittest.TestCase):
         self.dist.mkdir()
         self.existing = self.directory / "registry-chart"
         self.log = self.directory / "calls.jsonl"
+        step = self.job("publish-dsx").split("      - name: Copy released artifacts to DSX\n", 1)[1]
+        run = step.split("        run: |\n", 1)[1]
+        self.script = textwrap.dedent(re.split(r"^      - ", run, maxsplit=1, flags=re.MULTILINE)[0])
         fixture = "#!" + sys.executable + "\n" + r"""
 import hashlib
 import json
@@ -419,7 +421,7 @@ def fail(message):
 
 def auth(option, expected):
     value = json.loads(Path(args[args.index(option) + 1]).read_text())
-    if value.get("role", "anonymous") not in expected:
+    if value.get("role") not in expected:
         fail("wrong credential used for registry")
 
 
@@ -433,7 +435,7 @@ elif tool == "skopeo":
     elif args[0] == "inspect":
         reference = args[-1]
         destination = reference.startswith("docker://nvcr.io/example-org/artifacts/")
-        auth("--authfile", {"destination-key"} if destination else {"source-key", "anonymous"})
+        auth("--authfile", {"destination-key"} if destination else {"source-key"})
         if destination:
             if os.environ.get("IMAGE_MODE") == "denied":
                 fail("denied: insufficient repository permissions")
@@ -448,7 +450,7 @@ elif tool == "skopeo":
             sys.stdout.buffer.write(manifest)
     elif args[0] == "copy":
         assert "--all" in args and "--preserve-digests" in args
-        auth("--src-authfile", {"source-key", "anonymous"})
+        auth("--src-authfile", {"source-key"})
         auth("--dest-authfile", {"destination-key"})
         assert args[-2].endswith("@sha256:" + hashlib.sha256(manifest).hexdigest())
         assert args[-1].startswith("docker://nvcr.io/example-org/artifacts/")
@@ -482,20 +484,19 @@ elif tool == "ngc":
             executable.write_text(fixture)
             executable.chmod(0o755)
 
-    def publish(self, mode="normal", *, prefix="", anonymous=False, image_mode="normal",
-                version="1.2.3-rc.1"):
-        basename = f"{prefix}fleet-intelligence-oob-collector-{version}.tgz"
+    def publish(self, mode="normal", *, image_mode="normal", version="1.2.3-rc.1"):
+        basename = f"fleet-intelligence-oob-collector-{version}.tgz"
         chart = self.dist / basename
         chart.write_bytes(b"published chart archive")
         env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
                    RUNNER_TEMP=str(self.directory), VERSION=version, MODE=mode,
                    DSX_NGC_ORG_TEAM="example-org/artifacts", DSX_KEY="destination-key",
-                   SOURCE_KEY="" if anonymous else "source-key", DSX_ARTIFACT_PREFIX=prefix,
+                   SOURCE_KEY="source-key",
                    IMAGE="nvcr.io/source/published/oob-collector",
                    NICO_IMAGE="nvcr.io/source/published/nico-hardware-health",
                    EXISTING_CHART=str(self.existing), CHART_BASENAME=basename,
                    FIXTURE_LOG=str(self.log), IMAGE_MODE=image_mode)
-        return subprocess.run(["bash", str(ROOT / "scripts/publish-dsx.sh"), str(chart)],
+        return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", self.script],
                               cwd=self.directory, env=env, capture_output=True, text=True, timeout=10)
 
     def calls(self, tool, operation):
@@ -507,30 +508,12 @@ elif tool == "ngc":
         self.assertRegex(job, r"needs:\s*\[validate,\s*publish-chart\]")
         self.assertIn("environment: ngc-publish", job)
         self.assertIn("Download the published Helm chart", job)
-        self.assertIn("scripts/publish-dsx.sh", job)
-        self.assertNotIn("scripts/publish-dsx.sh", self.job("publish-chart"))
+        self.assertIn("Copy released artifacts to DSX", job)
+        self.assertNotIn("Copy released artifacts to DSX", self.job("publish-chart"))
 
-    def test_private_dispatch_skips_normal_release_and_preserves_environment(self):
+    def test_release_jobs_remain_gated_by_tag_validation(self):
         validation = self.job("validate")
-        self.assertRegex(validation, r"github.ref_type == 'tag'.*!inputs.dsx_test_only")
-        self.assertIn("!startsWith(github.ref_name, 'v-dsx-test-')", validation)
-        smoke = self.job("test-dsx-publication")
-        self.assertIn("environment: ngc-publish", smoke)
-        self.assertIn("github.event_name == 'workflow_dispatch'", smoke)
-        self.assertIn("github.ref_type == 'tag'", smoke)
-        self.assertIn("inputs.dsx_test_only", smoke)
-        self.assertIn("startsWith(github.ref_name, 'v-dsx-test-')", smoke)
-        self.assertIn("!contains(github.ref_name, '.')", smoke)
-        self.assertNotIn("needs:", smoke)
-        self.assertIn("scripts/publish-dsx.sh", smoke)
-
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        tag_filters = workflow.split("  push:\n", 1)[1].split("  workflow_dispatch:", 1)[0]
-        tag_patterns = re.findall(r"- ['\"]([^'\"]+)['\"]", tag_filters)
-        self.assertTrue(tag_patterns)
-        for tag in ("v-dsx-test-pr114", "v-dsx-test-pr114-20261117"):
-            self.assertFalse(any(fnmatchcase(tag, pattern) for pattern in tag_patterns), tag)
-        self.assertTrue(any(fnmatchcase("v1.2.3-rc.1", pattern) for pattern in tag_patterns))
+        self.assertRegex(validation, re.compile(r"^    if: \$\{\{ github.ref_type == 'tag' \}\}$", re.MULTILINE))
 
         def depends_on_validation(name):
             if name == "validate":
@@ -546,12 +529,9 @@ elif tool == "ngc":
             self.assertTrue(depends_on_validation(name), name)
             self.assertNotRegex(self.job(name), r"^    if:.*always\(")
 
-    def test_invalid_release_or_test_prefix_fails_before_authentication(self):
-        for settings in ({"version": "latest"}, {"prefix": "production-"},
-                         {"prefix": "dsx-test-123-"}):
-            with self.subTest(settings=settings):
-                self.assertNotEqual(self.publish(**settings).returncode, 0)
-                self.assertFalse(self.log.exists())
+    def test_invalid_release_fails_before_authentication(self):
+        self.assertNotEqual(self.publish(version="latest").returncode, 0)
+        self.assertFalse(self.log.exists())
 
     def test_new_duplicate_and_lost_success_uploads_accept_identical_bytes(self):
         for mode in ("normal", "duplicate", "interrupted"):
@@ -580,9 +560,8 @@ elif tool == "ngc":
         self.assertNotEqual(self.publish("corrupt").returncode, 0)
         self.assertEqual(len(self.calls("ngc", "pull")), 1)
 
-    def test_private_test_names_and_anonymous_reads_stay_separate(self):
-        prefix = "dsx-test-123-1-"
-        result = self.publish(prefix=prefix, anonymous=True)
+    def test_released_images_use_independent_gateway_version_and_separate_credentials(self):
+        result = self.publish()
         self.assertEqual(result.returncode, 0, result.stderr)
         copies = self.calls("skopeo", "copy")
         self.assertEqual(len(copies), 3)
@@ -590,16 +569,16 @@ elif tool == "ngc":
                     "fleet-intelligence-nico-hardware-health:1.2.3-rc.1",
                     "fleet-intelligence-otel-gateway:4.5.6"]
         self.assertEqual([copy[-1] for copy in copies],
-                         ["docker://nvcr.io/example-org/artifacts/" + prefix + name for name in expected])
-        self.assertEqual(len(self.calls("skopeo", "login")), 1)
+                         ["docker://nvcr.io/example-org/artifacts/" + name for name in expected])
+        self.assertEqual(len(self.calls("skopeo", "login")), 2)
         for copy in copies:
             self.assertNotEqual(copy[copy.index("--src-authfile") + 1],
                                 copy[copy.index("--dest-authfile") + 1])
         pushes = self.calls("ngc", "push")
         self.assertEqual(len(pushes), 1)
-        self.assertIn(f"example-org/artifacts/{prefix}fleet-intelligence-oob-collector:1.2.3-rc.1", pushes[0])
-        # Retrying the exact test targets accepts existing bytes without copying images again.
-        self.assertEqual(self.publish(prefix=prefix, anonymous=True).returncode, 0)
+        self.assertIn("example-org/artifacts/fleet-intelligence-oob-collector:1.2.3-rc.1", pushes[0])
+        # Retrying a release accepts existing bytes without copying images again.
+        self.assertEqual(self.publish().returncode, 0)
         self.assertEqual(len(self.calls("skopeo", "copy")), 3)
 
     def test_conflicting_image_digest_stops_before_any_write(self):

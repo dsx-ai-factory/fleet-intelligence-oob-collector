@@ -32,23 +32,6 @@ Configure the copied image repositories and pull Secrets in downstream deploymen
 
 If DSX publication fails, rerun only the failed jobs in the original workflow run. The DSX job downloads the published chart again and leaves successful public publication jobs complete. Existing image digests and chart archive bytes must match before a retry can succeed; conflicting versions are never replaced.
 
-### Test private DSX publication before a release
-
-Run the manual DSX test from a tag on a reviewed commit to check registry access and copying with an already-published stable release. The test copies the released images into private repositories named `dsx-test-<run-id>-<attempt>-fleet-intelligence-*`. It renames and repackages the released chart with the same prefix because NGC requires the archive's chart name to match its registry name. The test uses the same publishing script as releases, runs it twice to check retries, compares image digests, and downloads the destination chart to compare its bytes with the staged test archive.
-
-1. Have an authorized maintainer create a tag named `v-dsx-test-<unique-id>` on the reviewed commit. Use letters, digits, and hyphens in the identifier, without dots. This name satisfies the existing `ngc-publish` environment's `v*` tag policy and stays outside the automatic `v*.*.*` release trigger. Reserved `v-dsx-test-` tags are also explicitly excluded from normal release validation.
-2. Confirm that `DSX_NGC_ORG_TEAM` points to a private destination and `DSX_NGC_API_KEY` is configured in `ngc-publish`. The test uses this existing environment and key; public source artifacts are read anonymously. It does not use `NGC_API_KEY`.
-3. Dispatch the existing **Release** workflow on the test tag with `dsx_test_only=true` and an already-published stable version:
-
-   ```bash
-   gh workflow run release.yml --ref v-dsx-test-<unique-id> \
-     -f version=v1.0.0 -f dsx_test_only=true
-   ```
-
-4. Inspect **Test private DSX publication** and its run summary for the isolated artifact names, image digests, and chart checksum. Both copy passes must succeed. Test artifacts remain in the private destination for inspection; remove only the prefixed repositories and chart listed for that run when you finish.
-
-The test creates no GitHub release, public registry artifacts, or images built from the tagged commit. Every regular release job is skipped in test mode. Reserved test tags skip regular publication even when test mode is omitted; the private test runs only when explicitly dispatched with test mode enabled. Branch dispatches skip publication.
-
 ## Host-package signing and retries
 
 `scripts/package-release.cjs` handles GitHub draft reservation and asset uploads. `scripts/package-signing.sh release <dist-directory> <version>` signs the packages and checksum manifest, verifies the returned signatures, and assembles the release files. Its `packages` and `manifest` commands support signing those artifacts individually. `scripts/verify-package-release.sh` checks a complete release; `scripts/verify-linux-package-signature.sh` is also shipped as the standalone package verifier.
