@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import tomllib
@@ -392,51 +393,149 @@ class DsxPublicationTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.directory = Path(directory.name)
-        dist = self.directory / "dist"
-        dist.mkdir()
-        self.basename = "fleet-intelligence-oob-collector-1.2.3-rc.1.tgz"
-        (dist / self.basename).write_bytes(b"published chart archive")
+        self.dist = self.directory / "dist"
+        self.dist.mkdir()
         self.existing = self.directory / "registry-chart"
-        step = self.job("publish-dsx").split("      - name: Publish the packaged chart to DSX\n", 1)[1]
-        run = step.split("        run: |\n", 1)[1]
-        self.script = textwrap.dedent(re.split(r"^      - ", run, maxsplit=1, flags=re.MULTILINE)[0])
-        ngc = self.directory / "ngc"
-        ngc.write_text("""#!/bin/sh
-set -eu
-case "$3" in
-  info|create) exit 0 ;;
-  push)
-    [ ! -f "$EXISTING_CHART" ] || exit 1
-    case "$MODE" in missing|auth) exit 1 ;; esac
-    cp "$CHART_BASENAME" "$EXISTING_CHART"
-    [ "$MODE" != interrupted ] || exit 1
-    ;;
-  pull)
-    [ "$MODE" != auth ] && [ -f "$EXISTING_CHART" ] || exit 1
-    while [ "$1" != --dest ]; do shift; done
-    cp "$EXISTING_CHART" "$2/$CHART_BASENAME"
-    ;;
-  *) exit 99 ;;
-esac
-""")
-        ngc.chmod(0o755)
+        self.log = self.directory / "calls.jsonl"
+        fixture = "#!" + sys.executable + "\n" + r"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
 
-    def publish(self, mode):
+tool = Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ["FIXTURE_LOG"], "a") as log:
+    log.write(json.dumps({"tool": tool, "args": args}) + "\n")
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def auth(option, expected):
+    value = json.loads(Path(args[args.index(option) + 1]).read_text())
+    if value.get("role", "anonymous") not in expected:
+        fail("wrong credential used for registry")
+
+
+manifest = b'{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
+if tool == "helm":
+    assert args[0] == "template"
+    print('    image: "nvcr.io/nvidia/fleet-intelligence/otel-gateway:4.5.6"')
+elif tool == "skopeo":
+    if args[0] == "login":
+        Path(args[args.index("--authfile") + 1]).write_text(json.dumps({"role": sys.stdin.read()}))
+    elif args[0] == "inspect":
+        reference = args[-1]
+        destination = reference.startswith("docker://nvcr.io/example-org/artifacts/")
+        auth("--authfile", {"destination-key"} if destination else {"source-key", "anonymous"})
+        if destination:
+            stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(reference.encode()).hexdigest()
+            if os.environ.get("IMAGE_MODE") == "conflict":
+                sys.stdout.buffer.write(b"different image manifest")
+            elif stored.exists():
+                sys.stdout.buffer.write(stored.read_bytes())
+            else:
+                fail("manifest unknown")
+        else:
+            sys.stdout.buffer.write(manifest)
+    elif args[0] == "copy":
+        assert "--all" in args and "--preserve-digests" in args
+        auth("--src-authfile", {"source-key", "anonymous"})
+        auth("--dest-authfile", {"destination-key"})
+        assert args[-2].endswith("@sha256:" + hashlib.sha256(manifest).hexdigest())
+        assert args[-1].startswith("docker://nvcr.io/example-org/artifacts/")
+        stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(args[-1].encode()).hexdigest()
+        stored.write_bytes(manifest)
+    else:
+        fail("unknown skopeo operation")
+elif tool == "ngc":
+    assert args[:2] == ["registry", "chart"]
+    assert os.environ["NGC_CLI_API_KEY"] == "destination-key"
+    existing = Path(os.environ["EXISTING_CHART"])
+    mode = os.environ["MODE"]
+    if args[2] in ("info", "create"):
+        pass
+    elif args[2] == "push":
+        if existing.exists() or mode in ("missing", "auth"):
+            fail("chart push failed")
+        source = Path(os.environ["CHART_BASENAME"])
+        existing.write_bytes(b"corrupt archive" if mode == "corrupt" else source.read_bytes())
+        if mode == "interrupted":
+            fail("lost upload response")
+    elif args[2] == "pull":
+        if mode == "auth" or not existing.exists():
+            fail("chart pull failed")
+        shutil.copyfile(existing, Path(args[args.index("--dest") + 1]) / os.environ["CHART_BASENAME"])
+    else:
+        fail("unknown ngc operation")
+"""
+        for tool in ("ngc", "skopeo", "helm"):
+            executable = self.directory / tool
+            executable.write_text(fixture)
+            executable.chmod(0o755)
+
+    def publish(self, mode="normal", *, prefix="", anonymous=False, image_mode="normal",
+                version="1.2.3-rc.1"):
+        basename = f"{prefix}fleet-intelligence-oob-collector-{version}.tgz"
+        chart = self.dist / basename
+        chart.write_bytes(b"published chart archive")
         env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
-                   RUNNER_TEMP=str(self.directory), VERSION="1.2.3-rc.1", MODE=mode,
-                   DSX_NGC_ORG_TEAM="example-org/artifacts", NGC_CLI_API_KEY="fixture-key",
-                   EXISTING_CHART=str(self.existing), CHART_BASENAME=self.basename)
-        return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", self.script],
-                              cwd=self.directory, env=env, capture_output=True, text=True, timeout=5)
+                   RUNNER_TEMP=str(self.directory), VERSION=version, MODE=mode,
+                   DSX_NGC_ORG_TEAM="example-org/artifacts", DSX_KEY="destination-key",
+                   SOURCE_KEY="" if anonymous else "source-key", DSX_ARTIFACT_PREFIX=prefix,
+                   IMAGE="nvcr.io/source/published/oob-collector",
+                   NICO_IMAGE="nvcr.io/source/published/nico-hardware-health",
+                   EXISTING_CHART=str(self.existing), CHART_BASENAME=basename,
+                   FIXTURE_LOG=str(self.log), IMAGE_MODE=image_mode)
+        return subprocess.run(["bash", str(ROOT / "scripts/publish-dsx.sh"), str(chart)],
+                              cwd=self.directory, env=env, capture_output=True, text=True, timeout=10)
+
+    def calls(self, tool, operation):
+        return [call["args"] for call in map(json.loads, self.log.read_text().splitlines())
+                if call["tool"] == tool and operation in call["args"]]
 
     def test_dsx_retry_is_separate_from_public_publication(self):
         job = self.job("publish-dsx")
         self.assertRegex(job, r"needs:\s*\[validate,\s*publish-chart\]")
         self.assertIn("environment: ngc-publish", job)
         self.assertIn("Download the published Helm chart", job)
-        public = self.job("publish-chart")
-        self.assertNotIn("Copy released images to DSX", public)
-        self.assertNotIn("Publish the packaged chart to DSX", public)
+        self.assertIn("scripts/publish-dsx.sh", job)
+        self.assertNotIn("scripts/publish-dsx.sh", self.job("publish-chart"))
+
+    def test_private_dispatch_skips_normal_release_and_preserves_environment(self):
+        self.assertRegex(self.job("validate"), r"github.ref_type == 'tag'.*!inputs.dsx_test_only")
+        smoke = self.job("test-dsx-publication")
+        self.assertIn("environment: dsx-publish-test", smoke)
+        self.assertIn("github.event_name == 'workflow_dispatch'", smoke)
+        self.assertIn("github.ref_type == 'branch'", smoke)
+        self.assertIn("inputs.dsx_test_only", smoke)
+        self.assertNotIn("needs:", smoke)
+        self.assertIn("scripts/publish-dsx.sh", smoke)
+
+        def depends_on_validation(name):
+            if name == "validate":
+                return True
+            needs = re.search(r"^    needs:\s*(.+)$", self.job(name), re.MULTILINE)
+            self.assertIsNotNone(needs, f"{name} must depend on release validation")
+            return any(depends_on_validation(dependency)
+                       for dependency in re.findall(r"[\w-]+", needs[1]))
+
+        for name in ("build-image", "publish-image", "build-nico-image", "publish-nico-image",
+                     "publish-chart", "publish-dsx", "reserve-package-release", "build-packages",
+                     "sign-packages", "upload-package-assets"):
+            self.assertTrue(depends_on_validation(name), name)
+
+    def test_invalid_release_or_test_prefix_fails_before_authentication(self):
+        for settings in ({"version": "latest"}, {"prefix": "production-"},
+                         {"prefix": "dsx-test-123-"}):
+            with self.subTest(settings=settings):
+                self.assertNotEqual(self.publish(**settings).returncode, 0)
+                self.assertFalse(self.log.exists())
 
     def test_new_duplicate_and_lost_success_uploads_accept_identical_bytes(self):
         for mode in ("normal", "duplicate", "interrupted"):
@@ -460,6 +559,37 @@ esac
                 if mode == "auth":
                     self.existing.write_bytes(b"published chart archive")
                 self.assertNotEqual(self.publish(mode).returncode, 0)
+
+    def test_successful_chart_upload_is_read_back_and_checked(self):
+        self.assertNotEqual(self.publish("corrupt").returncode, 0)
+        self.assertEqual(len(self.calls("ngc", "pull")), 1)
+
+    def test_private_test_names_and_anonymous_reads_stay_separate(self):
+        prefix = "dsx-test-123-1-"
+        result = self.publish(prefix=prefix, anonymous=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        copies = self.calls("skopeo", "copy")
+        self.assertEqual(len(copies), 3)
+        expected = ["fleet-intelligence-oob-collector:1.2.3-rc.1",
+                    "fleet-intelligence-nico-hardware-health:1.2.3-rc.1",
+                    "fleet-intelligence-otel-gateway:4.5.6"]
+        self.assertEqual([copy[-1] for copy in copies],
+                         ["docker://nvcr.io/example-org/artifacts/" + prefix + name for name in expected])
+        self.assertEqual(len(self.calls("skopeo", "login")), 1)
+        for copy in copies:
+            self.assertNotEqual(copy[copy.index("--src-authfile") + 1],
+                                copy[copy.index("--dest-authfile") + 1])
+        pushes = self.calls("ngc", "push")
+        self.assertEqual(len(pushes), 1)
+        self.assertIn(f"example-org/artifacts/{prefix}fleet-intelligence-oob-collector:1.2.3-rc.1", pushes[0])
+        # Retrying the exact test targets accepts existing bytes without copying images again.
+        self.assertEqual(self.publish(prefix=prefix, anonymous=True).returncode, 0)
+        self.assertEqual(len(self.calls("skopeo", "copy")), 3)
+
+    def test_conflicting_image_digest_stops_before_any_write(self):
+        self.assertNotEqual(self.publish(image_mode="conflict").returncode, 0)
+        self.assertEqual(self.calls("skopeo", "copy"), [])
+        self.assertEqual(self.calls("ngc", "push"), [])
 
 
 if __name__ == "__main__":
