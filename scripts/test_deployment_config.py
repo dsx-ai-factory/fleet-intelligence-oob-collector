@@ -3,6 +3,7 @@
 
 """Verify Helm configuration and Linux service settings, including shared defaults."""
 
+from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
@@ -508,14 +509,26 @@ elif tool == "ngc":
         self.assertNotIn("scripts/publish-dsx.sh", self.job("publish-chart"))
 
     def test_private_dispatch_skips_normal_release_and_preserves_environment(self):
-        self.assertRegex(self.job("validate"), r"github.ref_type == 'tag'.*!inputs.dsx_test_only")
+        validation = self.job("validate")
+        self.assertRegex(validation, r"github.ref_type == 'tag'.*!inputs.dsx_test_only")
+        self.assertIn("!startsWith(github.ref_name, 'v-dsx-test-')", validation)
         smoke = self.job("test-dsx-publication")
-        self.assertIn("environment: dsx-publish-test", smoke)
+        self.assertIn("environment: ngc-publish", smoke)
         self.assertIn("github.event_name == 'workflow_dispatch'", smoke)
-        self.assertIn("github.ref_type == 'branch'", smoke)
+        self.assertIn("github.ref_type == 'tag'", smoke)
         self.assertIn("inputs.dsx_test_only", smoke)
+        self.assertIn("startsWith(github.ref_name, 'v-dsx-test-')", smoke)
+        self.assertIn("!contains(github.ref_name, '.')", smoke)
         self.assertNotIn("needs:", smoke)
         self.assertIn("scripts/publish-dsx.sh", smoke)
+
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        tag_filters = workflow.split("  push:\n", 1)[1].split("  workflow_dispatch:", 1)[0]
+        tag_patterns = re.findall(r"- ['\"]([^'\"]+)['\"]", tag_filters)
+        self.assertTrue(tag_patterns)
+        for tag in ("v-dsx-test-pr114", "v-dsx-test-pr114-20261117"):
+            self.assertFalse(any(fnmatchcase(tag, pattern) for pattern in tag_patterns), tag)
+        self.assertTrue(any(fnmatchcase("v1.2.3-rc.1", pattern) for pattern in tag_patterns))
 
         def depends_on_validation(name):
             if name == "validate":
@@ -529,6 +542,7 @@ elif tool == "ngc":
                      "publish-chart", "publish-dsx", "reserve-package-release", "build-packages",
                      "sign-packages", "upload-package-assets"):
             self.assertTrue(depends_on_validation(name), name)
+            self.assertNotRegex(self.job(name), r"^    if:.*always\(")
 
     def test_invalid_release_or_test_prefix_fails_before_authentication(self):
         for settings in ({"version": "latest"}, {"prefix": "production-"},

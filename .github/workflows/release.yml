@@ -14,7 +14,7 @@ on:
         type: string
         required: true
       dsx_test_only:
-        description: 'Copy an existing release to private, isolated DSX test artifacts (select a branch)'
+        description: 'Copy an existing release to private DSX test artifacts (select a v-dsx-test-* tag without dots)'
         type: boolean
         default: false
 
@@ -36,7 +36,7 @@ env:
 
 jobs:
   validate:
-    if: ${{ github.ref_type == 'tag' && !inputs.dsx_test_only }}
+    if: ${{ github.ref_type == 'tag' && !inputs.dsx_test_only && !startsWith(github.ref_name, 'v-dsx-test-') }}
     name: Validate release
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -412,8 +412,8 @@ jobs:
           fi
 
   test-dsx-publication:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' && inputs.dsx_test_only }}
-    environment: dsx-publish-test
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v-dsx-test-') && !contains(github.ref_name, '.') && inputs.dsx_test_only }}
+    environment: ngc-publish
     name: Test private DSX publication
     runs-on: ubuntu-24.04
     timeout-minutes: 30
