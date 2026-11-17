@@ -431,7 +431,9 @@ jobs:
             if skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" > "$auth_dir/manifest" 2> "$auth_dir/error"; then
               [[ "$(sha256sum "$auth_dir/manifest" | cut -d ' ' -f 1)" == "$digest" ]] || { echo "::error::$destination already contains different content"; exit 1; }
             else
-              if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' "$auth_dir/error" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|"?$)' "$auth_dir/error"; then
+              diagnostic=$(cat "$auth_dir/error")
+              diagnostic=${diagnostic//"${destination%:*}"/REF}
+              if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' <<< "$diagnostic" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|"?$)' <<< "$diagnostic"; then
                 echo '::error::Cannot inspect destination image'
                 sed 's/^/Registry inspection: /' "$auth_dir/error" >&2
                 exit 1

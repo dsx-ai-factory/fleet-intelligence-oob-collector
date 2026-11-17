@@ -425,6 +425,13 @@ def auth(option, expected):
         fail("wrong credential used for registry")
 
 
+def registry_error(reference, reason):
+    repository, version = reference.removeprefix("docker://").rsplit(":", 1)
+    fail(f'time="2026-11-17T22:01:05Z" level=fatal msg="Error parsing image name \\"{reference}\\": '
+         f'reading manifest {version} in {repository}: {reason}"')
+
+
+destination_prefix = "docker://nvcr.io/" + os.environ["DSX_NGC_ORG_TEAM"] + "/"
 manifest = b'{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
 if tool == "helm":
     assert args[0] == "template"
@@ -434,18 +441,22 @@ elif tool == "skopeo":
         Path(args[args.index("--authfile") + 1]).write_text(json.dumps({"role": sys.stdin.read()}))
     elif args[0] == "inspect":
         reference = args[-1]
-        destination = reference.startswith("docker://nvcr.io/example-org/artifacts/")
+        destination = reference.startswith(destination_prefix)
         auth("--authfile", {"destination-key"} if destination else {"source-key"})
         if destination:
             if os.environ.get("IMAGE_MODE") == "denied":
                 fail("denied: insufficient repository permissions")
+            if os.environ.get("IMAGE_MODE") == "unauthorized":
+                registry_error(reference, "unauthorized: authentication required")
+            if os.environ.get("IMAGE_MODE") == "network":
+                registry_error(reference, "network is unavailable: manifest unknown")
             stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(reference.encode()).hexdigest()
             if os.environ.get("IMAGE_MODE") == "conflict":
                 sys.stdout.buffer.write(b"different image manifest")
             elif stored.exists():
                 sys.stdout.buffer.write(stored.read_bytes())
             else:
-                fail('time="2026-11-17T22:01:05Z" level=fatal msg="reading manifest: manifest unknown"')
+                registry_error(reference, "manifest unknown")
         else:
             sys.stdout.buffer.write(manifest)
     elif args[0] == "copy":
@@ -453,7 +464,7 @@ elif tool == "skopeo":
         auth("--src-authfile", {"source-key"})
         auth("--dest-authfile", {"destination-key"})
         assert args[-2].endswith("@sha256:" + hashlib.sha256(manifest).hexdigest())
-        assert args[-1].startswith("docker://nvcr.io/example-org/artifacts/")
+        assert args[-1].startswith(destination_prefix)
         stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(args[-1].encode()).hexdigest()
         stored.write_bytes(manifest)
     else:
@@ -463,6 +474,8 @@ elif tool == "ngc":
     assert os.environ["NGC_CLI_API_KEY"] == "destination-key"
     existing = Path(os.environ["EXISTING_CHART"])
     mode = os.environ["MODE"]
+    target = os.environ["DSX_NGC_ORG_TEAM"] + "/fleet-intelligence-oob-collector"
+    assert (target if args[2] in ("info", "create") else target + ":" + os.environ["VERSION"]) in args
     if args[2] in ("info", "create"):
         pass
     elif args[2] == "push":
@@ -484,13 +497,14 @@ elif tool == "ngc":
             executable.write_text(fixture)
             executable.chmod(0o755)
 
-    def publish(self, mode="normal", *, image_mode="normal", version="1.2.3-rc.1"):
+    def publish(self, mode="normal", *, image_mode="normal", version="1.2.3-rc.1",
+                org_team="example-org/artifacts"):
         basename = f"fleet-intelligence-oob-collector-{version}.tgz"
         chart = self.dist / basename
         chart.write_bytes(b"published chart archive")
         env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
                    RUNNER_TEMP=str(self.directory), VERSION=version, MODE=mode,
-                   DSX_NGC_ORG_TEAM="example-org/artifacts", DSX_KEY="destination-key",
+                   DSX_NGC_ORG_TEAM=org_team, DSX_KEY="destination-key",
                    SOURCE_KEY="source-key",
                    IMAGE="nvcr.io/source/published/oob-collector",
                    NICO_IMAGE="nvcr.io/source/published/nico-hardware-health",
@@ -585,6 +599,29 @@ elif tool == "ngc":
         self.assertNotEqual(self.publish(image_mode="conflict").returncode, 0)
         self.assertEqual(self.calls("skopeo", "copy"), [])
         self.assertEqual(self.calls("ngc", "push"), [])
+
+    def test_repository_names_do_not_turn_missing_manifests_into_access_failures(self):
+        for org_team in ("network/artifacts", "example-org/tls", "orgnetwork/teamtls"):
+            with self.subTest(org_team=org_team):
+                self.log.unlink(missing_ok=True)
+                self.existing.unlink(missing_ok=True)
+                result = self.publish(org_team=org_team)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                copies = self.calls("skopeo", "copy")
+                self.assertEqual(len(copies), 3)
+                self.assertTrue(all(copy[-1].startswith(f"docker://nvcr.io/{org_team}/")
+                                    for copy in copies))
+                self.assertEqual(len(self.calls("ngc", "pull")), 1)
+                self.assertEqual(self.existing.read_bytes(), b"published chart archive")
+
+    def test_unauthorized_and_network_errors_stop_before_any_copy(self):
+        for image_mode in ("unauthorized", "network"):
+            with self.subTest(image_mode=image_mode):
+                result = self.publish(image_mode=image_mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Registry inspection:", result.stderr)
+                self.assertEqual(self.calls("skopeo", "copy"), [])
+                self.assertEqual(self.calls("ngc", "push"), [])
 
     def test_denied_image_read_reports_diagnostic_without_attempting_copy(self):
         result = self.publish(image_mode="denied")
