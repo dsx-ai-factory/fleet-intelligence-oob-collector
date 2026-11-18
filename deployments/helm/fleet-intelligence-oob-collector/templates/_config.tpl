@@ -23,7 +23,6 @@ file = "/run/secrets/bmc/credentials.json"
 type = "nico"
 api_url = {{ required "endpointSource.nico.apiUrl is required" .Values.endpointSource.nico.apiUrl | toJson }}
 org = {{ required "endpointSource.nico.org is required" .Values.endpointSource.nico.org | toJson }}
-site_id = {{ required "endpointSource.nico.siteId is required" .Values.endpointSource.nico.siteId | toJson }}
 token_url = {{ required "endpointSource.nico.tokenUrl is required" .Values.endpointSource.nico.tokenUrl | toJson }}
 client_id_file = "/run/secrets/nico-oauth2/client_id"
 client_secret_file = "/run/secrets/nico-oauth2/client_secret"

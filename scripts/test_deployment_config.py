@@ -52,7 +52,6 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             "endpointSource.type": "nico",
             "endpointSource.nico.apiUrl": "https://nico.example.com/v2",
             "endpointSource.nico.org": "example-org",
-            "endpointSource.nico.siteId": "00000000-0000-0000-0000-000000000001",
             "endpointSource.nico.oauth2CredentialsSecretName": "nico-oauth2-credentials",
             "endpointSource.nico.tokenUrl": "https://idp.example.com/token",
             "endpointSource.nico.credentialsProfile": "bmc",
@@ -78,7 +77,6 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         self.assertNotIn("targets", config)
         self.assertEqual(config["endpoint_source"], {
             "type": "nico", "api_url": "https://nico.example.com/v2", "org": "example-org",
-            "site_id": "00000000-0000-0000-0000-000000000001",
             "credentials_profile": "bmc", "token_url": "https://idp.example.com/token",
             "client_id_file": "/run/secrets/nico-oauth2/client_id",
             "client_secret_file": "/run/secrets/nico-oauth2/client_secret",
@@ -96,9 +94,10 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         self.assertEqual(config["endpoint_source"]["scopes"], ["inventory.read", "site.read"])
 
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
-        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "siteId", "tokenUrl", "oauth2CredentialsSecretName")]
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName")]
         cases.extend([
             {"endpointSource.nico.apiName": "carbide"},
+            {"endpointSource.nico.siteId": "obsolete-site"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
             {"nicoHardwareHealth.enabled": True},
             {"otelGateway.enabled": True},
