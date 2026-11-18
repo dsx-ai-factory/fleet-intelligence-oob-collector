@@ -54,4 +54,4 @@ After you change values, run `helm upgrade`. See [rotation and ownership](../../
 
 ## NICo REST target discovery
 
-Set `endpointSource.type=nico` and configure the site and an existing OAuth2 client credential Secret under `endpointSource.nico`. Omit `inventory.targets`, and disable the bundled health and gateway workloads with their existing `enabled` settings. Follow [NICo discovery](../../../docs/nico-discovery.md) for complete Kubernetes values and OAuth2 authentication and credential rotation.
+Set `endpointSource.type=nico` and configure REST access through `endpointSource.nico`. Omit `inventory.targets` and disable the bundled health and gateway workloads. See [endpoint source configuration](../../../docs/configuration.md#endpoint-source) for the values and Secret requirements.

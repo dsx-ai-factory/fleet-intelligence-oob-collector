@@ -6,7 +6,34 @@ Passwords never go in the values file. They live in a separate [BMC credentials 
 
 For DEB/RPM installations, use the [Linux package guide](host-configuration.md).
 
-For NICo-managed sites, select the [NICo REST endpoint source](nico-discovery.md) instead of listing static targets. The chart mounts the OAuth2 client credentials from an existing Secret.
+## Endpoint source
+
+Static targets are the default. To discover compute-host BMCs across the NICo sites visible to your service identity, omit `inventory.targets` and configure:
+
+```yaml
+endpointSource:
+  type: nico
+  nico:
+    apiUrl: https://nico.example.com/v2
+    org: example-org
+    tokenUrl: https://idp.example.com/token
+    oauth2CredentialsSecretName: fi-nico-oauth2-credentials
+    scopes: [nico] # Use scopes configured by your identity-provider administrator.
+    credentialsProfile: bmc
+    timeoutSeconds: 30
+nicoHardwareHealth:
+  enabled: false
+otelGateway:
+  enabled: false
+```
+
+Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Keep your existing FI backend, enrollment, and BMC credentials settings; `credentialsProfile` references a BMC profile, separate from REST authentication.
+
+Configured `inventory.nodeGroup` and `inventory.computeZone` take precedence independently. Otherwise, each machine uses its site's name as node group and its lowercased, hyphen-separated country/state/city as compute zone, such as `usa-az-phoenix`. Missing location components are omitted; no usable location leaves compute zone unset. NICo machine labels are ignored.
+
+The collector lists sites, then machines for each site without lifecycle-status or missing-on-site query filters. Decommissioning/decommissioned machines and machines with invalid BMC metadata are skipped with warnings and counts. All site and machine pages must succeed before BMC collection begins; a failed discovery aborts the cycle instead of using a partial list.
+
+For TOML, use the optional `[endpoint_source]` section in [config.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.example.toml) and remove the static `[[targets]]` blocks. Run `bmc-collector discover --config config.toml` to inspect discovered IPs, MACs, names, and placement without reading BMC passwords or querying hardware.
 
 ## Targets
 
