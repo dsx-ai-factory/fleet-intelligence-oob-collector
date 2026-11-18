@@ -54,8 +54,8 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             "endpointSource.nico.apiUrl": "https://nico.example.com/v2",
             "endpointSource.nico.org": "example-org",
             "endpointSource.nico.siteId": "00000000-0000-0000-0000-000000000001",
-            "endpointSource.nico.credentialsSecretName": "nico-ssa-credentials",
-            "endpointSource.nico.tokenUrl": "https://ssa.example.com/token",
+            "endpointSource.nico.oauth2CredentialsSecretName": "nico-oauth2-credentials",
+            "endpointSource.nico.tokenUrl": "https://idp.example.com/token",
             "endpointSource.nico.credentialsProfile": "bmc",
             "nicoHardwareHealth.enabled": False,
             "otelGateway.enabled": False,
@@ -65,32 +65,41 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             command.extend(["--set-json", f"{key}={json.dumps(value)}"])
         return subprocess.run(command, capture_output=True, text=True)
 
-    def test_discovery_mounts_ssa_credentials_and_generates_collector_config(self):
+    def test_discovery_mounts_oauth2_credentials_and_generates_collector_config(self):
         result = self.render()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.count("kind: Deployment"), 1)
-        self.assertIn('secretName: "nico-ssa-credentials"', result.stdout)
+        self.assertIn('secretName: "nico-oauth2-credentials"', result.stdout)
         self.assertRegex(result.stdout, r'key: client_id\s+path: client_id')
         self.assertRegex(result.stdout, r'key: client_secret\s+path: client_secret')
-        self.assertIn("mountPath: /run/secrets/nico-ssa", result.stdout)
+        self.assertIn("mountPath: /run/secrets/nico-oauth2", result.stdout)
         self.assertNotIn("subPath:", result.stdout)
         contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
         config = tomllib.loads(textwrap.dedent(contents))
         self.assertNotIn("targets", config)
         self.assertEqual(config["endpoint_source"], {
             "type": "nico", "api_url": "https://nico.example.com/v2", "org": "example-org",
-            "site_id": "00000000-0000-0000-0000-000000000001", "api_name": "nico",
-            "credentials_profile": "bmc", "token_url": "https://ssa.example.com/token",
-            "client_id_file": "/run/secrets/nico-ssa/client_id",
-            "client_secret_file": "/run/secrets/nico-ssa/client_secret",
+            "site_id": "00000000-0000-0000-0000-000000000001",
+            "credentials_profile": "bmc", "token_url": "https://idp.example.com/token",
+            "client_id_file": "/run/secrets/nico-oauth2/client_id",
+            "client_secret_file": "/run/secrets/nico-oauth2/client_secret",
+            "scopes": [],
             "timeout_seconds": 30,
         })
         # Discovery changes no Redfish authentication or transport settings.
         self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
 
+    def test_configured_oauth2_scopes_are_rendered(self):
+        result = self.render(**{"endpointSource.nico.scopes": ["inventory.read", "site.read"]})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["scopes"], ["inventory.read", "site.read"])
+
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
-        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "siteId", "tokenUrl", "credentialsSecretName")]
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "siteId", "tokenUrl", "oauth2CredentialsSecretName")]
         cases.extend([
+            {"endpointSource.nico.apiName": "carbide"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
             {"nicoHardwareHealth.enabled": True},
             {"otelGateway.enabled": True},

@@ -6,7 +6,7 @@ Passwords never go in the values file. They live in a separate [BMC credentials 
 
 For DEB/RPM installations, use the [Linux package guide](host-configuration.md).
 
-For NICo-managed sites, select the [NICo REST endpoint source](nico-discovery.md) instead of listing static targets. The chart mounts the SSA client credentials from a VSO-managed Secret.
+For NICo-managed sites, select the [NICo REST endpoint source](nico-discovery.md) instead of listing static targets. The chart mounts the OAuth2 client credentials from an existing Secret.
 
 ## Targets
 

@@ -398,7 +398,7 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
     if let SourceSelection::Nico(source) = &mut config.endpoint_source {
         for path in [&mut source.client_id_file, &mut source.client_secret_file] {
             if path.as_os_str().is_empty() {
-                return Err("SSA client credential paths must not be empty".into());
+                return Err("OAuth2 client credential paths must not be empty".into());
             }
             *path = std::path::absolute(config_dir.join(&*path))?;
         }
@@ -1713,7 +1713,7 @@ mod tests {
             api_url = "https://nico.example.com/v2"
             org = "example"
             site_id = "site-id"
-            token_url = "https://ssa.example.com/token"
+            token_url = "https://idp.example.com/token"
             client_id_file = "client_id"
             client_secret_file = "client_secret"
             credentials_profile = "bmc"
@@ -1729,14 +1729,13 @@ mod tests {
         };
         assert_eq!(config.client_id_file, directory.join("client_id"));
         assert_eq!(config.client_secret_file, directory.join("client_secret"));
-        assert_eq!(config.api_name, "nico");
         let selected = load_source_config(path).await.unwrap();
         assert_eq!(
             selected.settings.defaults.compute_zone.as_deref(),
             Some("zone")
         );
         let discovery_error = selected.source.discover().await.unwrap_err().to_string();
-        assert!(discovery_error.contains("SSA client credential files"));
+        assert!(discovery_error.contains("OAuth2 client credential files"));
         assert!(!discovery_error.contains("header-value"));
         let runtime_error = load_config_async(path).await.unwrap_err().to_string();
         assert_eq!(runtime_error, discovery_error);
@@ -1771,7 +1770,7 @@ mod tests {
                 .len(),
             1
         );
-        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\nsite_id='site-id'\ntoken_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
+        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\nsite_id='site-id'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
         let mixed = format!("{nico}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'");
         assert!(
             parse_config_parts(&mixed, "config.toml")
@@ -1783,8 +1782,8 @@ mod tests {
         for invalid in [
             nico.replace("type='nico'", "type='netbox'"),
             nico.replace(
-                "token_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'",
-                "token_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\npassword='private-value'",
+                "token_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'",
+                "token_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\npassword='private-value'",
             ),
             nico.replace("client_id_file='client_id'", "client_id_file=''"),
         ] {

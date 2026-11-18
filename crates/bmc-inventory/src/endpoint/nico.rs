@@ -27,31 +27,28 @@ const PAGE_SIZE: usize = 100;
 const MAX_PAGES: usize = 1000;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
-/// NICo REST settings and paths to VSO-managed SSA client credential files.
+/// NICo REST settings and paths to mounted OAuth2 client credential files.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NicoRestConfig {
-    /// REST prefix including `/v2`, without organization or API-name segments.
+    /// REST prefix including `/v2`, without organization or resource segments.
     pub api_url: String,
     pub org: String,
     pub site_id: String,
     pub token_url: String,
     pub client_id_file: PathBuf,
     pub client_secret_file: PathBuf,
-    /// Current NICo uses `nico`; older deployments may use `carbide`.
-    #[serde(default = "default_api_name")]
-    pub api_name: String,
+    /// Scopes requested from the identity provider; empty omits the scope parameter.
+    #[serde(default)]
+    pub scopes: Vec<String>,
     /// Shared BMC credential profile applied to every discovered machine.
     #[serde(default)]
     pub credentials_profile: Option<String>,
-    /// Whole-discovery budget, including credential loading, SSA, and all pages.
+    /// Whole-discovery budget, including credential loading, OAuth2, and all pages.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
 }
 
-fn default_api_name() -> String {
-    "nico".into()
-}
 fn default_timeout() -> u64 {
     30
 }
@@ -81,7 +78,7 @@ impl NicoRestEndpointSource {
                 "NICo api_url must be HTTPS without credentials, query, or fragment".into(),
             );
         }
-        let token_url = Url::parse(&config.token_url).map_err(|_| "invalid SSA token URL")?;
+        let token_url = Url::parse(&config.token_url).map_err(|_| "invalid OAuth2 token URL")?;
         if token_url.scheme() != "https"
             || token_url.host_str().is_none()
             || !token_url.username().is_empty()
@@ -90,14 +87,13 @@ impl NicoRestEndpointSource {
             || token_url.fragment().is_some()
         {
             return Err(
-                "SSA token_url must be HTTPS without credentials, query, or fragment".into(),
+                "OAuth2 token_url must be HTTPS without credentials, query, or fragment".into(),
             );
         }
         if config.org.trim().is_empty()
             || config.site_id.trim().is_empty()
             || config.org == "."
             || config.org == ".."
-            || !matches!(config.api_name.as_str(), "nico" | "carbide")
             || !config.client_id_file.is_absolute()
             || !config.client_secret_file.is_absolute()
             || !(1..=3600).contains(&config.timeout_seconds)
@@ -106,12 +102,20 @@ impl NicoRestEndpointSource {
                 .as_ref()
                 .is_some_and(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, site ID, absolute SSA client credential paths, api_name nico/carbide, timeout_seconds in 1..=3600; credential profile must not be blank".into());
+            return Err("NICo requires organization, site ID, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; credential profile must not be blank".into());
+        }
+        if config.scopes.iter().any(|scope| {
+            scope.is_empty()
+                || scope
+                    .bytes()
+                    .any(|byte| !matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
+        }) {
+            return Err("OAuth2 scopes must be nonempty scope names without whitespace, quotes, or backslashes".into());
         }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
             .pop_if_empty()
-            .extend(["org", &config.org, &config.api_name, "machine"]);
+            .extend(["org", &config.org, "nico", "machine"]);
         let timeout = Duration::from_secs(config.timeout_seconds);
         let client = client_builder(timeout)
             .https_only(true)
@@ -135,24 +139,24 @@ impl NicoRestEndpointSource {
             .set_client_secret(ClientSecret::new(client_secret))
             .set_auth_type(AuthType::BasicAuth)
             .set_token_uri(TokenUrl::from_url(self.token_url.clone()));
-        let transport = SsaHttpClient(self.client.clone());
+        let transport = OAuth2HttpClient(self.client.clone());
         let token = oauth.exchange_client_credentials()
-            .add_scope(Scope::new("carbide".into()))
+            .add_scopes(self.config.scopes.iter().cloned().map(Scope::new))
             .request_async(&transport).await
             // OAuth errors may contain the response body or URLs. Never expose
             // provider diagnostics that could echo credentials or access tokens.
-            .map_err(|_| "SSA OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and carbide scope")?;
+            .map_err(|_| "OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and configured scopes")?;
         if token.token_type() != &oauth2::basic::BasicTokenType::Bearer {
-            return Err("SSA must issue a Bearer access token".into());
+            return Err("OAuth2 token endpoint must issue a Bearer access token".into());
         }
         let access_token = token.access_token().secret();
         if access_token.is_empty() || access_token.len() > 65536 {
             return Err(
-                "SSA response must contain a nonempty access_token of at most 64 KiB".into(),
+                "OAuth2 response must contain a nonempty access_token of at most 64 KiB".into(),
             );
         }
         let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .map_err(|_| "invalid SSA access token header")?;
+            .map_err(|_| "invalid OAuth2 access token header")?;
         authorization.set_sensitive(true);
         for attempt in 0..2 {
             match self.discover_pages(&authorization).await {
@@ -200,7 +204,7 @@ impl NicoRestEndpointSource {
             if !response.status().is_success() {
                 let status = response.status();
                 let message = format!(
-                    "NICo returned HTTP {}; check token expiry, carbide scope, and provider/site permissions",
+                    "NICo returned HTTP {}; check OAuth2 scopes and provider/site permissions",
                     status.as_u16()
                 );
                 return Err(message.into());
@@ -283,8 +287,8 @@ impl NicoRestEndpointSource {
 
 // Keep OAuth protocol handling in oauth2, while applying the same bounded,
 // secret-safe HTTP policy as the discovery client.
-struct SsaHttpClient(reqwest::Client);
-impl<'a> AsyncHttpClient<'a> for SsaHttpClient {
+struct OAuth2HttpClient(reqwest::Client);
+impl<'a> AsyncHttpClient<'a> for OAuth2HttpClient {
     type Error = std::io::Error;
     type Future = std::pin::Pin<
         Box<
@@ -310,7 +314,7 @@ impl<'a> AsyncHttpClient<'a> for SsaHttpClient {
             let mut body = Vec::new();
             while let Some(chunk) = response.chunk().await.map_err(std::io::Error::other)? {
                 if chunk.len() > (128 * 1024usize).saturating_sub(body.len()) {
-                    return Err(std::io::Error::other("SSA response exceeds 128 KiB"));
+                    return Err(std::io::Error::other("OAuth2 response exceeds 128 KiB"));
                 }
                 body.extend_from_slice(&chunk);
             }
@@ -322,11 +326,11 @@ impl<'a> AsyncHttpClient<'a> for SsaHttpClient {
 async fn read_client_credential(path: &std::path::Path) -> Result<String> {
     let value = tokio::fs::read_to_string(path)
         .await
-        .map_err(|_| "cannot read SSA client credential file")?;
+        .map_err(|_| "cannot read OAuth2 client credential file")?;
     let value = value.trim();
     if value.is_empty() || value.len() > 65536 || value.contains(['\r', '\n']) {
         return Err(
-            "SSA client credential files must contain a nonempty single value of at most 64 KiB"
+            "OAuth2 client credential files must contain a nonempty single value of at most 64 KiB"
                 .into(),
         );
     }
@@ -474,10 +478,10 @@ mod tests {
             api_url: "https://nico.example.com/v2/".into(),
             org: "example".into(),
             site_id: "site-id".into(),
-            token_url: "https://ssa.example.com/token".into(),
+            token_url: "https://idp.example.com/token".into(),
             client_id_file: path.with_extension("id"),
             client_secret_file: path,
-            api_name: default_api_name(),
+            scopes: vec!["test-scope".into()],
             credentials_profile: Some("bmc".into()),
             timeout_seconds: 2,
         }
@@ -517,12 +521,13 @@ mod tests {
         CredentialFiles,
         tokio::task::JoinHandle<Vec<String>>,
     ) {
-        fixture_with_ssa(replies, None).await
+        fixture_with_oauth2(replies, None, vec!["test-scope".into()]).await
     }
 
-    async fn fixture_with_ssa(
+    async fn fixture_with_oauth2(
         replies: Vec<Reply>,
         token_reply: Option<Reply>,
+        scopes: Vec<String>,
     ) -> (
         NicoRestEndpointSource,
         CredentialFiles,
@@ -531,6 +536,7 @@ mod tests {
         let token = CredentialFiles::new("fixture-secret");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut source = NicoRestEndpointSource::new(config(token.0.clone())).unwrap();
+        source.config.scopes = scopes;
         source.machines_url = Url::parse(&format!(
             "http://{}/v2/org/example/nico/machine",
             listener.local_addr().unwrap()
@@ -541,6 +547,7 @@ mod tests {
             .no_proxy()
             .build()
             .unwrap();
+        let requested_scopes = source.config.scopes.join(" ");
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
             let mut replies = replies.into_iter().peekable();
@@ -578,13 +585,18 @@ mod tests {
                     assert!(
                         header.contains("Basic Zml4dHVyZS1jbGllbnQ6Zml4dHVyZS1zZWNyZXQ=")
                             || header.contains("Basic cm90YXRlZC1jbGllbnQ6cm90YXRlZC1zZWNyZXQ="),
-                        "unexpected SSA authentication"
+                        "unexpected OAuth2 authentication"
                     );
                     let parameters: std::collections::BTreeMap<_, _> =
                         url::form_urlencoded::parse(body.as_bytes()).collect();
-                    assert_eq!(parameters.len(), 2);
                     assert_eq!(parameters["grant_type"], "client_credentials");
-                    assert_eq!(parameters["scope"], "carbide");
+                    if requested_scopes.is_empty() {
+                        assert_eq!(parameters.len(), 1);
+                        assert!(!parameters.contains_key("scope"));
+                    } else {
+                        assert_eq!(parameters.len(), 2);
+                        assert_eq!(parameters["scope"], requested_scopes);
+                    }
                     token_reply.clone().unwrap_or_else(|| Reply {
                         status: 200, pagination: None, extra_header: String::new(),
                         body: serde_json::json!({"access_token": if header.contains("cm90YXRlZC1jbGllbnQ6cm90YXRlZC1zZWNyZXQ=") {"rotated-token"} else {"fixture-token"}, "token_type": "Bearer", "expires_in": 900}).to_string(),
@@ -655,7 +667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reloads_ssa_credentials_on_each_discovery_and_rejects_empty_secrets() {
+    async fn reloads_oauth2_credentials_on_each_discovery_and_rejects_empty_secrets() {
         let (source, token, server) = fixture(vec![
             page(1, 1, vec![machine(0)]),
             page(1, 1, vec![machine(0)]),
@@ -679,12 +691,22 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("SSA client credential files")
+                .contains("OAuth2 client credential files")
         );
     }
 
     #[tokio::test]
-    async fn ssa_failures_do_not_query_nico_or_expose_credentials() {
+    async fn oauth2_scopes_are_configurable_and_optional() {
+        for scopes in [vec![], vec!["inventory.read".into(), "site.read".into()]] {
+            let (source, _files, server) =
+                fixture_with_oauth2(vec![page(1, 1, vec![machine(0)])], None, scopes).await;
+            assert_eq!(source.discover().await.unwrap().len(), 1);
+            assert_eq!(server.await.unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth2_failures_do_not_query_nico_or_expose_credentials() {
         for (status, body) in [
             (
                 400,
@@ -712,16 +734,20 @@ mod tests {
                 pagination: None,
                 extra_header: "Location: /must-not-follow\r\n".into(),
             };
-            let (source, _files, server) =
-                fixture_with_ssa(vec![page(1, 1, vec![machine(0)])], Some(reply)).await;
+            let (source, _files, server) = fixture_with_oauth2(
+                vec![page(1, 1, vec![machine(0)])],
+                Some(reply),
+                vec!["test-scope".into()],
+            )
+            .await;
             let error = source.discover().await.unwrap_err().to_string();
-            assert!(error.contains("SSA"), "{error}");
+            assert!(error.contains("OAuth2"), "{error}");
             for sensitive in ["fixture-secret", "fixture-client", "sensitive", "http://"] {
                 assert!(!error.contains(sensitive), "{error}");
             }
             assert!(
                 server.await.unwrap().is_empty(),
-                "no NICo query after failed SSA exchange"
+                "no NICo query after failed OAuth2 exchange"
             );
         }
     }
@@ -886,11 +912,10 @@ mod tests {
         let token = CredentialFiles::new("fixture-secret");
         let mut cfg = config(token.0.clone());
         cfg.org = "example/name".into();
-        cfg.api_name = "carbide".into();
         let source = NicoRestEndpointSource::new(cfg.clone()).unwrap();
         assert_eq!(
             source.machines_url.path(),
-            "/v2/org/example%2Fname/carbide/machine"
+            "/v2/org/example%2Fname/nico/machine"
         );
         for url in [
             "http://nico.example.com/v2",
@@ -904,6 +929,11 @@ mod tests {
                 .unwrap()
                 .to_string();
             assert!(!error.contains("secret"));
+        }
+        for invalid_scope in ["", "two scopes", "quote\"", "backslash\\", "non-ascii-ü"] {
+            cfg = config(token.0.clone());
+            cfg.scopes = vec![invalid_scope.into()];
+            assert!(NicoRestEndpointSource::new(cfg).is_err());
         }
         cfg = config(token.0.clone());
         cfg.timeout_seconds = 0;
