@@ -92,7 +92,7 @@ affinity:
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.validate" -}}
-{{- if eq .Values.endpointSource.type "nico" -}}
+{{- if eq (default dict .Values.endpointSource).type "nico" -}}
 {{- if not .Values.bmcCollector.enabled -}}{{- fail "NICo discovery requires bmcCollector.enabled=true" -}}{{- end -}}
 {{- if .Values.inventory.targets -}}{{- fail "NICo discovery requires inventory.targets to be empty" -}}{{- end -}}
 {{- if or .Values.nicoHardwareHealth.enabled .Values.otelGateway.enabled -}}
