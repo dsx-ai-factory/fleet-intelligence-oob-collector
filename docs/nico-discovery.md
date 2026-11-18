@@ -66,19 +66,6 @@ Keep your normal FI backend, enrollment Secret, and BMC credentials Secret setti
 
 The chart writes these settings into `[endpoint_source]` in the collector TOML, with `client_id_file` and `client_secret_file` pointing to the mounted files. For an explicit TOML example, see [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml).
 
-## DSX example
-
-For DSX dev clusters, follow the platform's **Starfleet SSA Client Provisioning** guide. SSA is the identity provider for that deployment; it uses the same OAuth2 flow. Use its token endpoint and configure:
-
-```yaml
-endpointSource:
-  nico:
-    oauth2CredentialsSecretName: fi-nico-ssa-credentials
-    scopes: [carbide]
-```
-
-The DSX platform stores and rotates client credentials in Vault under `services/dsx/clients/<component>/issue/creds` in the `dgxc-dsx` namespace. Use Vault Secrets Operator (VSO) to sync them into the referenced Secret. The [DSX SSA credentials example](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/nico-discovery/ssa-credentials.yaml) uses `kv-v1` and maps Vault's `secret` field to Kubernetes `client_secret`. Have your platform administrator wire the reader service account and VaultAuth to your provisioned client.
-
 ## Verify discovery
 
 List targets from an installed collector pod without querying BMCs or reading their passwords:
