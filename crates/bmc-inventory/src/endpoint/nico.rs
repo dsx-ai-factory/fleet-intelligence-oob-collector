@@ -697,7 +697,11 @@ mod tests {
 
     #[tokio::test]
     async fn oauth2_scopes_are_configurable_and_optional() {
-        for scopes in [vec![], vec!["inventory.read".into(), "site.read".into()]] {
+        for scopes in [
+            vec![],
+            vec!["carbide".into()],
+            vec!["inventory.read".into(), "site.read".into()],
+        ] {
             let (source, _files, server) =
                 fixture_with_oauth2(vec![page(1, 1, vec![machine(0)])], None, scopes).await;
             assert_eq!(source.discover().await.unwrap().len(), 1);
