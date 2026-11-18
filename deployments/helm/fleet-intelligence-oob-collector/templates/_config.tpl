@@ -26,10 +26,10 @@ org = {{ required "endpointSource.nico.org is required" .Values.endpointSource.n
 token_url = {{ required "endpointSource.nico.tokenUrl is required" .Values.endpointSource.nico.tokenUrl | toJson }}
 client_id_file = "/run/secrets/nico-oauth2/client_id"
 client_secret_file = "/run/secrets/nico-oauth2/client_secret"
-scopes = {{ .Values.endpointSource.nico.scopes | toJson }}
+scopes = {{ .Values.endpointSource.nico.scopes | default list | toJson }}
 timeout_seconds = {{ .Values.endpointSource.nico.timeoutSeconds }}
-{{ with .Values.endpointSource.nico.credentialsProfile }}credentials_profile = {{ . | toJson }}
-{{ end }}{{ end }}
+credentials_profile = {{ .Values.endpointSource.nico.credentialsProfile | default "" | trim | required "endpointSource.nico.credentialsProfile is required for NICo discovery" | toJson }}
+{{ end }}
 {{- $nico := dict -}}
 {{- $config := default dict .Values.nicoHardwareHealth.config -}}
 {{- range $key := list

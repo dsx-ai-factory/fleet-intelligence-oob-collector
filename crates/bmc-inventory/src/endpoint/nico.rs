@@ -40,7 +40,7 @@ pub struct NicoRestConfig {
     /// Scopes requested from the identity provider; empty omits the scope parameter.
     #[serde(default)]
     pub scopes: Vec<String>,
-    /// Shared BMC credential profile applied to every discovered machine.
+    /// Required shared BMC credential profile applied to every discovered machine.
     #[serde(default)]
     pub credentials_profile: Option<String>,
     /// Whole-discovery budget, including credential loading, OAuth2, and all pages.
@@ -101,9 +101,9 @@ impl NicoRestEndpointSource {
             || config
                 .credentials_profile
                 .as_ref()
-                .is_some_and(|name| name.trim().is_empty())
+                .is_none_or(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; credential profile must not be blank".into());
+            return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; a nonblank shared credentials_profile is required".into());
         }
         if config.scopes.iter().any(|scope| {
             scope.is_empty()
@@ -195,13 +195,14 @@ impl NicoRestEndpointSource {
     ) -> Result<Vec<T>> {
         let mut rows = Vec::new();
         let mut total = None;
+        let mut page_size = PAGE_SIZE;
         for page in 1..=MAX_PAGES {
             let response = self
                 .client
                 .get(url.clone())
                 .header(AUTHORIZATION, authorization.clone())
                 .query(query)
-                .query(&[("pageNumber", page), ("pageSize", PAGE_SIZE)])
+                .query(&[("pageNumber", page), ("pageSize", page_size)])
                 .send()
                 .await
                 .map_err(|_| "NICo request failed; check connectivity and CA trust")?;
@@ -219,17 +220,20 @@ impl NicoRestEndpointSource {
                 .and_then(|value| serde_json::from_str(value).ok())
                 .ok_or("NICo response has no valid X-Pagination header")?;
             if pagination.page_number != page
-                || pagination.page_size != PAGE_SIZE
+                || (page > 1 && pagination.page_size != page_size)
                 || total.is_some_and(|previous| previous != pagination.total)
             {
                 return Err(Box::new(ListingChanged));
             }
+            if pagination.page_size == 0 || pagination.page_size > page_size {
+                return Err(
+                    "NICo pagination pageSize must be positive and no larger than requested".into(),
+                );
+            }
+            page_size = pagination.page_size;
             total = Some(pagination.total);
             let batch: Vec<T> = read_json(response).await?;
-            let expected = pagination
-                .total
-                .saturating_sub((page - 1) * PAGE_SIZE)
-                .min(PAGE_SIZE);
+            let expected = pagination.total.saturating_sub(rows.len()).min(page_size);
             if batch.len() != expected {
                 return Err(Box::new(ListingChanged));
             }
@@ -251,8 +255,8 @@ impl NicoRestEndpointSource {
             .await?;
         let mut site_ids = HashSet::new();
         for site in &sites {
-            if site.id.trim().is_empty() || site.name.trim().is_empty() {
-                return Err("NICo site has an empty ID or name".into());
+            if site.id.trim().is_empty() {
+                return Err("NICo site has an empty ID".into());
             }
             if !site_ids.insert(&site.id) {
                 return Err(Box::new(ListingChanged));
@@ -293,9 +297,30 @@ impl NicoRestEndpointSource {
                 if !ids.insert(machine.id.clone()) {
                     return Err(Box::new(ListingChanged));
                 }
-                let mut endpoint = match machine
+                let endpoint = machine
                     .into_endpoint(self.config.credentials_profile.clone())
-                {
+                    .and_then(|mut endpoint| {
+                        // External names must obey the same limits as configured
+                        // placement, before this record enters the shared finalizer.
+                        for (field, value, target) in [
+                            ("name", endpoint.name.take(), &mut endpoint.name),
+                            (
+                                "node_group",
+                                Some(node_group.clone()),
+                                &mut endpoint.node_group,
+                            ),
+                            (
+                                "compute_zone",
+                                compute_zone.clone(),
+                                &mut endpoint.compute_zone,
+                            ),
+                        ] {
+                            *target = crate::config::normalize_config_value(field, value)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok(endpoint)
+                    });
+                let endpoint = match endpoint {
                     Ok(endpoint) => endpoint,
                     Err(error) => {
                         skipped += 1;
@@ -305,8 +330,6 @@ impl NicoRestEndpointSource {
                         continue;
                     }
                 };
-                endpoint.node_group = Some(node_group.clone());
-                endpoint.compute_zone = compute_zone.clone();
                 if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
                     return Err(format!(
                         "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
@@ -328,7 +351,7 @@ impl NicoRestEndpointSource {
                 skipped_machines = skipped,
                 usable_machines = endpoints.len(),
                 total_machines = ids.len(),
-                "NICo discovery omitted machines; inspect metadata and permissions (first 20 reasons logged)"
+                "NICo discovery omitted machines; inspect metadata, names, and permissions (first 20 reasons logged)"
             );
         }
         if endpoints.is_empty() {
@@ -1117,7 +1140,6 @@ mod tests {
         for rows in [
             vec![],
             vec![serde_json::json!({"id":"", "name":"cluster"})],
-            vec![serde_json::json!({"id":"site-id", "name":" "})],
             vec![
                 serde_json::json!({"id":"site-id", "name":"one"}),
                 serde_json::json!({"id":"site-id", "name":"two"}),
@@ -1221,6 +1243,108 @@ mod tests {
         assert!(NicoRestEndpointSource::new(cfg).is_err());
         cfg = config(PathBuf::from("relative-token"));
         assert!(NicoRestEndpointSource::new(cfg).is_err());
+    }
+
+    #[test]
+    fn requires_a_shared_bmc_profile_before_discovery() {
+        let files = CredentialFiles::new("fixture-secret");
+        for profile in [None, Some("".into()), Some("   ".into())] {
+            let mut cfg = config(files.0.clone());
+            cfg.credentials_profile = profile;
+            let error = NicoRestEndpointSource::new(cfg).err().unwrap().to_string();
+            assert!(error.contains("credentials_profile is required"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bad_external_names_skip_only_affected_machines_and_allow_configured_overrides() {
+        let sites = page(
+            1,
+            3,
+            vec![
+                serde_json::json!({"id":"site-id", "name":"good-cluster"}),
+                serde_json::json!({"id":"long-site", "name":"é".repeat(513)}),
+                serde_json::json!({"id":"blank-site", "name":" "}),
+            ],
+        );
+        let mut long_host = machine(1);
+        long_host["hostname"] = "é".repeat(513).into();
+        let mut long_site_host = machine(2);
+        long_site_host["siteId"] = "long-site".into();
+        let mut blank_site_host = machine(3);
+        blank_site_host["siteId"] = "blank-site".into();
+        let replies = vec![
+            sites,
+            page(1, 2, vec![machine(0), long_host]),
+            page(1, 1, vec![long_site_host]),
+            page(1, 1, vec![blank_site_host]),
+        ];
+        for override_group in [None, Some("configured-cluster".to_string())] {
+            let (source, _files, server) =
+                fixture_with_sites(replies.clone(), None, vec![], false).await;
+            let source = source.with_placement_overrides(None, override_group.clone());
+            let endpoints = source.discover().await.unwrap();
+            assert_eq!(
+                endpoints.len(),
+                if override_group.is_some() { 3 } else { 1 }
+            );
+            assert_eq!(endpoints[0].name.as_deref(), Some("host-0"));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn follows_smaller_advertised_page_sizes_for_sites_and_machines() {
+        let capped = |number, size, total, rows| {
+            let mut reply = page(number, total, rows);
+            reply.pagination = Some(
+                serde_json::json!({"pageNumber":number,"pageSize":size,"total":total}).to_string(),
+            );
+            reply
+        };
+        let (source, _files, server) = fixture_with_sites(
+            vec![
+                capped(
+                    1,
+                    1,
+                    2,
+                    vec![serde_json::json!({"id":"site-id", "name":"cluster"})],
+                ),
+                capped(
+                    2,
+                    1,
+                    2,
+                    vec![serde_json::json!({"id":"empty-site", "name":"empty"})],
+                ),
+                capped(1, 2, 3, vec![machine(0), machine(1)]),
+                capped(2, 2, 3, vec![machine(2)]),
+                page(1, 0, vec![]),
+            ],
+            None,
+            vec![],
+            false,
+        )
+        .await;
+        assert_eq!(source.discover().await.unwrap().len(), 3);
+        let requests = server.await.unwrap();
+        for (request, size) in requests.iter().zip([100, 1, 100, 2, 100]) {
+            assert!(request.contains(&format!("pageSize={size}")), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_advertised_page_sizes_without_misreporting_listing_changes() {
+        for size in [0, 101] {
+            let mut reply = site_page();
+            reply.pagination =
+                Some(serde_json::json!({"pageNumber":1,"pageSize":size,"total":1}).to_string());
+            let (source, _files, server) =
+                fixture_with_sites(vec![reply], None, vec![], false).await;
+            let error = source.discover().await.unwrap_err().to_string();
+            assert!(error.contains("pageSize must be positive"), "{error}");
+            assert!(!error.contains("pagination changed"));
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
