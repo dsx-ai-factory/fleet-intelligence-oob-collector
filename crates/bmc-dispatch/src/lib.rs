@@ -171,14 +171,29 @@ impl Dispatcher {
         let handle = runtime.handle();
         let driver_notify = Arc::clone(&notify);
         tokio::spawn(async move {
+            let mut deadline = None;
             loop {
-                match runtime.next().await {
+                let output = tokio::select! {
+                    output = runtime.next() => output,
+                    () = async {
+                        if let Some(when) = deadline {
+                            tokio::time::sleep_until(when).await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        deadline = None;
+                        continue;
+                    }
+                    () = driver_notify.notified() => continue,
+                };
+                match output {
                     RuntimeOutput::Work { .. } => {}
                     RuntimeOutput::SleepUntil(when) => {
-                        tokio::select! {
-                            () = tokio::time::sleep_until(when.into()) => {}
-                            () = driver_notify.notified() => {}
-                        }
+                        // The runtime emits a deadline once. Keep it across
+                        // notifications and completions until its timer fires.
+                        let when = when.into();
+                        deadline = Some(deadline.map_or(when, |current| current.min(when)));
                     }
                     RuntimeOutput::Shutdown => break,
                     RuntimeOutput::Runtime(event) => match event {},
@@ -1175,6 +1190,78 @@ mod tests {
             bmc_burst: 100,
             workflow_queue_capacity: 8,
         }
+    }
+
+    #[tokio::test]
+    async fn resumes_queued_requests_after_burst_is_exhausted() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                bmc_requests_per_second: 20,
+                bmc_burst: 1,
+                ..config()
+            },
+            ["bmc-1".to_string()],
+        )
+        .expect("dispatcher");
+        let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for _ in 0..6 {
+                gate.execute(async { Ok::<_, Infallible>(()) })
+                    .await
+                    .expect("request");
+            }
+        })
+        .await
+        .expect("queue notifications must not discard token-refill deadlines");
+    }
+
+    #[tokio::test]
+    async fn serves_other_endpoints_while_waiting_for_token_refill() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_requests_per_second: 1,
+                bmc_burst: 1,
+                ..config()
+            },
+            ["bmc-1".to_string(), "bmc-2".to_string()],
+        )
+        .expect("dispatcher");
+        let first = dispatcher.inventory_gate("bmc-1").expect("first gate");
+        let second = dispatcher.inventory_gate("bmc-2").expect("second gate");
+
+        first
+            .execute(async { Ok::<_, Infallible>(()) })
+            .await
+            .expect("first request");
+        let waiting_gate = first.clone();
+        let waiting = tokio::spawn(async move {
+            waiting_gate
+                .execute(async { Ok::<_, Infallible>(()) })
+                .await
+        });
+        for _ in 0..100 {
+            if first.queue.lock().expect("queue").len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(first.queue.lock().expect("queue").len(), 1);
+
+        tokio::time::timeout(Duration::from_millis(500), async {
+            second
+                .execute(async { Ok::<_, Infallible>(()) })
+                .await
+                .expect("second endpoint must not wait for the first endpoint's refill");
+        })
+        .await
+        .expect("other endpoints must make progress before token refill");
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .expect("rate-limited request must resume")
+            .expect("task")
+            .expect("rate-limited request");
     }
 
     #[tokio::test]
