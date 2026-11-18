@@ -21,8 +21,8 @@ file = "/run/secrets/bmc/credentials.json"
 # scopes = ["nico"] # Use scopes configured by your identity-provider administrator.
 # credentials_profile = "bmc" # Profile in the shared BMC credentials file.
 # timeout_seconds = 30
-# NICo site names supply node groups; country/state/city supply compute zones.
-# The global compute_zone above is a fallback for sites without location data.
+# Configured node_group and compute_zone above override NICo site information.
+# Omit either to derive it from the site name or country/state/city, respectively.
 
 # Optional NICo collection controls; omit fields to use the bundle defaults below.
 # [nico_health]
