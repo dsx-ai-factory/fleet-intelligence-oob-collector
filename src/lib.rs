@@ -245,25 +245,7 @@ async fn run_runtime_until_shutdown(
         "starting OOB collector"
     );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let mut config_loader = config::RuntimeConfigLoader::default();
-    let target_config = loop {
-        let loaded = tokio::select! {
-            biased;
-            () = shutdown.wait() => return Ok(()),
-            result = config_loader.load(&options.inventory.config) => result,
-        };
-        match loaded {
-            Ok(config) => break config,
-            Err(error) if config::is_discovery_unavailable(error.as_ref()) => {
-                tracing::warn!(reason = %error, retry_seconds = 30, "endpoint discovery unavailable at startup; waiting without collecting");
-                tokio::select! {
-                    () = shutdown.wait() => return Ok(()),
-                    () = tokio::time::sleep(Duration::from_secs(30)) => {},
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    };
+    let target_config = config::load_config_async(&options.inventory.config).await?;
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
@@ -297,7 +279,7 @@ async fn run_runtime_until_shutdown(
         let cycle = async {
             let target_config = match initial_config.take() {
                 Some(config) => config,
-                None => config_loader.load(&options.inventory.config).await?,
+                None => config::load_config_async(&options.inventory.config).await?,
             };
             run_collection_cycle(
                 &options,
@@ -310,14 +292,10 @@ async fn run_runtime_until_shutdown(
             )
             .await
         };
-        let mut next_attempt = interval;
         if let Err(err) = cycle.await {
-            if config::is_discovery_unavailable(err.as_ref()) {
-                next_attempt = interval.min(Duration::from_secs(30));
-            }
             tracing::error!(
                 phase = "cycle", operation = "collection", outcome = "failed",
-                next_attempt_seconds = next_attempt.as_secs(),
+                next_attempt_seconds = interval.as_secs(),
                 error = %err,
                 http_status = backend_http_status(err.as_ref()),
                 "collection cycle failed"
@@ -328,11 +306,11 @@ async fn run_runtime_until_shutdown(
         }
 
         tracing::info!(
-            next_sync_seconds = next_attempt.as_secs(),
+            next_sync_seconds = interval.as_secs(),
             "sleeping until next cycle"
         );
         tokio::select! {
-            _ = tokio::time::sleep(next_attempt) => {}
+            _ = tokio::time::sleep(interval) => {}
             () = shutdown.wait() => return Ok(()),
         }
     }
@@ -374,8 +352,8 @@ async fn run_collection_cycle(
             reload_credentials: Box::new({
                 let credentials_file = credentials_file.clone();
                 move |target| {
-                    reload_credentials(
-                        credentials_file.as_deref(),
+                    config::load_target_credentials(
+                        &credentials_file,
                         &target.mac.to_string(),
                         target.credentials_profile.as_deref(),
                     )
@@ -421,7 +399,7 @@ async fn run_collection_cycle(
     let uploads = collect_and_upload_attestation(
         AttestationTargets {
             targets: &attestation_targets,
-            credentials_file: credentials_file.as_deref(),
+            credentials_file: &credentials_file,
         },
         &settings,
         endpoints,
@@ -465,7 +443,6 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
     targets
         .iter()
         .map(|target| attestation_config::Target {
-            proxy: target.proxy.clone(),
             name: target.mac.to_string(),
             bmc_mac: target.mac.to_string(),
             address: target.address.clone(),
@@ -481,7 +458,7 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
 #[derive(Clone, Copy)]
 struct AttestationTargets<'a> {
     targets: &'a [attestation_config::Target],
-    credentials_file: Option<&'a Path>,
+    credentials_file: &'a Path,
 }
 
 /// Collect attestation for `targets`, enrolling again and collecting once more
@@ -587,7 +564,7 @@ async fn collect_and_upload_attestation(
             .filter(|target| outcome.retry_bmc_macs.contains(&target.bmc_mac))
             .cloned()
             .map(|mut target| {
-                match reload_credentials(
+                match config::load_target_credentials(
                     credentials_file,
                     &target.bmc_mac,
                     target.credentials_profile.as_deref(),
@@ -797,20 +774,9 @@ fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<B
         .collect()
 }
 
-fn reload_credentials(
-    file: Option<&Path>,
-    mac: &str,
-    profile: Option<&str>,
-) -> Result<(String, String), Box<dyn Error>> {
-    match file {
-        Some(file) => config::load_target_credentials(file, mac, profile),
-        None => Ok((String::new(), String::new())),
-    }
-}
-
 async fn collect_attestation(
     targets: &[attestation_config::Target],
-    credentials_file: Option<&Path>,
+    credentials_file: &Path,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     jwt: &str,
@@ -829,7 +795,7 @@ async fn collect_attestation(
         &backend,
         dispatcher,
         &|target| {
-            reload_credentials(
+            config::load_target_credentials(
                 credentials_file,
                 &target.bmc_mac,
                 target.credentials_profile.as_deref(),
@@ -882,13 +848,9 @@ async fn collect_and_upload_inventory(
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let dispatcher = Arc::clone(&retry.dispatcher);
-    let probe = if targets.iter().any(|target| target.proxy.is_some()) {
-        LatencyProbe::Disabled
-    } else {
-        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await
-    };
-    let source =
-        RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(probe);
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
     // JoinSet aborts the producer if an upload error exits this scope early.
@@ -1383,13 +1345,9 @@ async fn collect_inventory_targets(
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let probe = if targets.iter().any(|target| target.proxy.is_some()) {
-        LatencyProbe::Disabled
-    } else {
-        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await
-    };
-    let source =
-        RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(probe);
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
+        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+    );
 
     Ok(inventory_collections(
         &source,
@@ -2028,7 +1986,6 @@ mod tests {
             delay: Some(Duration::ZERO),
         };
         let target = config::Target {
-            proxy: None,
             kind: bmc_inventory::models::TargetKind::Compute,
             name: None,
             compute_zone: None,
@@ -2086,7 +2043,6 @@ mod tests {
         for (reloaded, recovers) in [("good", true), ("bad", false)] {
             let (port, rejected) = spawn_bmc_accepting_good_password(false).await;
             let target = move |password: &str| config::Target {
-                proxy: None,
                 kind: bmc_inventory::models::TargetKind::Compute,
                 name: None,
                 compute_zone: None,

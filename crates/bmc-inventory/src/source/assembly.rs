@@ -82,7 +82,6 @@ mod tests {
 
     fn target() -> Target {
         Target {
-            proxy: None,
             kind: TargetKind::Compute,
             name: Some("node-a".into()),
             compute_zone: None,

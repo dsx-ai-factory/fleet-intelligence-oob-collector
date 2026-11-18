@@ -42,18 +42,11 @@ pub struct NicoRestConfig {
     /// Whole-discovery budget, including all pages and reading the token file.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
-    /// Runtime-only fallback age since the last successful discovery (30 hours).
-    #[serde(default = "default_max_stale")]
-    pub max_stale_seconds: u64,
 }
 
 fn default_api_name() -> String {
     "nico".into()
 }
-fn default_max_stale() -> u64 {
-    108_000
-}
-
 fn default_timeout() -> u64 {
     30
 }
@@ -89,13 +82,12 @@ impl NicoRestEndpointSource {
             || !matches!(config.api_name.as_str(), "nico" | "carbide")
             || !config.token_file.is_absolute()
             || !(1..=3600).contains(&config.timeout_seconds)
-            || !(1..=172_800).contains(&config.max_stale_seconds)
             || config
                 .credentials_profile
                 .as_ref()
                 .is_some_and(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, site ID, an absolute token_file, api_name nico/carbide, timeout_seconds in 1..=3600, and max_stale_seconds in 1..=172800; credential profile must not be blank".into());
+            return Err("NICo requires organization, site ID, an absolute token_file, api_name nico/carbide, timeout_seconds in 1..=3600; credential profile must not be blank".into());
         }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
@@ -117,7 +109,7 @@ impl NicoRestEndpointSource {
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
         let token = tokio::fs::read_to_string(&self.config.token_file)
             .await
-            .map_err(|_| unavailable("cannot read NICo token_file"))?;
+            .map_err(|_| "cannot read NICo token_file")?;
         let token = token.trim();
         if token.is_empty() || token.len() > 65536 {
             return Err(
@@ -169,16 +161,13 @@ impl NicoRestEndpointSource {
                 ])
                 .send()
                 .await
-                .map_err(|_| unavailable("NICo request failed; check connectivity and CA trust"))?;
+                .map_err(|_| "NICo request failed; check connectivity and CA trust")?;
             if !response.status().is_success() {
                 let status = response.status();
                 let message = format!(
                     "NICo returned HTTP {}; check token expiry, carbide scope, and provider/site permissions",
                     status.as_u16()
                 );
-                if status.is_server_error() || matches!(status.as_u16(), 401 | 403 | 429) {
-                    return Err(unavailable(message));
-                }
                 return Err(message.into());
             }
             let pagination: Pagination = response
@@ -257,19 +246,6 @@ impl NicoRestEndpointSource {
     }
 }
 
-/// Discovery could not reach an authoritative result; runtime retries may recover.
-#[derive(Debug)]
-pub struct DiscoveryUnavailable(String);
-impl std::fmt::Display for DiscoveryUnavailable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for DiscoveryUnavailable {}
-pub(crate) fn unavailable(message: impl Into<String>) -> EndpointSourceError {
-    Box::new(DiscoveryUnavailable(message.into()))
-}
-
 #[derive(Debug)]
 struct ListingChanged;
 impl std::fmt::Display for ListingChanged {
@@ -292,7 +268,7 @@ impl EndpointSource for NicoRestEndpointSource {
     async fn discover(&self) -> Result<EndpointSnapshot> {
         tokio::time::timeout(self.timeout, self.discover_inner())
             .await
-            .map_err(|_| unavailable("NICo endpoint discovery timed out"))?
+            .map_err(|_| "NICo endpoint discovery timed out")?
     }
 }
 
@@ -301,7 +277,7 @@ async fn read_json<T: DeserializeOwned>(mut response: reqwest::Response) -> Resu
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| unavailable("cannot read NICo response"))?
+        .map_err(|_| "cannot read NICo response")?
     {
         if chunk.len() > MAX_BODY_BYTES.saturating_sub(bytes.len()) {
             return Err("NICo response exceeds 8 MiB per page".into());
@@ -366,7 +342,6 @@ impl Machine {
             .and_then(|mac| mac.parse::<MacAddress>().ok())
             .ok_or("NICo machine has no valid BMC MAC")?;
         Ok(Endpoint {
-            source_reference: Some(super::safe_source_reference(&self.id)),
             kind: TargetKind::Compute,
             name: self.hostname.filter(|name| !name.trim().is_empty()),
             ip,
@@ -414,7 +389,6 @@ mod tests {
             api_name: default_api_name(),
             credentials_profile: Some("bmc".into()),
             timeout_seconds: 2,
-            max_stale_seconds: default_max_stale(),
         }
     }
 
@@ -635,9 +609,6 @@ mod tests {
             }
             let (source, _token, server) = fixture(prefix).await;
             let error = source.discover().await.unwrap_err();
-            if matches!(scenario, "401" | "403" | "500") {
-                assert!(error.is::<DiscoveryUnavailable>());
-            }
             let error = error.to_string();
             assert!(error.contains(&expected), "{scenario}: {error}");
             assert!(!error.contains("sensitive"));

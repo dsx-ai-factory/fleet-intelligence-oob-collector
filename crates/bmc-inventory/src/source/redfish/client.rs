@@ -43,7 +43,6 @@ pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
     dispatcher: Arc<Dispatcher>,
     latency_probe: LatencyProbe,
-    request_timeout: Duration,
 }
 
 impl RedfishSource {
@@ -71,7 +70,6 @@ impl RedfishSource {
             client,
             dispatcher,
             latency_probe: LatencyProbe::Disabled,
-            request_timeout,
         })
     }
 
@@ -84,9 +82,6 @@ impl RedfishSource {
     }
 
     async fn measure_latency(&self, target: &Target) -> Vec<LatencyMeasurement> {
-        if target.proxy.is_some() {
-            return Vec::new();
-        }
         let destination = SocketAddr::new(target.ip, target.port.unwrap_or(DEFAULT_REDFISH_PORT));
         let config = match self.latency_probe {
             LatencyProbe::Disabled => return vec![tcp_probe::disabled(destination)],
@@ -127,29 +122,10 @@ impl RedfishSource {
             .dispatcher
             .inventory_gate(&target.mac.to_string())
             .ok_or_else(|| format!("no dispatcher endpoint for target {:?}", target.mac))?;
-        let (client, credentials) = match &target.proxy {
-            Some(proxy) => {
-                let (client, route) = proxy
-                    .connect(&url, self.request_timeout, USER_AGENT)
-                    .await?;
-                (
-                    DispatchingHttpClient::new(
-                        nv_redfish::bmc_http::reqwest::Client::with_client(client),
-                        gate,
-                    )
-                    .with_proxy(route),
-                    BmcCredentials::anonymous(),
-                )
-            }
-            None => (
-                DispatchingHttpClient::new(self.client.clone(), gate),
-                BmcCredentials::new(target.username.clone(), target.password.clone()),
-            ),
-        };
         let bmc = Arc::new(HttpBmc::new(
-            client,
+            DispatchingHttpClient::new(self.client.clone(), gate),
             url,
-            credentials,
+            BmcCredentials::new(target.username.clone(), target.password.clone()),
             CacheSettings::with_capacity(32),
         ));
         Ok((ServiceRoot::new(bmc.clone()).await?, bmc))
@@ -214,7 +190,6 @@ mod tests {
             .expect("source")
             .with_latency_probe(LatencyProbe::Enabled(tcp_probe::TcpProbeConfig::default()));
         let target = Target {
-            proxy: None,
             kind: crate::models::TargetKind::Compute,
             name: None,
             compute_zone: None,
@@ -315,7 +290,6 @@ mod tests {
         let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
             .expect("source");
         let target = Target {
-            proxy: None,
             kind: crate::models::TargetKind::Compute,
             name: None,
             compute_zone: None,
@@ -373,7 +347,6 @@ mod tests {
             .expect("source")
             .with_latency_probe(LatencyProbe::Disabled);
         let target = Target {
-            proxy: None,
             kind: crate::models::TargetKind::Compute,
             name: None,
             compute_zone: None,

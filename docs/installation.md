@@ -4,6 +4,8 @@ Install the collector on Kubernetes with its Helm chart. By default, the chart r
 
 For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 
+For a NICo-managed site, use [NICo REST discovery](nico-discovery.md) to configure the target source and mount its access-token file.
+
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`

@@ -45,7 +45,7 @@ case "${1:-}" in
             false) ;;
             *) echo 'FLEETINT_DISABLE_LATENCY_PROBE must be true or false' >&2; exit 2 ;;
         esac
-        exec /usr/bin/bmc-collector run --config "${FLEETINT_COLLECTOR_CONFIG:-/etc/fleetint-oob/config.toml}" \
+        exec /usr/bin/bmc-collector run --config /etc/fleetint-oob/config.toml \
             --interval-seconds "$FLEETINT_INTERVAL_SECONDS" \
             --target-concurrency "$FLEETINT_TARGET_CONCURRENCY" \
             --bmc-max-in-flight "$FLEETINT_BMC_MAX_IN_FLIGHT" \
