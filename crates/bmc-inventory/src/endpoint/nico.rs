@@ -34,7 +34,6 @@ pub struct NicoRestConfig {
     /// REST prefix including `/v2`, without organization or resource segments.
     pub api_url: String,
     pub org: String,
-    pub site_id: String,
     pub token_url: String,
     pub client_id_file: PathBuf,
     pub client_secret_file: PathBuf,
@@ -57,6 +56,7 @@ fn default_timeout() -> u64 {
 pub struct NicoRestEndpointSource {
     config: NicoRestConfig,
     machines_url: Url,
+    sites_url: Url,
     token_url: Url,
     client: reqwest::Client,
     timeout: Duration,
@@ -91,7 +91,6 @@ impl NicoRestEndpointSource {
             );
         }
         if config.org.trim().is_empty()
-            || config.site_id.trim().is_empty()
             || config.org == "."
             || config.org == ".."
             || !config.client_id_file.is_absolute()
@@ -102,7 +101,7 @@ impl NicoRestEndpointSource {
                 .as_ref()
                 .is_some_and(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, site ID, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; credential profile must not be blank".into());
+            return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; credential profile must not be blank".into());
         }
         if config.scopes.iter().any(|scope| {
             scope.is_empty()
@@ -116,6 +115,7 @@ impl NicoRestEndpointSource {
             .map_err(|_| "invalid NICo REST API prefix")?
             .pop_if_empty()
             .extend(["org", &config.org, "nico", "machine"]);
+        let sites_url = url.join("site").map_err(|_| "invalid NICo site URL")?;
         let timeout = Duration::from_secs(config.timeout_seconds);
         let client = client_builder(timeout)
             .https_only(true)
@@ -124,6 +124,7 @@ impl NicoRestEndpointSource {
         Ok(Self {
             config,
             machines_url: url,
+            sites_url,
             token_url,
             client,
             timeout,
@@ -171,43 +172,30 @@ impl NicoRestEndpointSource {
         unreachable!("both discovery attempts return or retry")
     }
 
-    async fn discover_pages(&self, authorization: &HeaderValue) -> Result<EndpointSnapshot> {
-        let mut endpoints = Vec::new();
-        let mut ids = HashSet::new();
+    async fn list_pages<T: DeserializeOwned>(
+        &self,
+        url: &Url,
+        authorization: &HeaderValue,
+        query: &[(&str, String)],
+    ) -> Result<Vec<T>> {
+        let mut rows = Vec::new();
         let mut total = None;
-        let mut skipped = 0usize;
-        let mut macs = HashMap::new();
-        let mut addresses = HashMap::new();
         for page in 1..=MAX_PAGES {
             let response = self
                 .client
-                .get(self.machines_url.clone())
+                .get(url.clone())
                 .header(AUTHORIZATION, authorization.clone())
-                .query(&[
-                    ("siteId", self.config.site_id.clone()),
-                    ("includeMetadata", "true".into()),
-                    ("pageNumber", page.to_string()),
-                    ("pageSize", PAGE_SIZE.to_string()),
-                    ("orderBy", "ID_ASC".into()),
-                    ("isMissingOnSite", "false".into()),
-                    ("status", "Ready".into()),
-                    ("status", "InUse".into()),
-                    ("status", "Initializing".into()),
-                    ("status", "Error".into()),
-                    ("status", "Maintenance".into()),
-                    ("status", "Reset".into()),
-                    ("status", "Unknown".into()),
-                ])
+                .query(query)
+                .query(&[("pageNumber", page), ("pageSize", PAGE_SIZE)])
                 .send()
                 .await
                 .map_err(|_| "NICo request failed; check connectivity and CA trust")?;
             if !response.status().is_success() {
-                let status = response.status();
-                let message = format!(
+                return Err(format!(
                     "NICo returned HTTP {}; check OAuth2 scopes and provider/site permissions",
-                    status.as_u16()
-                );
-                return Err(message.into());
+                    response.status().as_u16()
+                )
+                .into());
             }
             let pagination: Pagination = response
                 .headers()
@@ -222,17 +210,68 @@ impl NicoRestEndpointSource {
                 return Err(Box::new(ListingChanged));
             }
             total = Some(pagination.total);
-            let machines: Vec<Machine> = read_json(response).await?;
+            let batch: Vec<T> = read_json(response).await?;
             let expected = pagination
                 .total
                 .saturating_sub((page - 1) * PAGE_SIZE)
                 .min(PAGE_SIZE);
-            if machines.len() != expected {
+            if batch.len() != expected {
                 return Err(Box::new(ListingChanged));
             }
+            rows.extend(batch);
+            if rows.len() == pagination.total {
+                return Ok(rows);
+            }
+        }
+        Err("NICo discovery exceeded the page limit".into())
+    }
+
+    async fn discover_pages(&self, authorization: &HeaderValue) -> Result<EndpointSnapshot> {
+        let sites: Vec<Site> = self
+            .list_pages(
+                &self.sites_url,
+                authorization,
+                &[("orderBy", "NAME_ASC".into())],
+            )
+            .await?;
+        let mut site_ids = HashSet::new();
+        for site in &sites {
+            if site.id.trim().is_empty() || site.name.trim().is_empty() {
+                return Err("NICo site has an empty ID or name".into());
+            }
+            if !site_ids.insert(&site.id) {
+                return Err(Box::new(ListingChanged));
+            }
+        }
+        let mut endpoints = Vec::new();
+        let mut ids = HashSet::new();
+        let mut skipped = 0usize;
+        let mut macs = HashMap::new();
+        let mut addresses = HashMap::new();
+        for site in sites {
+            let machines: Vec<Machine> = self
+                .list_pages(
+                    &self.machines_url,
+                    authorization,
+                    &[
+                        ("siteId", site.id.clone()),
+                        ("includeMetadata", "true".into()),
+                        ("orderBy", "ID_ASC".into()),
+                        ("isMissingOnSite", "false".into()),
+                        ("status", "Ready".into()),
+                        ("status", "InUse".into()),
+                        ("status", "Initializing".into()),
+                        ("status", "Error".into()),
+                        ("status", "Maintenance".into()),
+                        ("status", "Reset".into()),
+                        ("status", "Unknown".into()),
+                    ],
+                )
+                .await?;
+            let compute_zone = site.compute_zone();
             for machine in machines {
                 let machine_id = super::safe_source_reference(&machine.id);
-                if machine.site_id != self.config.site_id || machine.id.trim().is_empty() {
+                if machine.site_id != site.id || machine.id.trim().is_empty() {
                     return Err(
                         format!("NICo machine {machine_id}: different site or empty ID").into(),
                     );
@@ -240,7 +279,8 @@ impl NicoRestEndpointSource {
                 if !ids.insert(machine.id.clone()) {
                     return Err(Box::new(ListingChanged));
                 }
-                let endpoint = match machine.into_endpoint(self.config.credentials_profile.clone())
+                let mut endpoint = match machine
+                    .into_endpoint(self.config.credentials_profile.clone())
                 {
                     Ok(endpoint) => endpoint,
                     Err(error) => {
@@ -251,6 +291,8 @@ impl NicoRestEndpointSource {
                         continue;
                     }
                 };
+                endpoint.node_group = Some(site.name.trim().to_string());
+                endpoint.compute_zone = compute_zone.clone();
                 if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
                     return Err(format!(
                         "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
@@ -266,22 +308,19 @@ impl NicoRestEndpointSource {
                 }
                 endpoints.push(endpoint);
             }
-            if ids.len() == pagination.total {
-                if skipped > 0 {
-                    tracing::warn!(
-                        skipped_machines = skipped,
-                        usable_machines = endpoints.len(),
-                        total_machines = ids.len(),
-                        "NICo discovery omitted machines; inspect metadata and permissions (first 20 reasons logged)"
-                    );
-                }
-                if endpoints.is_empty() {
-                    return Err("no usable BMC targets found in NICo endpoint source; check metadata and provider permissions".into());
-                }
-                return Ok(endpoints.into());
-            }
         }
-        Err("NICo discovery exceeded the page limit".into())
+        if skipped > 0 {
+            tracing::warn!(
+                skipped_machines = skipped,
+                usable_machines = endpoints.len(),
+                total_machines = ids.len(),
+                "NICo discovery omitted machines; inspect metadata and permissions (first 20 reasons logged)"
+            );
+        }
+        if endpoints.is_empty() {
+            return Err("no usable BMC targets found in NICo endpoint source; check sites, metadata and provider permissions".into());
+        }
+        Ok(endpoints.into())
     }
 }
 
@@ -376,7 +415,7 @@ async fn read_json<T: DeserializeOwned>(mut response: reqwest::Response) -> Resu
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes)
-        .map_err(|_| "NICo response does not match the machine JSON contract".into())
+        .map_err(|_| "NICo response does not match the site/machine JSON contract".into())
 }
 
 #[derive(Deserialize)]
@@ -385,6 +424,45 @@ struct Pagination {
     page_number: usize,
     page_size: usize,
     total: usize,
+}
+
+#[derive(Deserialize)]
+struct Site {
+    id: String,
+    name: String,
+    #[serde(default)]
+    location: Option<SiteLocation>,
+}
+
+#[derive(Deserialize)]
+struct SiteLocation {
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    city: Option<String>,
+}
+
+impl Site {
+    fn compute_zone(&self) -> Option<String> {
+        let location = self.location.as_ref()?;
+        let raw = [&location.country, &location.state, &location.city]
+            .into_iter()
+            .filter_map(|part| part.as_deref())
+            .collect::<Vec<_>>()
+            .join("-");
+        let mut zone = String::new();
+        for ch in raw.chars().flat_map(char::to_lowercase) {
+            if ch.is_alphanumeric() {
+                zone.push(ch);
+            } else if !zone.is_empty() && !zone.ends_with('-') {
+                zone.push('-');
+            }
+        }
+        let zone = zone.trim_end_matches('-');
+        (!zone.is_empty()).then(|| zone.to_string())
+    }
 }
 
 #[derive(Deserialize)]
@@ -477,7 +555,6 @@ mod tests {
         NicoRestConfig {
             api_url: "https://nico.example.com/v2/".into(),
             org: "example".into(),
-            site_id: "site-id".into(),
             token_url: "https://idp.example.com/token".into(),
             client_id_file: path.with_extension("id"),
             client_secret_file: path,
@@ -492,6 +569,17 @@ mod tests {
             "id":format!("machine-{index}"),"siteId":"site-id","hostname":format!("host-{index}"),
             "metadata":{"bmcInfo":{"ip":format!("192.0.2.{}",index + 1),"mac":format!("02:00:00:00:00:{index:02x}")}}
         })
+    }
+
+    fn site_page() -> Reply {
+        page(
+            1,
+            1,
+            vec![serde_json::json!({
+                "id":"site-id", "name":"test-cluster",
+                "location":{"country":"USA", "state":"AZ", "city":"Phoenix"}
+            })],
+        )
     }
 
     #[derive(Clone)]
@@ -533,6 +621,19 @@ mod tests {
         CredentialFiles,
         tokio::task::JoinHandle<Vec<String>>,
     ) {
+        fixture_with_sites(replies, token_reply, scopes, true).await
+    }
+
+    async fn fixture_with_sites(
+        replies: Vec<Reply>,
+        token_reply: Option<Reply>,
+        scopes: Vec<String>,
+        automatic_sites: bool,
+    ) -> (
+        NicoRestEndpointSource,
+        CredentialFiles,
+        tokio::task::JoinHandle<Vec<String>>,
+    ) {
         let token = CredentialFiles::new("fixture-secret");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut source = NicoRestEndpointSource::new(config(token.0.clone())).unwrap();
@@ -547,6 +648,7 @@ mod tests {
             .no_proxy()
             .build()
             .unwrap();
+        source.sites_url = source.machines_url.join("site").unwrap();
         let requested_scopes = source.config.scopes.join(" ");
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
@@ -603,8 +705,12 @@ mod tests {
                     })
                 } else {
                     assert!(!request.contains("Basic "));
-                    requests.push(request);
-                    replies.next().unwrap()
+                    requests.push(request.clone());
+                    if automatic_sites && request.starts_with("GET /v2/org/example/nico/site?") {
+                        site_page()
+                    } else {
+                        replies.next().unwrap()
+                    }
                 };
                 let pagination = reply
                     .pagination
@@ -644,7 +750,10 @@ mod tests {
         assert_eq!(endpoints[0].port, None);
         assert_eq!(endpoints[0].credentials_profile.as_deref(), Some("bmc"));
         assert!(endpoints[0].labels.is_empty());
-        for (index, request) in server.await.unwrap().iter().enumerate() {
+        let requests = server.await.unwrap();
+        assert!(requests[0].starts_with("GET /v2/org/example/nico/site?"));
+        assert!(requests[0].contains("orderBy=NAME_ASC"));
+        for (index, request) in requests[1..].iter().enumerate() {
             assert!(request.starts_with("GET /v2/org/example/nico/machine?"));
             for value in [
                 "siteId=site-id",
@@ -682,8 +791,8 @@ mod tests {
             .unwrap();
         source.discover().await.unwrap();
         let requests = server.await.unwrap();
-        assert!(requests[1].contains("Bearer rotated-token"));
-        assert!(!requests[1].contains("fixture-token"));
+        assert!(requests[2].contains("Bearer rotated-token"));
+        assert!(!requests[2].contains("fixture-token"));
         tokio::fs::write(&token.0, " \n ").await.unwrap();
         assert!(
             source
@@ -705,7 +814,7 @@ mod tests {
             let (source, _files, server) =
                 fixture_with_oauth2(vec![page(1, 1, vec![machine(0)])], None, scopes).await;
             assert_eq!(source.discover().await.unwrap().len(), 1);
-            assert_eq!(server.await.unwrap().len(), 1);
+            assert_eq!(server.await.unwrap().len(), 2);
         }
     }
 
@@ -865,8 +974,8 @@ mod tests {
         let endpoints = source.discover().await.unwrap();
         assert_eq!(endpoints.len(), 1);
         assert!(endpoints[0].labels.is_empty());
-        assert!(endpoints[0].compute_zone.is_none());
-        assert!(endpoints[0].node_group.is_none());
+        assert_eq!(endpoints[0].compute_zone.as_deref(), Some("usa-az-phoenix"));
+        assert_eq!(endpoints[0].node_group.as_deref(), Some("test-cluster"));
         server.await.unwrap();
         let mut invalid = machine(1);
         invalid["metadata"] = serde_json::Value::Null;
@@ -888,12 +997,144 @@ mod tests {
             fixture(vec![page(1, 1, vec![]), page(1, 1, vec![machine(0)])]).await;
         assert_eq!(source.discover().await.unwrap().len(), 1);
         let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 4);
         assert!(
             requests
                 .iter()
                 .all(|request| request.contains("pageNumber=1"))
         );
+    }
+
+    #[tokio::test]
+    async fn paginates_sites_and_enriches_machines_from_each_site() {
+        let sites: Vec<_> = (0..101)
+            .map(|index| {
+                serde_json::json!({
+                    "id":format!("site-{index}"), "name":format!(" cluster-{index} "),
+                    "location":{"country":"USA", "state":"AZ", "city":"Phoenix"}
+                })
+            })
+            .collect();
+        let mut replies = vec![
+            page(1, 101, sites[..100].to_vec()),
+            page(2, 101, sites[100..].to_vec()),
+        ];
+        for index in 0..101 {
+            let mut row = machine(index);
+            row["siteId"] = format!("site-{index}").into();
+            replies.push(page(1, 1, vec![row]));
+        }
+        let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
+        let endpoints = source.discover().await.unwrap();
+        assert_eq!(endpoints.len(), 101);
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            assert_eq!(
+                endpoint.node_group.as_deref(),
+                Some(format!("cluster-{index}").as_str())
+            );
+            assert_eq!(endpoint.compute_zone.as_deref(), Some("usa-az-phoenix"));
+        }
+        let requests = server.await.unwrap();
+        assert!(requests[1].contains("/site?orderBy=NAME_ASC&pageNumber=2"));
+        for (index, request) in requests[2..].iter().enumerate() {
+            assert!(request.contains(&format!("siteId=site-{index}&")));
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_sites_are_allowed_but_later_site_failure_aborts_the_snapshot() {
+        let sites = page(
+            1,
+            3,
+            vec![
+                serde_json::json!({"id":"empty", "name":"empty-cluster"}),
+                serde_json::json!({"id":"site-id", "name":"first-cluster"}),
+                serde_json::json!({"id":"other", "name":"second-cluster"}),
+            ],
+        );
+        let failure = Reply {
+            status: 403,
+            pagination: None,
+            body: "sensitive-site-response".into(),
+            extra_header: String::new(),
+        };
+        let (source, _files, server) = fixture_with_sites(
+            vec![
+                sites,
+                page(1, 0, vec![]),
+                page(1, 1, vec![machine(0)]),
+                failure,
+            ],
+            None,
+            vec![],
+            false,
+        )
+        .await;
+        let error = source.discover().await.unwrap_err().to_string();
+        assert!(error.contains("HTTP 403"));
+        assert!(!error.contains("sensitive"));
+        assert_eq!(server.await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_empty_and_duplicate_site_listings() {
+        for rows in [
+            vec![],
+            vec![serde_json::json!({"id":"", "name":"cluster"})],
+            vec![serde_json::json!({"id":"site-id", "name":" "})],
+            vec![
+                serde_json::json!({"id":"site-id", "name":"one"}),
+                serde_json::json!({"id":"site-id", "name":"two"}),
+            ],
+        ] {
+            let mut replies = vec![page(1, rows.len(), rows.clone())];
+            if rows.len() == 2 {
+                replies.extend(replies.clone());
+            }
+            let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
+            assert!(source.discover().await.is_err());
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_reloads_sites_before_rebuilding_all_machine_targets() {
+        let (source, _files, server) = fixture_with_sites(vec![
+            site_page(), page(1, 1, vec![]),
+            page(1, 1, vec![serde_json::json!({"id":"site-id", "name":"renamed-cluster", "location":null})]),
+            page(1, 1, vec![machine(0)]),
+        ], None, vec![], false).await;
+        let endpoints = source.discover().await.unwrap();
+        assert_eq!(endpoints[0].node_group.as_deref(), Some("renamed-cluster"));
+        assert!(endpoints[0].compute_zone.is_none());
+        assert_eq!(server.await.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn normalizes_location_and_handles_missing_components_without_inventing_a_zone() {
+        for (location, expected) in [
+            (
+                serde_json::json!({"country":" USA ", "state":"AZ", "city":"Phoenix"}),
+                Some("usa-az-phoenix"),
+            ),
+            (
+                serde_json::json!({"country":"USA", "city":"San  José / West"}),
+                Some("usa-san-josé-west"),
+            ),
+            (
+                serde_json::json!({"country":null, "state":"AZ"}),
+                Some("az"),
+            ),
+            (serde_json::json!({"city":" --- "}), None),
+            (serde_json::json!({}), None),
+            (serde_json::Value::Null, None),
+        ] {
+            let site: Site = serde_json::from_value(
+                serde_json::json!({"id":"site", "name":"cluster", "location":location}),
+            )
+            .unwrap();
+            assert_eq!(site.compute_zone().as_deref(), expected);
+        }
     }
 
     #[tokio::test]

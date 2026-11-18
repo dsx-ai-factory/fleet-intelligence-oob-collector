@@ -1712,7 +1712,6 @@ mod tests {
             type = "nico"
             api_url = "https://nico.example.com/v2"
             org = "example"
-            site_id = "site-id"
             token_url = "https://idp.example.com/token"
             client_id_file = "client_id"
             client_secret_file = "client_secret"
@@ -1770,7 +1769,7 @@ mod tests {
                 .len(),
             1
         );
-        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\nsite_id='site-id'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
+        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
         let mixed = format!("{nico}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'");
         assert!(
             parse_config_parts(&mixed, "config.toml")

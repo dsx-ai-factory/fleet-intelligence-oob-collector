@@ -39,9 +39,6 @@
             "org": {
               "type": "string"
             },
-            "siteId": {
-              "type": "string"
-            },
             "credentialsProfile": {
               "type": "string"
             },

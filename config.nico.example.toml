@@ -1,9 +1,9 @@
 # Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-compute_zone = "us-west-dc1"
-node_group = "training"
-labels = { site = "dc1" }
+# Node group comes from each site name; compute zone from country/state/city.
+# Optional fallback when a site has no usable location:
+# compute_zone = "unknown-location"
 
 [credentials]
 file = "credentials.json"
@@ -13,7 +13,6 @@ type = "nico"
 # REST prefix, not the NICo Core gRPC endpoint.
 api_url = "https://nico.example.com/v2"
 org = "example-org"
-site_id = "00000000-0000-0000-0000-000000000001"
 # Mount the OAuth2 client credentials managed by your platform.
 token_url = "https://idp.example.com/token"
 client_id_file = "nico-oauth2/client_id"
