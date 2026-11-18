@@ -24,14 +24,6 @@ Publishing images and charts requires a tag ref matching the version input and t
 
 After the workflow succeeds, verify that the public NGC images and chart for that version are downloadable and match the built image digests and chart checksum. Verify the host-package assets in the draft GitHub release reserved by the workflow, then publish that existing draft. The draft must contain four packages (DEB and RPM for `amd64` and `arm64`), `checksums.txt`, `checksums.txt.asc`, `fleet-intelligence.pub.asc`, and `verify-linux-package-signature.sh`. Publishing a stable GitHub release automatically runs **Publish Fern Docs**, which builds versioned documentation from release tags. Tag pushes and draft releases do not publish docs. Mark RC releases as prereleases; they do not publish docs.
 
-## Optional DSX publication
-
-Set the repository variable `DSX_NGC_ORG_TEAM` to the destination `<org>/<team>` and add `DSX_NGC_API_KEY` to the protected `ngc-publish` environment to copy future releases there. The separate DSX job copies the published collector and NICo images, the chart-selected gateway version, and the published Helm archive. Copies preserve all image architectures and digests; an existing destination image must match the source.
-
-Configure the copied image repositories and pull Secrets in downstream deployment values. Keep account-specific setup in deployment documentation. Configured destinations appear in Actions logs; use private CI when those destinations require restricted visibility. Dispatching an older tag executes its original workflow and does not backfill these copies.
-
-If DSX publication fails, rerun only the failed jobs in the original workflow run. The DSX job downloads the published chart again and leaves successful public publication jobs complete. Existing image digests and chart archive bytes must match before a retry can succeed; conflicting versions are never replaced.
-
 ## Host-package signing and retries
 
 `scripts/package-release.cjs` handles GitHub draft reservation and asset uploads. `scripts/package-signing.sh release <dist-directory> <version>` signs the packages and checksum manifest, verifies the returned signatures, and assembles the release files. Its `packages` and `manifest` commands support signing those artifacts individually. `scripts/verify-package-release.sh` checks a complete release; `scripts/verify-linux-package-signature.sh` is also shipped as the standalone package verifier.

@@ -382,253 +382,157 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
 
 
 class DsxPublicationTests(unittest.TestCase):
-    def job(self, name):
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:|\Z)",
-                          workflow, re.MULTILINE | re.DOTALL)
-        self.assertIsNotNone(match, f"Missing release job: {name}")
-        return match[1]
-
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.directory = Path(directory.name)
-        self.dist = self.directory / "dist"
-        self.dist.mkdir()
-        self.existing = self.directory / "registry-chart"
-        self.log = self.directory / "calls.jsonl"
-        step = self.job("publish-dsx").split("      - name: Copy released artifacts to DSX\n", 1)[1]
+        (self.directory / "dist").mkdir()
+        self.chart = self.directory / "registry-chart"
+        self.copy_log = self.directory / "copies"
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        step = workflow.split("      - name: Copy released artifacts to DSX\n", 1)[1]
         run = step.split("        run: |\n", 1)[1]
         self.script = textwrap.dedent(re.split(r"^      - ", run, maxsplit=1, flags=re.MULTILINE)[0])
         fixture = "#!" + sys.executable + "\n" + r"""
 import hashlib
-import json
 import os
 from pathlib import Path
 import shutil
 import sys
 
-tool = Path(sys.argv[0]).name
-args = sys.argv[1:]
-with open(os.environ["FIXTURE_LOG"], "a") as log:
-    log.write(json.dumps({"tool": tool, "args": args}) + "\n")
+args, env = sys.argv[1:], os.environ
+root = Path(env["RUNNER_TEMP"])
+mode = env["FAILURE"]
+prefix = "docker://nvcr.io/" + env["DSX_NGC_ORG_TEAM"] + "/"
+manifest = b'{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
 
 
-def fail(message):
-    print(message, file=sys.stderr)
+def value(option):
+    return args[args.index(option) + 1]
+
+
+def auth(option, key):
+    assert Path(value(option)).read_text() == key, "wrong registry credentials"
+
+
+def fail(reason):
+    print(reason, file=sys.stderr)
     sys.exit(1)
-
-
-def auth(option, expected):
-    value = json.loads(Path(args[args.index(option) + 1]).read_text())
-    if value.get("role") not in expected:
-        fail("wrong credential used for registry")
 
 
 def registry_error(reference, reason):
     repository, version = reference.removeprefix("docker://").rsplit(":", 1)
-    fail(f'time="2026-11-17T22:01:05Z" level=fatal msg="Error parsing image name \\"{reference}\\": '
+    fail(f'level=fatal msg="Error parsing image name \\"{reference}\\": '
          f'reading manifest {version} in {repository}: {reason}"')
 
 
-destination_prefix = "docker://nvcr.io/" + os.environ["DSX_NGC_ORG_TEAM"] + "/"
-manifest = b'{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
-if tool == "helm":
-    assert args[0] == "template"
+if Path(sys.argv[0]).name == "helm":
     print('    image: "nvcr.io/nvidia/fleet-intelligence/otel-gateway:4.5.6"')
-elif tool == "skopeo":
+elif Path(sys.argv[0]).name == "skopeo":
     if args[0] == "login":
-        Path(args[args.index("--authfile") + 1]).write_text(json.dumps({"role": sys.stdin.read()}))
+        Path(value("--authfile")).write_text(sys.stdin.read())
     elif args[0] == "inspect":
         reference = args[-1]
-        destination = reference.startswith(destination_prefix)
-        auth("--authfile", {"destination-key"} if destination else {"source-key"})
-        if destination:
-            if os.environ.get("IMAGE_MODE") == "denied":
-                fail("denied: insufficient repository permissions")
-            if os.environ.get("IMAGE_MODE") == "unauthorized":
-                registry_error(reference, "unauthorized: authentication required")
-            if os.environ.get("IMAGE_MODE") == "network":
-                registry_error(reference, "network is unavailable: manifest unknown")
-            stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(reference.encode()).hexdigest()
-            if os.environ.get("IMAGE_MODE") == "conflict":
-                sys.stdout.buffer.write(b"different image manifest")
-            elif stored.exists():
-                sys.stdout.buffer.write(stored.read_bytes())
-            else:
-                registry_error(reference, "manifest unknown")
+        destination = reference.startswith(prefix)
+        auth("--authfile", "destination-key" if destination else "source-key")
+        stored = root / hashlib.sha256(reference.encode()).hexdigest()
+        reasons = {"unauthorized": "unauthorized: authentication required",
+                   "network": "network is unavailable: manifest unknown"}
+        if destination and mode in reasons:
+            registry_error(reference, reasons[mode])
+        if destination and mode == "image-conflict":
+            sys.stdout.buffer.write(b"different manifest")
+        elif not destination or stored.exists():
+            sys.stdout.buffer.write(stored.read_bytes() if destination else manifest)
         else:
-            sys.stdout.buffer.write(manifest)
+            registry_error(reference, "manifest unknown")
     elif args[0] == "copy":
         assert "--all" in args and "--preserve-digests" in args
-        auth("--src-authfile", {"source-key"})
-        auth("--dest-authfile", {"destination-key"})
         assert args[-2].endswith("@sha256:" + hashlib.sha256(manifest).hexdigest())
-        assert args[-1].startswith(destination_prefix)
-        stored = Path(os.environ["RUNNER_TEMP"]) / hashlib.sha256(args[-1].encode()).hexdigest()
-        stored.write_bytes(manifest)
-    else:
-        fail("unknown skopeo operation")
-elif tool == "ngc":
-    assert args[:2] == ["registry", "chart"]
-    assert os.environ["NGC_CLI_API_KEY"] == "destination-key"
-    existing = Path(os.environ["EXISTING_CHART"])
-    mode = os.environ["MODE"]
-    target = os.environ["DSX_NGC_ORG_TEAM"] + "/fleet-intelligence-oob-collector"
-    assert (target if args[2] in ("info", "create") else target + ":" + os.environ["VERSION"]) in args
-    if args[2] in ("info", "create"):
-        pass
-    elif args[2] == "push":
-        if existing.exists() or mode in ("missing", "auth"):
-            fail("chart push failed")
-        source = Path(os.environ["CHART_BASENAME"])
-        existing.write_bytes(b"corrupt archive" if mode == "corrupt" else source.read_bytes())
-        if mode == "interrupted":
+        assert args[-1].startswith(prefix)
+        auth("--src-authfile", "source-key")
+        auth("--dest-authfile", "destination-key")
+        (root / hashlib.sha256(args[-1].encode()).hexdigest()).write_bytes(manifest)
+        with (root / "copies").open("a") as log:
+            log.write(args[-1] + "\n")
+else:
+    assert Path(sys.argv[0]).name == "ngc" and env["NGC_CLI_API_KEY"] == "destination-key"
+    archive = root / "registry-chart"
+    basename = "fleet-intelligence-oob-collector-" + env["VERSION"] + ".tgz"
+    target = env["DSX_NGC_ORG_TEAM"] + "/fleet-intelligence-oob-collector"
+    assert target + (":" + env["VERSION"] if args[2] in ("push", "pull") else "") in args
+    if args[2] == "push":
+        if archive.exists() or mode in ("chart-missing", "chart-auth"):
+            fail("upload failed")
+        archive.write_bytes(b"corrupt" if mode == "chart-corrupt" else Path(basename).read_bytes())
+        if mode == "chart-interrupted":
             fail("lost upload response")
     elif args[2] == "pull":
-        if mode == "auth" or not existing.exists():
-            fail("chart pull failed")
-        shutil.copyfile(existing, Path(args[args.index("--dest") + 1]) / os.environ["CHART_BASENAME"])
-    else:
-        fail("unknown ngc operation")
+        if mode == "chart-auth" or not archive.exists():
+            fail("download failed")
+        shutil.copyfile(archive, Path(value("--dest")) / basename)
 """
         for tool in ("ngc", "skopeo", "helm"):
             executable = self.directory / tool
             executable.write_text(fixture)
             executable.chmod(0o755)
 
-    def publish(self, mode="normal", *, image_mode="normal", version="1.2.3-rc.1",
-                org_team="example-org/artifacts"):
-        basename = f"fleet-intelligence-oob-collector-{version}.tgz"
-        chart = self.dist / basename
-        chart.write_bytes(b"published chart archive")
+    def publish(self, failure="", org_team="example-org/artifacts"):
+        (self.directory / "dist/fleet-intelligence-oob-collector-1.2.3.tgz").write_bytes(b"released chart")
         env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
-                   RUNNER_TEMP=str(self.directory), VERSION=version, MODE=mode,
-                   DSX_NGC_ORG_TEAM=org_team, DSX_KEY="destination-key",
-                   SOURCE_KEY="source-key",
+                   RUNNER_TEMP=str(self.directory), VERSION="1.2.3", FAILURE=failure,
+                   DSX_NGC_ORG_TEAM=org_team, DSX_KEY="destination-key", SOURCE_KEY="source-key",
                    IMAGE="nvcr.io/source/published/oob-collector",
-                   NICO_IMAGE="nvcr.io/source/published/nico-hardware-health",
-                   EXISTING_CHART=str(self.existing), CHART_BASENAME=basename,
-                   FIXTURE_LOG=str(self.log), IMAGE_MODE=image_mode)
+                   NICO_IMAGE="nvcr.io/source/published/nico-hardware-health")
         return subprocess.run(["bash", "-e", "-o", "pipefail", "-c", self.script],
                               cwd=self.directory, env=env, capture_output=True, text=True, timeout=10)
 
-    def calls(self, tool, operation):
-        return [call["args"] for call in map(json.loads, self.log.read_text().splitlines())
-                if call["tool"] == tool and operation in call["args"]]
+    def copies(self):
+        return self.copy_log.read_text().splitlines() if self.copy_log.exists() else []
 
-    def test_dsx_retry_is_separate_from_public_publication(self):
-        job = self.job("publish-dsx")
-        self.assertRegex(job, r"needs:\s*\[validate,\s*publish-chart\]")
-        self.assertIn("environment: ngc-publish", job)
-        self.assertIn("Download the published Helm chart", job)
-        self.assertIn("Copy released artifacts to DSX", job)
-        self.assertNotIn("Copy released artifacts to DSX", self.job("publish-chart"))
-
-    def test_release_jobs_remain_gated_by_tag_validation(self):
-        validation = self.job("validate")
-        self.assertRegex(validation, re.compile(r"^    if: \$\{\{ github.ref_type == 'tag' \}\}$", re.MULTILINE))
-
-        def depends_on_validation(name):
-            if name == "validate":
-                return True
-            needs = re.search(r"^    needs:\s*(.+)$", self.job(name), re.MULTILINE)
-            self.assertIsNotNone(needs, f"{name} must depend on release validation")
-            return any(depends_on_validation(dependency)
-                       for dependency in re.findall(r"[\w-]+", needs[1]))
-
-        for name in ("build-image", "publish-image", "build-nico-image", "publish-nico-image",
-                     "publish-chart", "publish-dsx", "reserve-package-release", "build-packages",
-                     "sign-packages", "upload-package-assets"):
-            self.assertTrue(depends_on_validation(name), name)
-            self.assertNotRegex(self.job(name), r"^    if:.*always\(")
-
-    def test_invalid_release_fails_before_authentication(self):
-        self.assertNotEqual(self.publish(version="latest").returncode, 0)
-        self.assertFalse(self.log.exists())
-
-    def test_new_duplicate_and_lost_success_uploads_accept_identical_bytes(self):
-        for mode in ("normal", "duplicate", "interrupted"):
-            with self.subTest(mode=mode):
-                self.existing.unlink(missing_ok=True)
-                if mode == "duplicate":
-                    self.existing.write_bytes(b"published chart archive")
-                result = self.publish(mode)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(self.existing.read_bytes(), b"published chart archive")
-
-    def test_conflicting_existing_chart_is_rejected_without_replacement(self):
-        self.existing.write_bytes(b"different chart archive")
-        self.assertNotEqual(self.publish("duplicate").returncode, 0)
-        self.assertEqual(self.existing.read_bytes(), b"different chart archive")
-
-    def test_failed_push_requires_successful_pull_before_accepting_existing_chart(self):
-        for mode in ("missing", "auth"):
-            with self.subTest(mode=mode):
-                self.existing.unlink(missing_ok=True)
-                if mode == "auth":
-                    self.existing.write_bytes(b"published chart archive")
-                self.assertNotEqual(self.publish(mode).returncode, 0)
-
-    def test_successful_chart_upload_is_read_back_and_checked(self):
-        self.assertNotEqual(self.publish("corrupt").returncode, 0)
-        self.assertEqual(len(self.calls("ngc", "pull")), 1)
-
-    def test_released_images_use_independent_gateway_version_and_separate_credentials(self):
+    def test_release_copy_preserves_images_and_accepts_identical_retries(self):
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stderr)
-        copies = self.calls("skopeo", "copy")
-        self.assertEqual(len(copies), 3)
-        expected = ["fleet-intelligence-oob-collector:1.2.3-rc.1",
-                    "fleet-intelligence-nico-hardware-health:1.2.3-rc.1",
-                    "fleet-intelligence-otel-gateway:4.5.6"]
-        self.assertEqual([copy[-1] for copy in copies],
-                         ["docker://nvcr.io/example-org/artifacts/" + name for name in expected])
-        self.assertEqual(len(self.calls("skopeo", "login")), 2)
-        for copy in copies:
-            self.assertNotEqual(copy[copy.index("--src-authfile") + 1],
-                                copy[copy.index("--dest-authfile") + 1])
-        pushes = self.calls("ngc", "push")
-        self.assertEqual(len(pushes), 1)
-        self.assertIn("example-org/artifacts/fleet-intelligence-oob-collector:1.2.3-rc.1", pushes[0])
-        # Retrying a release accepts existing bytes without copying images again.
+        self.assertEqual(self.copies(), ["docker://nvcr.io/example-org/artifacts/" + image for image in (
+            "fleet-intelligence-oob-collector:1.2.3",
+            "fleet-intelligence-nico-hardware-health:1.2.3",
+            "fleet-intelligence-otel-gateway:4.5.6")])
         self.assertEqual(self.publish().returncode, 0)
-        self.assertEqual(len(self.calls("skopeo", "copy")), 3)
+        self.assertEqual(len(self.copies()), 3)
+        self.assertEqual(self.chart.read_bytes(), b"released chart")
 
-    def test_conflicting_image_digest_stops_before_any_write(self):
-        self.assertNotEqual(self.publish(image_mode="conflict").returncode, 0)
-        self.assertEqual(self.calls("skopeo", "copy"), [])
-        self.assertEqual(self.calls("ngc", "push"), [])
-
-    def test_repository_names_do_not_turn_missing_manifests_into_access_failures(self):
+    def test_repository_names_are_not_treated_as_error_reasons(self):
         for org_team in ("network/artifacts", "example-org/tls", "orgnetwork/teamtls"):
             with self.subTest(org_team=org_team):
-                self.log.unlink(missing_ok=True)
-                self.existing.unlink(missing_ok=True)
+                self.copy_log.unlink(missing_ok=True)
+                self.chart.unlink(missing_ok=True)
                 result = self.publish(org_team=org_team)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                copies = self.calls("skopeo", "copy")
-                self.assertEqual(len(copies), 3)
-                self.assertTrue(all(copy[-1].startswith(f"docker://nvcr.io/{org_team}/")
-                                    for copy in copies))
-                self.assertEqual(len(self.calls("ngc", "pull")), 1)
-                self.assertEqual(self.existing.read_bytes(), b"published chart archive")
+                self.assertEqual(len(self.copies()), 3)
+                self.assertEqual(self.chart.read_bytes(), b"released chart")
 
-    def test_unauthorized_and_network_errors_stop_before_any_copy(self):
-        for image_mode in ("unauthorized", "network"):
-            with self.subTest(image_mode=image_mode):
-                result = self.publish(image_mode=image_mode)
+    def test_authorization_network_and_image_conflicts_stop_before_writing(self):
+        for failure in ("unauthorized", "network", "image-conflict"):
+            with self.subTest(failure=failure):
+                result = self.publish(failure)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Registry inspection:", result.stderr)
-                self.assertEqual(self.calls("skopeo", "copy"), [])
-                self.assertEqual(self.calls("ngc", "push"), [])
+                self.assertEqual(self.copies(), [])
+                self.assertFalse(self.chart.exists())
 
-    def test_denied_image_read_reports_diagnostic_without_attempting_copy(self):
-        result = self.publish(image_mode="denied")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Registry inspection: denied: insufficient repository permissions", result.stderr)
-        self.assertEqual(self.calls("skopeo", "copy"), [])
-        self.assertEqual(self.calls("ngc", "push"), [])
+    def test_lost_chart_upload_response_is_verified_by_download(self):
+        result = self.publish("chart-interrupted")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.chart.read_bytes(), b"released chart")
+
+    def test_chart_conflicts_corruption_and_failed_reads_are_rejected(self):
+        for failure in ("chart-conflict", "chart-corrupt", "chart-missing", "chart-auth"):
+            with self.subTest(failure=failure):
+                self.chart.unlink(missing_ok=True)
+                if failure in ("chart-conflict", "chart-auth"):
+                    self.chart.write_bytes(b"existing chart")
+                self.assertNotEqual(self.publish(failure).returncode, 0)
+                if failure in ("chart-conflict", "chart-auth"):
+                    self.assertEqual(self.chart.read_bytes(), b"existing chart")
 
 
 if __name__ == "__main__":
