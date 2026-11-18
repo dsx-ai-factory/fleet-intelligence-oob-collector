@@ -56,7 +56,7 @@ Keep your normal FI backend, enrollment Secret, and BMC credentials Secret setti
 | `endpointSource.nico.credentialsProfile` | Optional existing BMC credential profile; per-MAC overrides also apply |
 | `endpointSource.nico.timeoutSeconds` | Whole discovery deadline, including the OAuth2 exchange, all pages, and one retry for inconsistent pagination; default `30`, allowed `1`–`3600` |
 
-The chart writes these settings into `[endpoint_source]` in the collector TOML, with `client_id_file` and `client_secret_file` pointing to the mounted files. For an explicit TOML example, see [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml).
+The chart writes these settings into `[endpoint_source]` in the collector TOML, with `client_id_file` and `client_secret_file` pointing to the mounted files. For TOML configuration, enable the commented `[endpoint_source]` section in [config.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.example.toml) and remove its `[[targets]]` blocks. Shared settings stay in the same file.
 
 ## Verify discovery
 
