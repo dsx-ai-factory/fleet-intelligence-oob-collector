@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0
 
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
-{{- if eq .Values.endpointSource.type "nico" }}
+{{- if eq (default dict .Values.endpointSource).type "nico" }}
 [endpoint_source]
 type = "nico"
 api_url = {{ required "endpointSource.nico.apiUrl is required" .Values.endpointSource.nico.apiUrl | toJson }}

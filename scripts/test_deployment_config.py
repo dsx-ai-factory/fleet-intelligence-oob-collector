@@ -110,6 +110,21 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
 
 
 class NicoHelmTests(unittest.TestCase):
+    def test_legacy_static_values_allow_missing_endpoint_source_settings(self):
+        # --reuse-values can omit defaults introduced after the original install.
+        # Helm removes null keys during coalescing, reproducing those value shapes.
+        expected = (CHART / "ci/expected-configmap.yaml").read_text()
+        for missing in ["endpointSource", "endpointSource.type", "endpointSource.nico"]:
+            with self.subTest(missing=missing):
+                result = subprocess.run([
+                    "helm", "template", "test", str(CHART),
+                    "--values", str(CHART / "ci/test-values.yaml"),
+                    "--set-json", f"{missing}=null",
+                    "--show-only", "templates/configmap.yaml",
+                ], capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+
     def test_bundle_defaults_without_collection_overrides(self):
         result = render({}, use_ci_values=False)
         self.assertEqual(result.returncode, 0, result.stderr)

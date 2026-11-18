@@ -272,14 +272,6 @@ impl NicoRestEndpointSource {
                         ("siteId", site.id.clone()),
                         ("includeMetadata", "true".into()),
                         ("orderBy", "ID_ASC".into()),
-                        ("isMissingOnSite", "false".into()),
-                        ("status", "Ready".into()),
-                        ("status", "InUse".into()),
-                        ("status", "Initializing".into()),
-                        ("status", "Error".into()),
-                        ("status", "Maintenance".into()),
-                        ("status", "Reset".into()),
-                        ("status", "Unknown".into()),
                     ],
                 )
                 .await?;
@@ -782,13 +774,12 @@ mod tests {
                 "includeMetadata=true",
                 "pageSize=100",
                 "orderBy=ID_ASC",
-                "isMissingOnSite=false",
-                "status=Ready",
-                "status=InUse",
             ] {
                 assert!(request.contains(value));
             }
             assert!(request.contains(&format!("pageNumber={}", index + 1)));
+            assert!(!request.contains("isMissingOnSite="));
+            assert!(!request.contains("status="));
             assert!(
                 request
                     .to_lowercase()
@@ -993,8 +984,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skips_unready_machines_and_ignores_machine_labels() {
+    async fn skips_invalid_and_decommissioned_machines_and_ignores_machine_labels() {
         let mut rows = vec![machine(0)];
+        rows[0]["status"] = "FutureLifecycleState".into();
+        rows[0]["isMissingOnSite"] = true.into();
         rows[0]["labels"] = serde_json::json!({
             "fleet-role": "NSV Device",
             "rack": "rack-12",

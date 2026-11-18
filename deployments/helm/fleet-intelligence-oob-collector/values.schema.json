@@ -17,10 +17,6 @@
     "endpointSource": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "type",
-        "nico"
-      ],
       "properties": {
         "type": {
           "type": "string",
