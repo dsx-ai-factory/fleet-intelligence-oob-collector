@@ -1,12 +1,12 @@
 # Discover targets through NICo REST
 
-Use NICo REST to discover the BMC addresses and MAC addresses of compute hosts in one site. The collector then queries those BMCs directly for inventory and attestation using your shared BMC credentials. NICo inventory and attestation records are not imported.
+Use NICo REST to discover the BMC addresses and MAC addresses of compute hosts in one site. In NICo integration mode, the collector collects inventory and attestation through the NICo BMC proxy using its own client certificate. The proxy supplies BMC credentials and enforces authorization and concurrency controls. NICo inventory and attestation records are not imported.
 
 ## Prepare access
 
 You need an HTTPS NICo REST endpoint trusted by the collector's system CA store, an organization and site ID, and a bearer access token with the `carbide` scope and provider/site permissions to read machine BMC metadata. Confirm the exact permissions with your NICo administrator. The token file contains an access token, not an SSA client secret; arrange token refresh outside the collector.
 
-The collector also needs network access to the discovered BMCs and their credentials in the [shared credentials file](credentials.md). NICo REST authentication and BMC authentication use separate credentials.
+Ask your NICo administrator to issue a client certificate for the FI service identity and authorize `GET /redfish/v1/**` and `POST /redfish/v1/ComponentIntegrity/*/Actions/ComponentIntegrity.SPDMGetSignedMeasurements`. Mount the client certificate, private key, and proxy CA bundle as files readable only by the collector. The collector needs network access to NICo REST and the proxy; it requires no BMC password. NICo REST uses a bearer token, while the proxy uses mutual TLS.
 
 ## Select the source
 
@@ -17,8 +17,11 @@ compute_zone = "us-west-dc1"
 node_group = "training"
 labels = { site = "dc1" }
 
-[credentials]
-file = "credentials.json"
+[nico_bmc_proxy]
+url = "https://nico-bmc-proxy.forge-system.svc.cluster.local:1079"
+ca_file = "proxy-identity/ca.crt"
+client_cert_file = "proxy-identity/tls.crt"
+client_key_file = "proxy-identity/tls.key"
 
 [endpoint_source]
 type = "nico"
@@ -27,7 +30,6 @@ org = "example-org"
 site_id = "00000000-0000-0000-0000-000000000001"
 token_file = "nico-access-token"
 api_name = "nico"
-credentials_profile = "bmc"
 timeout_seconds = 30
 max_stale_seconds = 108000
 ```
@@ -40,13 +42,17 @@ max_stale_seconds = 108000
 | `site_id` | Site to discover |
 | `token_file` | File containing only the bearer access token |
 | `api_name` | `nico` by default; use `carbide` for deployments with that REST route |
-| `credentials_profile` | Optional shared BMC credential profile; per-MAC overrides also apply |
+| `credentials_profile` | Omit in proxy mode; optional shared BMC credential profile for direct connections |
 | `timeout_seconds` | Whole discovery deadline, including both attempts and all pages; default `30`, allowed `1`–`3600` |
 | `max_stale_seconds` | Maximum age of a last-good discovery used by `run` during NICo outages; default `108000` (30 hours), allowed `1`–`172800` (48 hours) |
 
-Relative token and credential paths resolve beside the TOML file. Protect both files from other users and replace the token file atomically when rotating it. The collector rereads the token on each discovery. See [credential rotation and ownership](credentials.md#rotation-and-ownership) for BMC credential handling.
+Relative token and TLS identity paths resolve beside the TOML file. Replace the token file atomically when rotating it; the collector rereads it on each discovery. Mount TLS identity directories without `subPath` so Kubernetes Secret updates reach the collector. Each target collection attempt loads the current certificate and key. Invalid or unreadable identity files stop that attempt. Proxy CA and hostname verification remain enabled even with `--insecure-tls`.
 
-NICo machine labels are merged with your shared labels using the same validation as static targets. Machine labels named `compute_zone` and `node_group` provide per-machine placement overrides; other labels remain user labels. Global zone/group values are defaults. The source supplies the machine hostname when available. NICo rack slot/tray placement is not mapped to Fleet placement automatically. It lists compute hosts; switches and power shelves require other sources. NICo REST does not expose a BMC port in this response, so discovered targets use the default Redfish HTTPS port, `443`.
+Proxy mode routes inventory, attestation actions, task polling, and evidence reads through the configured HTTPS proxy. The discovered BMC IP remains the target identity and is sent in the `Forwarded` header. The configured BMC MAC remains the identity used for inventory and backend nonce requests. Direct BMC latency probes are disabled. Omit `[credentials]` and `credentials_profile` in this mode; proxy targets use HTTPS port 443.
+
+For installations that explicitly use direct BMC access, replace `[nico_bmc_proxy]` with `[credentials]` and set `file = "credentials.json"`; see the [shared credentials file](credentials.md).
+
+Configure placement with the shared `compute_zone` and `node_group` settings and add collection labels with the shared `labels` setting. NICo machine labels are ignored, including labels named `compute_zone` and `node_group`. The source supplies the machine hostname when available. NICo rack slot/tray placement is not mapped to Fleet placement automatically. It lists compute hosts; switches and power shelves require other sources. NICo REST does not expose a BMC port in this response, so discovered targets use the default Redfish HTTPS port, `443`.
 
 ## Verify discovery and collect
 
@@ -58,7 +64,7 @@ bmc-collector discover --config /private/path/config.toml
 
 From a source checkout, run `cargo run --locked --bin bmc-collector -- discover --config /private/path/config.toml`.
 
-The JSON output contains the machine reference, IP, MAC, name, kind, labels, placement overrides, and credential profile reference, before shared collection normalization. The command always checks live discovery and does not use cached endpoints. Treat the output as infrastructure information.
+The JSON output contains the machine reference, IP, MAC, name, kind, and credential profile reference, before shared collection normalization. Source labels are empty and source placement fields are null; your shared settings apply during collection. The command always checks live discovery and does not use cached endpoints. Treat the output as infrastructure information.
 
 To collect inventory with the same configuration:
 
@@ -70,35 +76,28 @@ The `run` command also accepts this configuration; see [running the collector](.
 
 ## Deployment support
 
-### Linux packages: keep collector and health configs separate
+### Kubernetes: collector only
 
-**Keep `/etc/fleetint-oob/config.toml` static when the bundled NICo health service is enabled.** Setting `type = "nico"` in that shared file prevents the health configuration from being rendered. The renderer rejects that configuration before writing output or starting NICo.
+Enable `nicoIntegration` to deploy the FI collector against the existing site NICo services. This mode omits the bundled NICo hardware-health and OTLP gateway workloads. It leaves the site's NICo hardware-health configuration unchanged. Configure telemetry forwarding from existing site services separately.
 
-Put the discovery configuration above in a separate, protected file and point only the collector at it:
+Create two Secrets in the collector namespace: one containing a refreshed NICo REST `access-token`, and one containing `ca.crt`, `tls.crt`, and `tls.key` for the proxy client identity. Your platform can manage the identity Secret through cert-manager. Provision and refresh the REST access token outside the collector; the chart does not exchange SSA client secrets.
 
-```bash
-sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/nico-discovery.toml
-sudoedit /etc/fleetint-oob/nico-discovery.toml /etc/fleetint-oob/service.conf
+```yaml
+nicoIntegration:
+  enabled: true
+  apiUrl: https://nico.example.com/v2
+  org: example-org
+  siteId: 00000000-0000-0000-0000-000000000001
+  tokenSecretName: fi-nico-rest-token
+  proxyUrl: https://nico-bmc-proxy.forge-system.svc.cluster.local:1079
+  identitySecretName: fi-proxy-identity
 ```
 
-In `service.conf`, set:
+Omit `inventory.targets` and BMC credential configuration. Keep your normal FI backend URL and enrollment Secret settings. The chart mounts the REST token and proxy identity read-only and verifies proxy TLS. See [configuration](configuration.md) for the remaining deployment settings.
 
-```ini
-FLEETINT_COLLECTOR_CONFIG=/etc/fleetint-oob/nico-discovery.toml
-```
+### Linux packages
 
-Keep static `[[targets]]` in `/etc/fleetint-oob/config.toml` for NICo hardware-health metrics and logs. Both configurations can reference the same BMC credential file. The health target list is maintained separately; API target changes do not update it. Ensure `fleetint-oob` can read the discovery config, token file, credentials, and their parent directories. Verify before restarting:
-
-```bash
-sudo -u fleetint-oob /usr/bin/bmc-collector discover --config /etc/fleetint-oob/nico-discovery.toml
-sudo systemctl restart fleetint-oob-collector.service
-```
-
-### Kubernetes
-
-The Helm chart accepts static `inventory.targets` only; it does not configure the NICo source or mount a REST token. Kubernetes NICo discovery support requires follow-up chart work. Retain the existing static chart configuration until that support is available.
-
-The collector uses direct Redfish connections to BMCs. BMC proxy transport and SSA token acquisition are separate integrations.
+Place the discovery and proxy configuration in a protected file, set `FLEETINT_COLLECTOR_CONFIG` to its path in `/etc/fleetint-oob/service.conf`, and ensure `fleetint-oob` can read the token and identity files. Enable only `fleetint-oob-collector.service` when using the site's existing NICo health deployment. Keep the bundled NICo health and gateway services disabled. The `render-nico-config` command requires a static direct-BMC configuration and rejects proxy mode.
 
 ## Troubleshoot discovery
 
@@ -118,7 +117,7 @@ Every page must be fetched successfully. Discovery requests 100 machines per pag
 
 ## Outages and last-good discovery
 
-The long-running `run` command retains the last successfully resolved, credential-free endpoint listing in memory. If the same NICo source becomes unavailable because of a token-file read failure, HTTP `401`/`403`/`429`, server error, connection failure, or timeout, it can reuse that list until `max_stale_seconds` has elapsed since the successful discovery. Warnings report the cache age and target count. Reusing a list does not extend its lifetime, and BMC credentials are reloaded from their file for each cycle.
+The long-running `run` command retains the last successfully resolved, credential-free endpoint listing in memory. If the same NICo source becomes unavailable because of a token-file read failure, HTTP `401`/`403`/`429`, server error, connection failure, or timeout, it can reuse that list until `max_stale_seconds` has elapsed since the successful discovery. Warnings report the cache age and target count. Reusing a list does not extend its lifetime, and collection authentication files are reloaded for new attempts.
 
 The default 30-hour bound allows a failed discovery at the default daily collection interval. Choose a shorter limit when address reuse or rapid machine turnover makes stale membership unacceptable. Missing-machine filters apply to live discovery; a cached list cannot detect changes made during an outage and cannot guarantee an IP still belongs to the same BMC. The age check is made before a collection cycle starts.
 
@@ -126,6 +125,6 @@ No cache is written to disk. After a restart, or after the bound expires, collec
 
 ## Current limits and validation
 
-All host machines use the existing `compute` target kind; this is not an SKU role classification for storage/cache hosts. One optional credential profile is the site default, and shared per-MAC overrides handle exceptions. SKU/vendor-based profile selection and physical rack-slot mapping require follow-up work.
+All host machines use the existing `compute` target kind; this is not an SKU role classification for storage/cache hosts. Direct connections support a site credential profile and per-MAC overrides. Proxy mode delegates BMC credentials to NICo. Physical rack-slot mapping requires follow-up work.
 
-Request shape and failures are covered by local HTTP fixtures against the checked-in REST contract. Live NICo permissions, deployed `nico` versus `carbide` routing, and pagination compatibility still require an environment-specific POC before production use.
+Request shape and failures are covered by local HTTP fixtures against the checked-in REST contract. A local mTLS proxy fixture covers inventory, nonce-bearing attestation POSTs, task polling, evidence reads, and invalid identity rotation. Verify your deployed REST route and proxy authorization with your administrator before production use.

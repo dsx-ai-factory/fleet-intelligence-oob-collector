@@ -55,7 +55,7 @@ Replace the example values before starting services. Both the collector and NICo
 
 The shared rules for [target identity](configuration.md#target-identity), [placement](configuration.md#placement), and [label limits](configuration.md#labels) apply to TOML too. TOML uses snake_case field names. Keep passwords in the JSON credentials file.
 
-For NICo API discovery, use a [separate collector configuration](nico-discovery.md#linux-packages-keep-collector-and-health-configs-separate) so the bundled health service keeps its static targets.
+For an existing NICo site, use the [collector-only discovery and proxy configuration](nico-discovery.md#linux-packages) and keep the bundled health and gateway services disabled.
 
 ## BMC credentials
 

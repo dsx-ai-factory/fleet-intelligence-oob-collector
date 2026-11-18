@@ -141,6 +141,7 @@ dependencies = [
  "http",
  "nv-redfish",
  "nv-redfish-dispatcher",
+ "reqwest",
  "serde",
  "tokio",
  "tracing",

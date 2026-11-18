@@ -46,6 +46,50 @@ def render(settings, template="configmap.yaml", workload=None, *, use_ci_values=
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
+class NicoIntegrationHelmTests(unittest.TestCase):
+    def render(self, **overrides):
+        settings = {
+            "nicoIntegration.enabled": True,
+            "nicoIntegration.apiUrl": "https://nico.example.com/v2",
+            "nicoIntegration.org": "example-org",
+            "nicoIntegration.siteId": "00000000-0000-0000-0000-000000000001",
+            "nicoIntegration.tokenSecretName": "nico-rest-token",
+            "nicoIntegration.proxyUrl": "https://proxy.example.com:1079",
+            "nicoIntegration.identitySecretName": "fi-proxy-identity",
+        } | overrides
+        command = ["helm", "template", "test", str(CHART)]
+        for key, value in settings.items():
+            command.extend(["--set-json", f"{key}={json.dumps(value)}"])
+        return subprocess.run(command, capture_output=True, text=True)
+
+    def test_integration_deploys_only_collector_and_mounts_proxy_identity(self):
+        result = self.render()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("kind: Deployment"), 1)
+        for omitted in ("name: nico-hardware-health", "-otel-gateway", "bmc-credentials", "credentials.json", "--insecure-tls"):
+            self.assertNotIn(omitted, result.stdout)
+        self.assertIn("--disable-latency-probe", result.stdout)
+        self.assertIn('secretName: "fi-proxy-identity"', result.stdout)
+        self.assertIn('secretName: "nico-rest-token"', result.stdout)
+        self.assertNotIn("subPath:", result.stdout)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["type"], "nico")
+        self.assertEqual(config["nico_bmc_proxy"]["client_key_file"], "/run/secrets/nico-proxy/tls.key")
+        for omitted in ("credentials", "targets", "nico_health"):
+            self.assertNotIn(omitted, config)
+        self.assertRegex(result.stdout, r'name: FLEETINT_NICO_ENABLED\s+value: "false"')
+        self.assertRegex(result.stdout, r'name: FLEETINT_OTEL_GATEWAY_ENABLED\s+value: "false"')
+
+    def test_integration_requires_access_and_rejects_static_targets(self):
+        for key in ("apiUrl", "org", "siteId", "tokenSecretName", "proxyUrl", "identitySecretName"):
+            with self.subTest(key=key):
+                self.assertNotEqual(self.render(**{f"nicoIntegration.{key}": ""}).returncode, 0)
+        result = self.render(**{"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("omit inventory.targets", result.stderr)
+
+
 class NicoHelmTests(unittest.TestCase):
     def test_bundle_defaults_without_collection_overrides(self):
         result = render({}, use_ci_values=False)

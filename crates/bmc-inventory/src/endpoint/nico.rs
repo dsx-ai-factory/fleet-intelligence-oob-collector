@@ -331,8 +331,6 @@ struct Machine {
     metadata: Option<Metadata>,
     #[serde(default)]
     status: Option<String>,
-    #[serde(default)]
-    labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -367,9 +365,6 @@ impl Machine {
             .mac
             .and_then(|mac| mac.parse::<MacAddress>().ok())
             .ok_or("NICo machine has no valid BMC MAC")?;
-        let mut labels = self.labels.unwrap_or_default();
-        let compute_zone = labels.remove("compute_zone");
-        let node_group = labels.remove("node_group");
         Ok(Endpoint {
             source_reference: Some(super::safe_source_reference(&self.id)),
             kind: TargetKind::Compute,
@@ -378,9 +373,9 @@ impl Machine {
             port: None,
             mac,
             credentials_profile,
-            compute_zone,
-            node_group,
-            labels,
+            compute_zone: None,
+            node_group: None,
+            labels: BTreeMap::new(),
         })
     }
 }
@@ -653,10 +648,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skips_unready_machines_and_maps_user_labels_without_losing_healthy_hosts() {
+    async fn skips_unready_machines_and_ignores_machine_labels() {
         let mut rows = vec![machine(0)];
-        rows[0]["labels"] =
-            serde_json::json!({"rack":"rack-12", "compute_zone":"zone-a", "node_group":"group-a"});
+        rows[0]["labels"] = serde_json::json!({
+            "fleet-role": "NSV Device",
+            "rack": "rack-12",
+            "compute_zone": "zone-a",
+            "node_group": "group-a"
+        });
         for index in 1..=6 {
             let mut row = machine(index);
             match index {
@@ -672,10 +671,9 @@ mod tests {
         let (source, _token, server) = fixture(vec![page(1, rows.len(), rows)]).await;
         let endpoints = source.discover().await.unwrap();
         assert_eq!(endpoints.len(), 1);
-        assert_eq!(endpoints[0].labels["rack"], "rack-12");
-        assert_eq!(endpoints[0].compute_zone.as_deref(), Some("zone-a"));
-        assert_eq!(endpoints[0].node_group.as_deref(), Some("group-a"));
-        assert!(!endpoints[0].labels.contains_key("compute_zone"));
+        assert!(endpoints[0].labels.is_empty());
+        assert!(endpoints[0].compute_zone.is_none());
+        assert!(endpoints[0].node_group.is_none());
         server.await.unwrap();
         let mut invalid = machine(1);
         invalid["metadata"] = serde_json::Value::Null;

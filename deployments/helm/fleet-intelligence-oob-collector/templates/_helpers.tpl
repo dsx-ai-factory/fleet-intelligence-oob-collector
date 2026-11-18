@@ -92,6 +92,11 @@ affinity:
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.validate" -}}
+{{- if .Values.nicoIntegration.enabled -}}
+{{- if not .Values.bmcCollector.enabled -}}{{- fail "nicoIntegration requires bmcCollector.enabled" -}}{{- end -}}
+{{- if .Values.inventory.targets -}}{{- fail "nicoIntegration discovers targets through NICo; omit inventory.targets" -}}{{- end -}}
+{{- else -}}
+{{- if not .Values.inventory.targets -}}{{- fail "inventory.targets must contain at least one BMC" -}}{{- end -}}
 {{- if not (or .Values.bmcCollector.enabled .Values.nicoHardwareHealth.enabled) -}}
 {{- fail "enable at least one of bmcCollector or nicoHardwareHealth" -}}
 {{- end -}}
@@ -103,6 +108,7 @@ affinity:
 {{- end -}}
 {{- if and .Values.nicoHardwareHealth.enabled (not .Values.otelGateway.enabled) (not .Values.telemetry.endpoint) -}}
 {{- fail "telemetry.endpoint is required for OTLP export when otelGateway is disabled" -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.proxy.enabled (not (or .Values.proxy.httpProxy .Values.proxy.httpsProxy .Values.proxy.allProxy)) -}}
 {{- fail "proxy.enabled requires at least one proxy URL" -}}

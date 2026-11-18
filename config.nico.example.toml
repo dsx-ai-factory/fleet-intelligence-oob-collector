@@ -5,8 +5,11 @@ compute_zone = "us-west-dc1"
 node_group = "training"
 labels = { site = "dc1" }
 
-[credentials]
-file = "credentials.json"
+[nico_bmc_proxy]
+url = "https://nico-bmc-proxy.forge-system.svc.cluster.local:1079"
+ca_file = "proxy-identity/ca.crt"
+client_cert_file = "proxy-identity/tls.crt"
+client_key_file = "proxy-identity/tls.key"
 
 [endpoint_source]
 type = "nico"
@@ -18,8 +21,6 @@ site_id = "00000000-0000-0000-0000-000000000001"
 token_file = "nico-access-token"
 # Default: nico. Use carbide for deployments with the legacy REST route.
 api_name = "nico"
-# Shared BMC credentials, not NICo REST credentials.
-credentials_profile = "bmc"
 timeout_seconds = 30
 # Runtime-only, in-memory last-good listing age (30 hours; maximum 48 hours).
 max_stale_seconds = 108000

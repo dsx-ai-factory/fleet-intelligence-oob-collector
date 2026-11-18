@@ -50,6 +50,9 @@ pub fn render_nico_config(
     config: &CollectorConfig,
     options: &NicoConfigOptions,
 ) -> Result<String, Box<dyn Error>> {
+    if config.targets.iter().any(|target| target.proxy.is_some()) {
+        return Err("render-nico-config does not support NICo BMC proxy mode; use the existing site NICo health deployment".into());
+    }
     config.nico_health.validate()?;
     let otlp_endpoint = options.otlp_endpoint.trim();
     let metrics_endpoint = options.metrics_endpoint.trim();
@@ -111,7 +114,10 @@ pub fn render_nico_config(
         rate_limit: config.nico_health.native_rate_limit(),
         endpoint_sources: NicoEndpointSources {
             nico_api: NicoEnabled { enabled: false },
-            static_credentials_file: &config.credentials_file,
+            static_credentials_file: config
+                .credentials_file
+                .as_deref()
+                .ok_or("NICo health requires a direct-mode credentials file")?,
             static_bmc_endpoints,
         },
         collectors,
@@ -767,7 +773,10 @@ mod tests {
 
         assert_eq!(
             rendered["endpoint_sources"]["static_credentials_file"].as_str(),
-            collector.credentials_file.to_str()
+            collector
+                .credentials_file
+                .as_deref()
+                .and_then(|p| p.to_str())
         );
         assert_eq!(
             rendered["endpoint_sources"]["nico_api"]["enabled"].as_bool(),
