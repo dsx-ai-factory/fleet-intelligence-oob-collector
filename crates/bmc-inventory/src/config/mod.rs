@@ -22,6 +22,7 @@ mod targets;
 pub use crate::models::TargetKind;
 pub use nico::{NicoConfigOptions, render_nico_config};
 pub use services::{NicoHealthSettings, NicoLogMode, NicoReachabilityLogMode};
+pub(crate) use targets::normalize_config_value;
 pub use targets::{
     CollectorConfig, EndpointConfig, SourceConfig, StaticConfig, Target, load_config,
     load_config_async, load_endpoint_config, load_endpoint_config_async, load_source_config,

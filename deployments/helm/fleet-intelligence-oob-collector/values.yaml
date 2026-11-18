@@ -20,7 +20,7 @@ endpointSource:
   nico:
     apiUrl: "" # HTTPS REST prefix, including /v2.
     org: ""
-    credentialsProfile: "" # Existing shared BMC credential profile.
+    credentialsProfile: "" # Required for NICo: existing shared BMC credential profile.
     tokenUrl: "" # OAuth2 token endpoint.
     oauth2CredentialsSecretName: "" # Keys: client_id and client_secret.
     scopes: [] # Scopes required by the configured identity provider.

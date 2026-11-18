@@ -93,9 +93,17 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         config = tomllib.loads(textwrap.dedent(contents))
         self.assertEqual(config["endpoint_source"]["scopes"], ["inventory.read", "site.read"])
 
+    def test_null_oauth2_scopes_render_as_an_empty_toml_array(self):
+        result = self.render(**{"endpointSource.nico.scopes": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["scopes"], [])
+
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
-        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName")]
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "credentialsProfile")]
         cases.extend([
+            {"endpointSource.nico.credentialsProfile": "   "},
             {"endpointSource.nico.apiName": "carbide"},
             {"endpointSource.nico.siteId": "obsolete-site"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},

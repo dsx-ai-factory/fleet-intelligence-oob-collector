@@ -530,7 +530,7 @@ fn validate_nico_labels(
     Ok(())
 }
 
-fn normalize_config_value(
+pub(crate) fn normalize_config_value(
     context: &str,
     value: Option<String>,
 ) -> Result<Option<String>, Box<dyn Error>> {
@@ -1492,6 +1492,37 @@ mod tests {
             credentials_profile: Some("bmc".into()),
             labels: BTreeMap::from([("rack".into(), "rack-1".into())]),
         }
+    }
+
+    #[tokio::test]
+    async fn newly_discovered_macs_resolve_through_the_shared_profile_with_overrides_preserved() {
+        let credentials_path = write_credential(
+            "newly-discovered-profile",
+            r#"{
+            "profiles":{"bmc":{"username":"fixture-user","password":"fixture-password"}},
+            "overrides":{"00:11:22:33:44:55":{"username":"override-user"}}
+        }"#,
+        );
+        let _cleanup = TestFileCleanup(credentials_path.clone());
+        let contents = format!(
+            "[credentials]\nfile={:?}",
+            credentials_path.to_str().unwrap()
+        );
+        let config = parse_config_parts(&contents, "config.toml")
+            .unwrap()
+            .settings;
+        let existing = provider_endpoint();
+        let mut newly_discovered = existing.clone();
+        newly_discovered.mac = "00:11:22:33:44:56".parse().unwrap();
+        newly_discovered.ip = "192.0.2.2".parse().unwrap();
+        let resolved = config
+            .resolve_from(&ProviderSource(vec![existing, newly_discovered].into()))
+            .await
+            .unwrap();
+        assert_eq!(resolved.targets.len(), 2);
+        assert_eq!(resolved.targets[0].username, "override-user");
+        assert_eq!(resolved.targets[1].username, "fixture-user");
+        assert_eq!(resolved.targets[1].password, "fixture-password");
     }
 
     #[tokio::test]
