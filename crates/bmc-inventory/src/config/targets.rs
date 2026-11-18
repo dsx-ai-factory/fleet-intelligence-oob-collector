@@ -24,10 +24,7 @@ use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::{NicoHealthSettings, TargetKind};
-use bmc_dispatch::proxy::NicoBmcProxyConfig;
-
 use crate::endpoint::nico::{NicoRestConfig, NicoRestEndpointSource};
-
 use crate::endpoint::{Endpoint, EndpointSource, StaticEndpointSource};
 
 const MAX_NICO_LABELS: usize = 32;
@@ -77,7 +74,7 @@ const RESERVED_NICO_LABELS: &[&str] = &[
 #[derive(Clone, Debug)]
 pub struct CollectorConfig {
     pub targets: Vec<Target>,
-    pub credentials_file: Option<PathBuf>,
+    pub credentials_file: PathBuf,
     pub nico_health: NicoHealthSettings,
 }
 
@@ -85,89 +82,6 @@ pub struct CollectorConfig {
 pub struct SourceConfig {
     pub source: Box<dyn EndpointSource>,
     pub settings: EndpointConfig,
-}
-
-/// Runtime-scoped, credential-free discovery fallback. It is never persisted.
-#[derive(Default)]
-pub struct RuntimeConfigLoader {
-    last_good: Option<LastGoodDiscovery>,
-}
-
-struct LastGoodDiscovery {
-    source: NicoRestConfig,
-    endpoints: crate::endpoint::EndpointSnapshot,
-    discovered_at: std::time::Instant,
-}
-
-/// True only for discovery availability failures, not configuration or identity errors.
-pub fn is_discovery_unavailable(error: &(dyn Error + 'static)) -> bool {
-    error.is::<crate::endpoint::nico::DiscoveryUnavailable>()
-}
-
-impl RuntimeConfigLoader {
-    /// Reload settings and credentials, using a bounded last-good discovery only
-    /// when the same NICo scope is unavailable. Static configuration never caches.
-    pub async fn load(&mut self, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
-        let contents = tokio::fs::read_to_string(path).await?;
-        let raw = parse_raw_config(&contents, path)?;
-        if matches!(raw.endpoint_source, SourceSelection::Static) {
-            self.last_good = None;
-            return load_config_async(path).await;
-        }
-        let parsed = prepare_config(raw, path)?;
-        let SourceSelection::Nico(source_config) = &parsed.source else {
-            unreachable!()
-        };
-        let source_config = source_config.clone();
-        let selected = parsed.into_source()?;
-        let discovered = selected.source.discover().await;
-        self.resolve_discovery(&selected.settings, source_config, discovered)
-            .await
-    }
-
-    async fn resolve_discovery(
-        &mut self,
-        settings: &EndpointConfig,
-        source: NicoRestConfig,
-        discovered: Result<crate::endpoint::EndpointSnapshot, crate::endpoint::EndpointSourceError>,
-    ) -> Result<CollectorConfig, Box<dyn Error>> {
-        let (endpoints, fresh) = match discovered {
-            Ok(endpoints) => {
-                // An authoritative result supersedes old membership immediately,
-                // including empty results and results failing shared validation.
-                self.last_good = None;
-                (endpoints, true)
-            }
-            Err(error) if is_discovery_unavailable(error.as_ref()) => {
-                let cached = self.last_good.as_ref().filter(|cached| {
-                    cached.source == source
-                        && cached.discovered_at.elapsed().as_secs() < source.max_stale_seconds
-                });
-                let Some(cached) = cached else {
-                    self.last_good = None;
-                    return Err(error as Box<dyn Error>);
-                };
-                tracing::warn!(age_seconds = cached.discovered_at.elapsed().as_secs(), max_stale_seconds = source.max_stale_seconds, targets = cached.endpoints.len(), reason = %error, "NICo unavailable; using bounded last-good discovery");
-                (cached.endpoints.clone(), false)
-            }
-            Err(error) => {
-                self.last_good = None;
-                return Err(error as Box<dyn Error>);
-            }
-        };
-        require_endpoints(&endpoints)?;
-        // Never cache BMC passwords or fallback around credential/label errors.
-        let credentials = settings.load_credentials_async().await?;
-        let resolved = settings.resolve_endpoints(&endpoints, credentials.as_ref())?;
-        if fresh {
-            self.last_good = Some(LastGoodDiscovery {
-                source,
-                endpoints,
-                discovered_at: std::time::Instant::now(),
-            });
-        }
-        Ok(resolved)
-    }
 }
 
 /// Static endpoint definitions paired with provider-independent settings.
@@ -190,8 +104,7 @@ impl StaticConfig {
 pub struct EndpointConfig {
     // Absolute and rooted at the config directory. Private so a relative path
     // cannot be substituted and accidentally resolved from the working directory.
-    credentials_file: Option<PathBuf>,
-    proxy: Option<NicoBmcProxyConfig>,
+    credentials_file: PathBuf,
     pub nico_health: NicoHealthSettings,
     defaults: EndpointDefaults,
 }
@@ -204,20 +117,6 @@ struct EndpointDefaults {
 }
 
 impl EndpointConfig {
-    async fn load_credentials_async(&self) -> Result<Option<SharedCredentials>, Box<dyn Error>> {
-        match &self.credentials_file {
-            Some(path) => Ok(Some(SharedCredentials::load_async(path).await?)),
-            None => Ok(None),
-        }
-    }
-
-    fn load_credentials(&self) -> Result<Option<SharedCredentials>, Box<dyn Error>> {
-        self.credentials_file
-            .as_ref()
-            .map(|p| SharedCredentials::load(p, Path::new(".")))
-            .transpose()
-    }
-
     /// Discover from any provider and apply shared Fleet normalization and
     /// credentials. No static target definitions are needed.
     pub async fn resolve_from(
@@ -229,22 +128,17 @@ impl EndpointConfig {
             .await
             .map_err(|error| error as Box<dyn Error>)?;
         require_endpoints(&endpoints)?;
-        let credentials = self.load_credentials_async().await?;
-        self.resolve_endpoints(&endpoints, credentials.as_ref())
+        let credentials = SharedCredentials::load_async(&self.credentials_file).await?;
+        self.resolve_endpoints(&endpoints, &credentials)
     }
 
     fn resolve_endpoints(
         &self,
         endpoints: &[Endpoint],
-        credentials: Option<&SharedCredentials>,
+        credentials: &SharedCredentials,
     ) -> Result<CollectorConfig, Box<dyn Error>> {
         Ok(CollectorConfig {
-            targets: resolve_endpoints(
-                endpoints,
-                credentials,
-                &self.defaults,
-                self.proxy.as_ref(),
-            )?,
+            targets: resolve_endpoints(endpoints, credentials, &self.defaults)?,
             credentials_file: self.credentials_file.clone(),
             nico_health: self.nico_health.clone(),
         })
@@ -262,7 +156,6 @@ pub struct Target {
     pub mac: MacAddress,
     pub address: String,
     pub credentials_profile: Option<String>,
-    pub proxy: Option<NicoBmcProxyConfig>,
     pub username: String,
     pub password: String,
     pub labels: BTreeMap<String, String>,
@@ -296,9 +189,7 @@ struct Config {
     node_group: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
-    credentials: Option<CredentialsConfig>,
-    #[serde(default)]
-    nico_bmc_proxy: Option<NicoBmcProxyConfig>,
+    credentials: CredentialsConfig,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
     #[serde(default)]
@@ -399,25 +290,23 @@ pub async fn load_config_async(path: &str) -> Result<CollectorConfig, Box<dyn Er
     }
     require_static_targets(&raw, path)?;
     let parsed = prepare_config(raw, path)?;
-    let credentials = parsed.settings.load_credentials_async().await?;
+    let credentials = SharedCredentials::load_async(&parsed.settings.credentials_file).await?;
     let config = parsed.into_static()?;
     let endpoints = config
         .source
         .discover()
         .await
         .map_err(|error| error as Box<dyn Error>)?;
-    config
-        .settings
-        .resolve_endpoints(&endpoints, credentials.as_ref())
+    config.settings.resolve_endpoints(&endpoints, &credentials)
 }
 
 pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let parsed = parse_static_parts(contents, path)?;
-    let credentials = parsed.settings.load_credentials()?;
+    let credentials = SharedCredentials::load(&parsed.settings.credentials_file, Path::new("."))?;
     let config = parsed.into_static()?;
     config
         .settings
-        .resolve_endpoints(config.source.endpoints(), credentials.as_ref())
+        .resolve_endpoints(config.source.endpoints(), &credentials)
 }
 
 fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<dyn Error>> {
@@ -438,7 +327,7 @@ fn parse_static_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dy
 
 fn require_static_targets(config: &Config, path: &str) -> Result<(), Box<dyn Error>> {
     if !matches!(config.endpoint_source, SourceSelection::Static) {
-        return Err("render-nico-config requires a separate static targets config for NICo health; use FLEETINT_COLLECTOR_CONFIG for collector-only API discovery and bmc-collector discover to check it (supports static targets only)".into());
+        return Err("this configuration tool supports static targets only; use the collector or discover command for NICo REST".into());
     }
     if config.targets.is_empty() {
         return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
@@ -490,10 +379,7 @@ fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>
     toml::from_str(contents).map_err(|error: toml::de::Error| {
         // Invalid input may contain secrets; never echo TOML input.
         let offset = error.span().map(|span| span.start).unwrap_or_default();
-        format!(
-            "invalid TOML config {path} at byte {offset}; expected collector configuration tables"
-        )
-        .into()
+        format!("invalid TOML config {path} at byte {offset}; expected [credentials].file and optional [[targets]]").into()
     })
 }
 
@@ -516,23 +402,12 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
         source.token_file = std::path::absolute(config_dir.join(&source.token_file))?;
     }
     // Keep symlinks intact so atomic credential-file replacement still works.
-    if config.nico_bmc_proxy.is_some() && config.credentials.is_some() {
-        return Err("NICo BMC proxy mode must not configure BMC credentials".into());
-    }
-    let credentials_file = match config.credentials {
-        Some(credentials) => Some(std::path::absolute(config_dir.join(credentials.file))?),
-        None if config.nico_bmc_proxy.is_some() => None,
-        None => return Err("direct BMC access requires [credentials].file".into()),
-    };
-    if let Some(proxy) = &mut config.nico_bmc_proxy {
-        proxy.resolve_paths(config_dir)?;
-    }
+    let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
     Ok(ParsedConfig {
         targets: config.targets,
         source: config.endpoint_source,
         settings: EndpointConfig {
             credentials_file,
-            proxy: config.nico_bmc_proxy,
             nico_health: config.nico_health,
             defaults,
         },
@@ -550,38 +425,18 @@ fn require_endpoints(endpoints: &[Endpoint]) -> Result<(), Box<dyn Error>> {
 // only raw/user labels; normalized fields and derived labels exist on Target.
 fn resolve_endpoints(
     endpoints: &[Endpoint],
-    credentials: Option<&SharedCredentials>,
+    credentials: &SharedCredentials,
     defaults: &EndpointDefaults,
-    proxy: Option<&NicoBmcProxyConfig>,
 ) -> Result<Vec<Target>, Box<dyn Error>> {
     require_endpoints(endpoints)?;
     let mut macs = HashSet::new();
     let mut targets = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.iter().enumerate() {
-        let context = match &endpoint.source_reference {
-            Some(reference) => format!(
-                "targets[{index}] (source {})",
-                crate::endpoint::safe_source_reference(reference)
-            ),
-            None => format!("targets[{index}]"),
-        };
+        let context = format!("targets[{index}]");
         let identity = format!("{context} (BMC {})", endpoint.mac);
-        let (username, password) = match credentials {
-            Some(credentials) => {
-                let resolved = credentials
-                    .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
-                    .map_err(|error| format!("{identity}: {error}"))?;
-                (resolved.username, resolved.password)
-            }
-            None => {
-                if endpoint.credentials_profile.is_some()
-                    || endpoint.port.is_some_and(|port| port != 443)
-                {
-                    return Err(format!("{identity}: NICo proxy targets must not specify a credential profile or non-443 port").into());
-                }
-                (String::new(), String::new())
-            }
-        };
+        let resolved = credentials
+            .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
+            .map_err(|error| format!("{identity}: {error}"))?;
         let name = normalize_config_value(&format!("{context}.name"), endpoint.name.clone())?;
         let compute_zone = normalize_config_value(
             &format!("{context}.compute_zone"),
@@ -633,9 +488,8 @@ fn resolve_endpoints(
             mac: endpoint.mac,
             address: endpoint.address(),
             credentials_profile: endpoint.credentials_profile.clone(),
-            username,
-            password,
-            proxy: proxy.cloned(),
+            username: resolved.username,
+            password: resolved.password,
             labels,
         });
     }
@@ -703,7 +557,6 @@ impl RawTargetConfig {
             .parse::<MacAddress>()
             .map_err(|error| format!("{context}.mac is invalid: {error}"))?;
         Ok(Endpoint {
-            source_reference: None,
             kind: self.kind.unwrap_or_default(),
             name: self.name,
             compute_zone: self.compute_zone,
@@ -1478,6 +1331,7 @@ mod tests {
         for input in [
             "[credentials]\nfile = 'unused.json'\nusername_file = 'sensitive-value'\npassword_file = 'sensitive-value'",
             "[credentials]\nfile = 'unused.json'\n[[machines]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
+            "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'",
         ] {
             let error = parse_config(input, "test.toml").unwrap_err().to_string();
             assert!(error.contains("invalid TOML config"), "{error}");
@@ -1489,44 +1343,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("failed to read credentials.file")
-        );
-    }
-
-    #[test]
-    fn proxy_mode_resolves_identity_without_bmc_credentials() {
-        let input = r#"
-[nico_bmc_proxy]
-url = "https://proxy.example.com:1079"
-ca_file = "ca.crt"
-client_cert_file = "tls.crt"
-client_key_file = "tls.key"
-[[targets]]
-ip = "192.0.2.1"
-mac = "00:11:22:33:44:55"
-"#;
-        let resolved = parse_config(input, "/tmp/config/collector.toml").unwrap();
-        assert!(resolved.credentials_file.is_none());
-        let target = &resolved.targets[0];
-        assert!(target.username.is_empty() && target.password.is_empty());
-        assert_eq!(
-            target.proxy.as_ref().unwrap().ca_file,
-            Path::new("/tmp/config/ca.crt")
-        );
-        for invalid in [
-            format!("[credentials]\nfile = 'must-not-be-read.json'\n{input}"),
-            format!("{input}credentials_profile = 'bmc'\n"),
-            format!("{input}port = 8443\n"),
-        ] {
-            assert!(parse_config(&invalid, "test.toml").is_err());
-        }
-        assert!(
-            parse_config(
-                "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
-                "test.toml"
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("requires [credentials].file")
         );
     }
 
@@ -1659,7 +1475,6 @@ mac = "00:11:22:33:44:55"
 
     fn provider_endpoint() -> Endpoint {
         Endpoint {
-            source_reference: None,
             kind: TargetKind::Compute,
             name: Some("original".into()),
             compute_zone: Some("original-zone".into()),
@@ -1841,14 +1656,7 @@ mac = "00:11:22:33:44:55"
         std::fs::write(&path, "[credentials]\nfile='credentials.json'\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'").unwrap();
         let path = path.to_str().unwrap();
         let parsed = load_static_config(path).unwrap();
-        assert!(
-            parsed
-                .settings
-                .credentials_file
-                .as_ref()
-                .unwrap()
-                .is_absolute()
-        );
+        assert!(parsed.settings.credentials_file.is_absolute());
         let provider = ProviderSource(parsed.source.discover().await.unwrap());
         for config in [
             load_config_async(path).await.unwrap(),
@@ -1856,10 +1664,7 @@ mac = "00:11:22:33:44:55"
         ] {
             assert_eq!(config.targets[0].username, "user");
             assert_eq!(config.targets[0].password, "secret");
-            assert_eq!(
-                config.credentials_file,
-                Some(directory.join("credentials.json"))
-            );
+            assert_eq!(config.credentials_file, directory.join("credentials.json"));
         }
     }
 
@@ -1993,112 +1798,6 @@ mac = "00:11:22:33:44:55"
                 .unwrap()
                 .to_string()
                 .contains("HTTPS")
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_fallback_is_bounded_scoped_and_credential_free() {
-        let directory =
-            std::env::temp_dir().join(format!("fleetint-nico-fallback-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let _cleanup = TestDirectoryCleanup(directory.clone());
-        let path = directory.join("config.toml");
-        std::fs::write(&path, "[credentials]\nfile='credentials.json'\n").unwrap();
-        let credentials = directory.join("credentials.json");
-        std::fs::write(
-            &credentials,
-            r#"{"profiles":{"bmc":{"username":"before","password":"fixture"}}}"#,
-        )
-        .unwrap();
-        let settings = load_endpoint_config(path.to_str().unwrap()).unwrap();
-        let key: NicoRestConfig = toml::from_str("api_url='https://nico.example.com/v2'\norg='example'\nsite_id='site'\ntoken_file='/private/token'\ncredentials_profile='bmc'\nmax_stale_seconds=60").unwrap();
-        let mut endpoint = provider_endpoint();
-        endpoint.source_reference = Some("machine-for-cache-test".into());
-        let endpoints: crate::endpoint::EndpointSnapshot = vec![endpoint].into();
-        let unavailable = || Err(crate::endpoint::nico::unavailable("NICo returned HTTP 401"));
-        let mut loader = RuntimeConfigLoader::default();
-        assert!(
-            loader
-                .resolve_discovery(&settings, key.clone(), unavailable())
-                .await
-                .is_err()
-        );
-        loader
-            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
-            .await
-            .unwrap();
-        let first_time = loader.last_good.as_ref().unwrap().discovered_at;
-        std::fs::write(
-            &credentials,
-            r#"{"profiles":{"bmc":{"username":"rotated","password":"new-fixture"}}}"#,
-        )
-        .unwrap();
-        let fallback = loader
-            .resolve_discovery(&settings, key.clone(), unavailable())
-            .await
-            .unwrap();
-        assert_eq!(fallback.targets[0].username, "rotated");
-        assert_eq!(loader.last_good.as_ref().unwrap().discovered_at, first_time);
-        loader.last_good.as_mut().unwrap().discovered_at =
-            std::time::Instant::now() - std::time::Duration::from_secs(61);
-        assert!(
-            loader
-                .resolve_discovery(&settings, key.clone(), unavailable())
-                .await
-                .is_err()
-        );
-        assert!(loader.last_good.is_none());
-        loader
-            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
-            .await
-            .unwrap();
-        let mut other_site = key.clone();
-        other_site.site_id = "another-site".into();
-        assert!(
-            loader
-                .resolve_discovery(&settings, other_site, unavailable())
-                .await
-                .is_err()
-        );
-        loader
-            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
-            .await
-            .unwrap();
-        assert!(
-            loader
-                .resolve_discovery(&settings, key.clone(), Ok(Vec::new().into()))
-                .await
-                .is_err()
-        );
-        assert!(loader.last_good.is_none());
-        loader
-            .resolve_discovery(&settings, key.clone(), Ok(endpoints.clone()))
-            .await
-            .unwrap();
-        assert!(
-            loader
-                .resolve_discovery(&settings, key.clone(), Err("duplicate BMC MAC".into()))
-                .await
-                .is_err()
-        );
-        assert!(loader.last_good.is_none());
-        loader
-            .resolve_discovery(&settings, key.clone(), Ok(endpoints))
-            .await
-            .unwrap();
-        std::fs::write(&credentials, r#"{"profiles":{}}"#).unwrap();
-        let error = loader
-            .resolve_discovery(&settings, key.clone(), unavailable())
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("machine-for-cache-test"));
-        std::fs::write(&credentials, "invalid JSON").unwrap();
-        assert!(
-            loader
-                .resolve_discovery(&settings, key, unavailable())
-                .await
-                .is_err()
         );
     }
 

@@ -16,29 +16,21 @@ SPDX-License-Identifier: Apache-2.0
 {{ end }}{{ with .Values.inventory.nodeGroup }}node_group = {{ trim . | toJson }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" .Values.inventory.labels }}
 
-{{ if .Values.nicoIntegration.enabled }}
-[endpoint_source]
-type = "nico"
-api_url = {{ required "nicoIntegration.apiUrl is required" .Values.nicoIntegration.apiUrl | toJson }}
-org = {{ required "nicoIntegration.org is required" .Values.nicoIntegration.org | toJson }}
-site_id = {{ required "nicoIntegration.siteId is required" .Values.nicoIntegration.siteId | toJson }}
-api_name = {{ .Values.nicoIntegration.apiName | toJson }}
-token_file = "/run/secrets/nico-rest/access-token"
-timeout_seconds = {{ .Values.nicoIntegration.timeoutSeconds }}
-max_stale_seconds = {{ .Values.nicoIntegration.maxStaleSeconds }}
-
-[nico_bmc_proxy]
-url = {{ required "nicoIntegration.proxyUrl is required" .Values.nicoIntegration.proxyUrl | toJson }}
-ca_file = "/run/secrets/nico-proxy/ca.crt"
-client_cert_file = "/run/secrets/nico-proxy/tls.crt"
-client_key_file = "/run/secrets/nico-proxy/tls.key"
-{{ else }}
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
-{{ end }}
+{{ if eq .Values.endpointSource.type "nico" }}
+[endpoint_source]
+type = "nico"
+api_url = {{ required "endpointSource.nico.apiUrl is required" .Values.endpointSource.nico.apiUrl | toJson }}
+org = {{ required "endpointSource.nico.org is required" .Values.endpointSource.nico.org | toJson }}
+site_id = {{ required "endpointSource.nico.siteId is required" .Values.endpointSource.nico.siteId | toJson }}
+api_name = {{ .Values.endpointSource.nico.apiName | toJson }}
+token_file = "/run/secrets/nico-rest/access-token"
+timeout_seconds = {{ .Values.endpointSource.nico.timeoutSeconds }}
+{{ with .Values.endpointSource.nico.credentialsProfile }}credentials_profile = {{ . | toJson }}
+{{ end }}{{ end }}
 {{- $nico := dict -}}
-{{- $config := dict -}}
-{{- if not .Values.nicoIntegration.enabled -}}{{- $config = default dict .Values.nicoHardwareHealth.config -}}{{- end -}}
+{{- $config := default dict .Values.nicoHardwareHealth.config -}}
 {{- range $key := list
     "sensorFetchIntervalSeconds"
     "bmcRequestConcurrency"
@@ -88,7 +80,6 @@ file = "/run/secrets/bmc/credentials.json"
 {{ regexReplaceAll "([A-Z])" $key "_${1}" | lower }} = {{ get $nico $key | toJson }}
 {{ end -}}
 {{ end -}}
-{{ if not .Values.nicoIntegration.enabled }}
 {{ range .Values.inventory.targets }}
 [[targets]]
 kind = {{ default "unknown" .kind | toJson }}
@@ -100,6 +91,5 @@ mac = {{ .mac | toJson }}
 {{ end }}{{ with .nodeGroup }}node_group = {{ trim . | toJson }}
 {{ end }}{{ with .credentialsProfile }}credentials_profile = {{ trim . | toJson }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" (default dict .labels) }}
-{{ end }}
 {{ end }}
 {{- end -}}

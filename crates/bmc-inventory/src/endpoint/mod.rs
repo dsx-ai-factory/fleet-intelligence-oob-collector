@@ -24,8 +24,6 @@ pub mod nico;
 /// the Fleet Intelligence identity, regardless of where the endpoint came from.
 #[derive(Clone, Debug)]
 pub struct Endpoint {
-    /// Non-secret provider reference for diagnostics, never a Fleet identity.
-    pub source_reference: Option<String>,
     pub kind: TargetKind,
     pub name: Option<String>,
     pub compute_zone: Option<String>,
@@ -103,7 +101,6 @@ pub fn write_discovery_json(
         .iter()
         .map(|endpoint| {
             serde_json::json!({
-                "source_reference": endpoint.source_reference,
                 "ip": endpoint.ip,
                 "mac": endpoint.mac.to_string().to_uppercase(),
                 "name": endpoint.name,

@@ -64,10 +64,10 @@ spec:
             - {{ .Values.bmcCollector.redfish.requestsPerSecond | int | quote }}
             - --timeout-seconds
             - {{ .Values.bmcCollector.redfish.timeoutSeconds | int | quote }}
-            {{- if and .Values.bmcCollector.redfish.insecureTls (not .Values.nicoIntegration.enabled) }}
+            {{- if .Values.bmcCollector.redfish.insecureTls }}
             - --insecure-tls
             {{- end }}
-            {{- if or .Values.nicoIntegration.enabled (not .Values.bmcCollector.latencyProbe.enabled) }}
+            {{- if not .Values.bmcCollector.latencyProbe.enabled }}
             - --disable-latency-probe
             {{- end }}
           env:
@@ -78,11 +78,11 @@ spec:
             - name: FLEETINT_OTEL_GATEWAY_LOG_LEVEL
               value: {{ .Values.otelGateway.logLevel | quote }}
             - name: FLEETINT_NICO_TELEMETRY_DESTINATION
-              value: {{ if or .Values.nicoIntegration.enabled (not .Values.nicoHardwareHealth.enabled) }}"disabled"{{ else if .Values.otelGateway.enabled }}"bundledGateway"{{ else }}"external"{{ end }}
+              value: {{ if not .Values.nicoHardwareHealth.enabled }}"disabled"{{ else if .Values.otelGateway.enabled }}"bundledGateway"{{ else }}"external"{{ end }}
             - name: FLEETINT_NICO_ENABLED
-              value: {{ and .Values.nicoHardwareHealth.enabled (not .Values.nicoIntegration.enabled) | quote }}
+              value: {{ .Values.nicoHardwareHealth.enabled | quote }}
             - name: FLEETINT_OTEL_GATEWAY_ENABLED
-              value: {{ and .Values.otelGateway.enabled (not .Values.nicoIntegration.enabled) | quote }}
+              value: {{ .Values.otelGateway.enabled | quote }}
             - name: RUST_LOG
               value: {{ required "bmcCollector.logLevel is required" .Values.bmcCollector.logLevel | quote }}
             - name: FLEETINT_BACKEND_URL
@@ -99,18 +99,14 @@ spec:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
-            {{- if .Values.nicoIntegration.enabled }}
+            {{- if eq .Values.endpointSource.type "nico" }}
             - name: nico-rest-token
               mountPath: /run/secrets/nico-rest
               readOnly: true
-            - name: nico-proxy-identity
-              mountPath: /run/secrets/nico-proxy
-              readOnly: true
-            {{- else }}
+            {{- end }}
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
-            {{- end }}
       volumes:
         - name: hardware-config
           configMap:
@@ -119,19 +115,15 @@ spec:
               - key: collector.toml
                 path: config.toml
                 mode: 0440
-        {{- if .Values.nicoIntegration.enabled }}
+        {{- if eq .Values.endpointSource.type "nico" }}
         - name: nico-rest-token
           secret:
-            secretName: {{ required "nicoIntegration.tokenSecretName is required" .Values.nicoIntegration.tokenSecretName | quote }}
+            secretName: {{ required "endpointSource.nico.tokenSecretName is required" .Values.endpointSource.nico.tokenSecretName | quote }}
             defaultMode: 0440
             items:
-              - key: {{ .Values.nicoIntegration.tokenSecretKey | quote }}
+              - key: {{ .Values.endpointSource.nico.tokenSecretKey | quote }}
                 path: access-token
-        - name: nico-proxy-identity
-          secret:
-            secretName: {{ required "nicoIntegration.identitySecretName is required" .Values.nicoIntegration.identitySecretName | quote }}
-            defaultMode: 0440
-        {{- else }}
+        {{- end }}
         - name: bmc-credentials
           secret:
             secretName: {{ .Values.credentials.existingSecret | quote }}
@@ -139,5 +131,4 @@ spec:
             items:
               - key: {{ .Values.credentials.secretKey | quote }}
                 path: credentials.json
-        {{- end }}
 {{- end }}

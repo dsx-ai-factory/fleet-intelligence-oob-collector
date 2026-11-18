@@ -6,6 +6,8 @@ Passwords never go in the values file. They live in a separate [BMC credentials 
 
 For DEB/RPM installations, use the [Linux package guide](host-configuration.md).
 
+For NICo-managed sites, select the [NICo REST endpoint source](nico-discovery.md) instead of listing static targets. The chart mounts the REST access token from an existing Secret.
+
 ## Targets
 
 List one entry under `inventory.targets` for each BMC. The collector and NICo hardware health both read this list.
@@ -289,7 +291,3 @@ proxy:
 `proxy` also accepts `httpProxy` and `allProxy`. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
 
 `bmcCollector.redfish.insecureTls` defaults to `true`, turning off BMC certificate checks for the collector. Set it to `false` to verify BMC certificates. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.
-
-## Existing NICo deployments
-
-Set `nicoIntegration.enabled=true` to use NICo REST discovery and the BMC proxy with the existing site NICo services. This deploys only the FI collector and mounts a REST access-token Secret and proxy client-identity Secret. Follow [NICo discovery and proxy configuration](nico-discovery.md) for the required values and authentication setup.

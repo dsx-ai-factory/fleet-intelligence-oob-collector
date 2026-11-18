@@ -14,19 +14,18 @@ inventory:
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.
 
-# NICo-managed sites deploy only the FI collector; use the site's health/OTel services.
-nicoIntegration:
-  enabled: false
-  apiUrl: ""
-  org: ""
-  siteId: ""
-  apiName: nico
-  tokenSecretName: ""
-  tokenSecretKey: access-token
-  timeoutSeconds: 30
-  maxStaleSeconds: 108000
-  proxyUrl: ""
-  identitySecretName: ""
+# Target source; NICo REST reads a bearer token mounted from an existing Secret.
+endpointSource:
+  type: static # static | nico
+  nico:
+    apiUrl: "" # HTTPS REST prefix, including /v2.
+    org: ""
+    siteId: ""
+    apiName: nico # Use carbide for deployments with the legacy REST route.
+    credentialsProfile: "" # Existing shared BMC credential profile.
+    tokenSecretName: ""
+    tokenSecretKey: access-token
+    timeoutSeconds: 30
 
 # Shared BMC JSON file; credential values belong in the Secret.
 credentials:

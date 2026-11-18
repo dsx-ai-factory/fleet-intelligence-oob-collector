@@ -14,53 +14,57 @@
     "otelGateway"
   ],
   "properties": {
-    "nicoIntegration": {
+    "endpointSource": {
       "type": "object",
       "additionalProperties": false,
+      "required": [
+        "type",
+        "nico"
+      ],
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "apiUrl": {
-          "type": "string",
-          "pattern": "^$|^https://[^ \\t\\r\\n]+$"
-        },
-        "org": {
-          "type": "string"
-        },
-        "siteId": {
-          "type": "string"
-        },
-        "apiName": {
+        "type": {
           "type": "string",
           "enum": [
-            "nico",
-            "carbide"
+            "static",
+            "nico"
           ]
         },
-        "tokenSecretName": {
-          "type": "string"
-        },
-        "tokenSecretKey": {
-          "type": "string",
-          "minLength": 1
-        },
-        "timeoutSeconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3600
-        },
-        "maxStaleSeconds": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 172800
-        },
-        "proxyUrl": {
-          "type": "string",
-          "pattern": "^$|^https://[^ \\t\\r\\n]+$"
-        },
-        "identitySecretName": {
-          "type": "string"
+        "nico": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiUrl": {
+              "type": "string"
+            },
+            "org": {
+              "type": "string"
+            },
+            "siteId": {
+              "type": "string"
+            },
+            "credentialsProfile": {
+              "type": "string"
+            },
+            "tokenSecretName": {
+              "type": "string"
+            },
+            "tokenSecretKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "apiName": {
+              "type": "string",
+              "enum": [
+                "nico",
+                "carbide"
+              ]
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          }
         }
       }
     },
