@@ -354,6 +354,123 @@ jobs:
             rm -rf "$NGC_CLI_HOME"
           fi
 
+  publish-dsx:
+    if: ${{ github.ref_type == 'tag' && vars.DSX_NGC_ORG_TEAM != '' }}
+    environment: ngc-publish
+    name: Publish DSX artifacts
+    needs: [validate, publish-chart]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.17.3
+      - name: Install pinned NGC CLI
+        env:
+          NGC_CLI_VERSION: '4.36.6'
+          NGC_CLI_SHA256: '2972dbe54e80cedae18e82923a9a67a60aef23d041c5790336f8f4b51752bab6'
+        run: |
+          set -euo pipefail
+          ngc_dir=$(mktemp -d "$RUNNER_TEMP/ngc-cli.XXXXXX")
+          ngc_home=$(mktemp -d "$RUNNER_TEMP/ngc-home.XXXXXX")
+          printf 'NGC_CLI_HOME=%s\n' "$ngc_home" >> "$GITHUB_ENV"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+            -o "$ngc_dir/ngccli_linux.zip" \
+            "https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/${NGC_CLI_VERSION}/files/ngccli_linux.zip"
+          printf '%s  %s\n' "$NGC_CLI_SHA256" "$ngc_dir/ngccli_linux.zip" | sha256sum --check -
+          unzip -q "$ngc_dir/ngccli_linux.zip" -d "$ngc_dir"
+          chmod +x "$ngc_dir/ngc-cli/ngc"
+          printf '%s\n' "$ngc_dir/ngc-cli" >> "$GITHUB_PATH"
+          NGC_CLI_HOME="$ngc_home" "$ngc_dir/ngc-cli/ngc" --version
+      - name: Download the published Helm chart
+        env:
+          NGC_CLI_API_KEY: ${{ secrets.NGC_API_KEY }}
+          CHART_TARGET: 1070195845945670/fleet-intelligence/fleet-intelligence-oob-collector
+        run: |
+          mkdir dist
+          ngc registry chart pull --org 1070195845945670 --team fleet-intelligence \
+            --dest dist "$CHART_TARGET:$VERSION"
+      - name: Copy released artifacts to DSX
+        env:
+          DSX_NGC_ORG_TEAM: ${{ vars.DSX_NGC_ORG_TEAM }}
+          SOURCE_KEY: ${{ secrets.NGC_API_KEY }}
+          DSX_KEY: ${{ secrets.DSX_NGC_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          : "${VERSION:?Set the released version without its leading v}"
+          : "${DSX_NGC_ORG_TEAM:?Set the destination org/team}"
+          : "${DSX_KEY:?Configure DSX_NGC_API_KEY in the ngc-publish environment}"
+          : "${SOURCE_KEY:?Configure NGC_API_KEY in the ngc-publish environment}"
+          : "${IMAGE:?Set the released collector repository}"
+          : "${NICO_IMAGE:?Set the released NICo repository}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$ ]] || { echo 'Invalid release version' >&2; exit 1; }
+          [[ "$DSX_NGC_ORG_TEAM" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$ ]] || { echo 'DSX_NGC_ORG_TEAM must be an NGC org/team path' >&2; exit 1; }
+          chart=$(realpath "dist/fleet-intelligence-oob-collector-$VERSION.tgz")
+          chart_name=fleet-intelligence-oob-collector
+
+          auth_dir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dsx-copy.XXXXXX")
+          trap 'rm -rf "$auth_dir"' EXIT
+          # Separate credentials are required even though both registries use nvcr.io.
+          printf '%s' "$SOURCE_KEY" | skopeo login --authfile "$auth_dir/source.json" --username '$oauthtoken' --password-stdin nvcr.io
+          printf '%s' "$DSX_KEY" | skopeo login --authfile "$auth_dir/destination.json" --username '$oauthtoken' --password-stdin nvcr.io
+
+          gateway_image=$(helm template dsx-publish "$chart" \
+            --set-json 'inventory.targets=[{"address":"192.0.2.10","mac":"02:00:00:00:00:01"}]' \
+            --show-only templates/otel-gateway-deployment.yaml | sed -n 's/^[[:space:]]*image: "\([^"]*\)"$/\1/p')
+          [[ "$gateway_image" == nvcr.io/nvidia/fleet-intelligence/otel-gateway:* && "$gateway_image" != *$'\n'* ]] || { echo 'Expected one FI gateway image in the packaged chart' >&2; exit 1; }
+
+          for source in "$IMAGE:$VERSION" "$NICO_IMAGE:$VERSION" "$gateway_image"; do
+            repository="${source%:*}"
+            destination="nvcr.io/$DSX_NGC_ORG_TEAM/fleet-intelligence-${repository##*/}:${source##*:}"
+            digest=$(skopeo inspect --raw --authfile "$auth_dir/source.json" "docker://$source" | sha256sum | cut -d ' ' -f 1)
+            if skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" > "$auth_dir/manifest" 2> "$auth_dir/error"; then
+              [[ "$(sha256sum "$auth_dir/manifest" | cut -d ' ' -f 1)" == "$digest" ]] || { echo "::error::$destination already contains different content"; exit 1; }
+            else
+              diagnostic=$(cat "$auth_dir/error")
+              diagnostic=${diagnostic//"${destination%:*}"/REF}
+              if grep -Eqi 'unauthorized|denied|forbidden|authentication|timeout|timed out|deadline|certificate|tls|connection|network|unavailable|too many requests' <<< "$diagnostic" || ! grep -Eqi '(^|: )(manifest unknown|name unknown)(:|"?$)' <<< "$diagnostic"; then
+                echo '::error::Cannot inspect destination image'
+                sed 's/^/Registry inspection: /' "$auth_dir/error" >&2
+                exit 1
+              fi
+              skopeo copy --all --preserve-digests \
+                --src-authfile "$auth_dir/source.json" --dest-authfile "$auth_dir/destination.json" \
+                "docker://$repository@sha256:$digest" "docker://$destination"
+            fi
+            actual=$(skopeo inspect --raw --authfile "$auth_dir/destination.json" "docker://$destination" | sha256sum | cut -d ' ' -f 1)
+            [[ "$actual" == "$digest" ]] || { echo "::error::Digest verification failed for $destination"; exit 1; }
+            printf '%s@sha256:%s\n' "$destination" "$actual"
+          done
+
+          export NGC_CLI_API_KEY="$DSX_KEY"
+          org="${DSX_NGC_ORG_TEAM%/*}"
+          team="${DSX_NGC_ORG_TEAM#*/}"
+          target="$DSX_NGC_ORG_TEAM/$chart_name"
+          cd "${chart%/*}"
+          if ! ngc registry chart info --org "$org" --team "$team" "$target"; then
+            ngc registry chart create --org "$org" --team "$team" "$target" --short-desc "Fleet Intelligence out-of-band collector"
+          fi
+          # NGC returns failure for immutable duplicate versions and lost success responses.
+          # In every case, require a fresh download with exactly the expected archive bytes.
+          if ! ngc registry chart push --org "$org" --team "$team" "$target:$VERSION"; then
+            echo 'Checking whether the destination already contains the expected chart'
+          fi
+          mkdir "$auth_dir/chart"
+          ngc registry chart pull --org "$org" --team "$team" --dest "$auth_dir/chart" "$target:$VERSION"
+          cmp "$chart" "$auth_dir/chart/${chart##*/}"
+          sha256sum "$auth_dir/chart/${chart##*/}"
+      - name: Remove NGC CLI state
+        if: always()
+        run: |
+          if [[ -n "${NGC_CLI_HOME:-}" ]]; then
+            rm -rf "$NGC_CLI_HOME"
+          fi
+
   reserve-package-release:
     if: ${{ github.ref_type == 'tag' }}
     name: Reserve package release
