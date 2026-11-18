@@ -1,26 +1,24 @@
 # Discover targets through NICo REST
 
-Use NICo REST to discover compute-host BMC IPs, MAC addresses, and optional hostnames in one site. Kubernetes mounts your NICo access token from a Secret into a file. The collector reads that file each time it discovers targets.
+Use NICo REST to discover compute-host BMC IPs, MAC addresses, and optional hostnames in one site. The collector authenticates as a service through the DSX Starfleet SSA OAuth2 client-credentials flow.
 
 This integration supplies targets to the existing collector. Redfish authentication and collection are unchanged. NICo inventory and attestation records are not imported.
 
-## Prepare access
+## Prepare service access
 
-You need an HTTPS NICo REST endpoint trusted by the collector's system CA store, an organization, a site ID, and a bearer access token with permission to read machine BMC metadata. Confirm the `carbide` scope and provider/site permissions with your NICo administrator. The file must contain an access token, rather than an SSA client secret. Arrange token issuance and refresh outside the collector.
+Follow the DSX **Starfleet SSA Client Provisioning** guide to provision a dedicated SSA client with the `carbide` scope and NICo provider/site permissions. The platform stores and rotates the client credentials in Vault under `services/dsx/clients/<component>/issue/creds` in the `dgxc-dsx` namespace.
+
+Use the platform's Vault Secrets Operator (VSO) configuration to sync those credentials into a Secret in the collector namespace. The Secret must contain `client_id` and `client_secret` keys. Vault's `secret` field maps to the Kubernetes `client_secret` key. The [SSA credentials example](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/nico-discovery/ssa-credentials.yaml) follows the DSX `kv-v1` and transformation configuration; have your platform administrator wire the reader service account and VaultAuth to your provisioned client.
 
 Follow [Kubernetes installation](installation.md) to prepare the namespace, FI enrollment Secret, and existing [BMC credentials Secret](configuration.md#bmc-credentials-file). Replace the static target values with the source settings below.
 
-## Mount the token
+## Service authentication
 
-Save the access token in a protected local file and create a Secret in the collector namespace:
+The chart mounts the SSA credential Secret read-only as `/run/secrets/nico-ssa/client_id` and `/run/secrets/nico-ssa/client_secret`, without `subPath`. VSO updates the Secret when Vault rotates credentials, and Kubernetes projects those updates into the mounted directory.
 
-```bash
-kubectl create secret generic fi-nico-access-token \
-  --namespace "$NAMESPACE" \
-  --from-file=access-token=/secure/path/to/nico-access-token
-```
+On each discovery, the collector rereads both files and uses the Rust `oauth2` client to request a fresh access token from the configured SSA token endpoint. It sends HTTP Basic client authentication with `grant_type=client_credentials` and `scope=carbide`, then uses the returned bearer token for NICo requests. The token stays in memory for that listing. There is no pre-issued access-token file to maintain and no client secret in Helm values or the ConfigMap. Rotated credentials are used on the next discovery attempt without restarting the pod.
 
-Keep this Secret updated when the token rotates. The chart mounts its selected key read-only at `/run/secrets/nico-rest/access-token`, without `subPath`, so Kubernetes can project Secret updates. The collector rereads the file on each discovery. No token value belongs in Helm values or the ConfigMap.
+Both endpoints require trusted HTTPS certificates and reject redirects. A whole-discovery timeout covers credential loading, the token exchange, and NICo pagination. Failed SSA authentication prevents the NICo query.
 
 ## Configure Kubernetes
 
@@ -34,8 +32,8 @@ endpointSource:
     org: example-org
     siteId: 00000000-0000-0000-0000-000000000001
     apiName: nico
-    tokenSecretName: fi-nico-access-token
-    tokenSecretKey: access-token
+    tokenUrl: https://ssa.example.com/token
+    credentialsSecretName: fi-nico-ssa-credentials
     credentialsProfile: bmc
     timeoutSeconds: 30
 
@@ -61,12 +59,12 @@ Keep your normal FI backend, enrollment Secret, and BMC credentials Secret setti
 | `endpointSource.nico.org` | NICo organization |
 | `endpointSource.nico.siteId` | Site to discover |
 | `endpointSource.nico.apiName` | `nico` by default; use `carbide` for deployments with the legacy route |
-| `endpointSource.nico.tokenSecretName` | Existing Secret in the collector namespace |
-| `endpointSource.nico.tokenSecretKey` | Secret key containing the access token; default `access-token` |
+| `endpointSource.nico.tokenUrl` | HTTPS token endpoint from the DSX SSA provisioning guide; replace the example URL |
+| `endpointSource.nico.credentialsSecretName` | VSO-managed Secret in the collector namespace with `client_id` and `client_secret` keys |
 | `endpointSource.nico.credentialsProfile` | Optional existing BMC credential profile; per-MAC overrides also apply |
-| `endpointSource.nico.timeoutSeconds` | Whole discovery deadline, including all pages and one retry for inconsistent pagination; default `30`, allowed `1`–`3600` |
+| `endpointSource.nico.timeoutSeconds` | Whole discovery deadline, including the SSA exchange, all pages, and one retry for inconsistent pagination; default `30`, allowed `1`–`3600` |
 
-The chart writes these settings into `[endpoint_source]` in the collector TOML, with `token_file` pointing to the mounted file. For an explicit TOML example, see [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml).
+The chart writes these settings into `[endpoint_source]` in the collector TOML, with `client_id_file` and `client_secret_file` pointing to the mounted files. For an explicit TOML example, see [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml).
 
 ## Verify discovery
 
@@ -85,7 +83,8 @@ The runtime discovers targets when each collection cycle loads its configuration
 
 | Problem | What to check |
 | --- | --- |
-| HTTP `401` or `403` | Token expiry, `carbide` scope, and provider/site permissions |
+| SSA OAuth2 exchange failure | VSO synchronization, both credential files, token endpoint, CA trust, and the client's `carbide` scope |
+| NICo HTTP `401` or `403` | SSA client scope and NICo provider/site permissions |
 | HTTP `404` | REST prefix and `apiName` for the deployment |
 | Skipped machines | Warnings report missing or invalid BMC metadata; check onboarding and metadata permissions |
 | No targets | Selected site and host visibility; empty usable listings are rejected |

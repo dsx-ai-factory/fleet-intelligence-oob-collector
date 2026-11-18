@@ -100,8 +100,8 @@ spec:
               mountPath: /etc/fleet-intelligence
               readOnly: true
             {{- if eq .Values.endpointSource.type "nico" }}
-            - name: nico-rest-token
-              mountPath: /run/secrets/nico-rest
+            - name: nico-ssa-credentials
+              mountPath: /run/secrets/nico-ssa
               readOnly: true
             {{- end }}
             - name: bmc-credentials
@@ -116,13 +116,15 @@ spec:
                 path: config.toml
                 mode: 0440
         {{- if eq .Values.endpointSource.type "nico" }}
-        - name: nico-rest-token
+        - name: nico-ssa-credentials
           secret:
-            secretName: {{ required "endpointSource.nico.tokenSecretName is required" .Values.endpointSource.nico.tokenSecretName | quote }}
+            secretName: {{ required "endpointSource.nico.credentialsSecretName is required" .Values.endpointSource.nico.credentialsSecretName | quote }}
             defaultMode: 0440
             items:
-              - key: {{ .Values.endpointSource.nico.tokenSecretKey | quote }}
-                path: access-token
+              - key: client_id
+                path: client_id
+              - key: client_secret
+                path: client_secret
         {{- end }}
         - name: bmc-credentials
           secret:

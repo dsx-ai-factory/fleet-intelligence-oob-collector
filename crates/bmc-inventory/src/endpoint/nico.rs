@@ -11,6 +11,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mac_address::MacAddress;
+use oauth2::{
+    AsyncHttpClient, AuthType, ClientId, ClientSecret, Scope, TokenResponse, TokenUrl,
+    basic::BasicClient,
+};
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, de::DeserializeOwned};
 use url::Url;
@@ -23,8 +27,7 @@ const PAGE_SIZE: usize = 100;
 const MAX_PAGES: usize = 1000;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
-/// Non-secret NICo REST settings. The token file contains only an access token,
-/// refreshed by the operator or an external credential service.
+/// NICo REST settings and paths to VSO-managed SSA client credential files.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NicoRestConfig {
@@ -32,14 +35,16 @@ pub struct NicoRestConfig {
     pub api_url: String,
     pub org: String,
     pub site_id: String,
-    pub token_file: PathBuf,
+    pub token_url: String,
+    pub client_id_file: PathBuf,
+    pub client_secret_file: PathBuf,
     /// Current NICo uses `nico`; older deployments may use `carbide`.
     #[serde(default = "default_api_name")]
     pub api_name: String,
     /// Shared BMC credential profile applied to every discovered machine.
     #[serde(default)]
     pub credentials_profile: Option<String>,
-    /// Whole-discovery budget, including all pages and reading the token file.
+    /// Whole-discovery budget, including credential loading, SSA, and all pages.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
 }
@@ -55,12 +60,13 @@ fn default_timeout() -> u64 {
 pub struct NicoRestEndpointSource {
     config: NicoRestConfig,
     machines_url: Url,
+    token_url: Url,
     client: reqwest::Client,
     timeout: Duration,
 }
 
 impl NicoRestEndpointSource {
-    /// Construct an HTTPS-only source. Relative token paths must be rooted at
+    /// Construct an HTTPS-only source. Relative credential paths must be rooted at
     /// the config directory by the caller before constructing this source.
     pub fn new(config: NicoRestConfig) -> Result<Self> {
         let mut url = Url::parse(&config.api_url).map_err(|_| "invalid NICo REST API URL")?;
@@ -75,19 +81,32 @@ impl NicoRestEndpointSource {
                 "NICo api_url must be HTTPS without credentials, query, or fragment".into(),
             );
         }
+        let token_url = Url::parse(&config.token_url).map_err(|_| "invalid SSA token URL")?;
+        if token_url.scheme() != "https"
+            || token_url.host_str().is_none()
+            || !token_url.username().is_empty()
+            || token_url.password().is_some()
+            || token_url.query().is_some()
+            || token_url.fragment().is_some()
+        {
+            return Err(
+                "SSA token_url must be HTTPS without credentials, query, or fragment".into(),
+            );
+        }
         if config.org.trim().is_empty()
             || config.site_id.trim().is_empty()
             || config.org == "."
             || config.org == ".."
             || !matches!(config.api_name.as_str(), "nico" | "carbide")
-            || !config.token_file.is_absolute()
+            || !config.client_id_file.is_absolute()
+            || !config.client_secret_file.is_absolute()
             || !(1..=3600).contains(&config.timeout_seconds)
             || config
                 .credentials_profile
                 .as_ref()
                 .is_some_and(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, site ID, an absolute token_file, api_name nico/carbide, timeout_seconds in 1..=3600; credential profile must not be blank".into());
+            return Err("NICo requires organization, site ID, absolute SSA client credential paths, api_name nico/carbide, timeout_seconds in 1..=3600; credential profile must not be blank".into());
         }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
@@ -101,23 +120,39 @@ impl NicoRestEndpointSource {
         Ok(Self {
             config,
             machines_url: url,
+            token_url,
             client,
             timeout,
         })
     }
 
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
-        let token = tokio::fs::read_to_string(&self.config.token_file)
-            .await
-            .map_err(|_| "cannot read NICo token_file")?;
-        let token = token.trim();
-        if token.is_empty() || token.len() > 65536 {
+        // Read mounted Secret files for every exchange. A new discovery never
+        // reuses credentials or a bearer token across a Vault/VSO rotation.
+        let client_id = read_client_credential(&self.config.client_id_file).await?;
+        let client_secret = read_client_credential(&self.config.client_secret_file).await?;
+        let oauth = BasicClient::new(ClientId::new(client_id))
+            .set_client_secret(ClientSecret::new(client_secret))
+            .set_auth_type(AuthType::BasicAuth)
+            .set_token_uri(TokenUrl::from_url(self.token_url.clone()));
+        let transport = SsaHttpClient(self.client.clone());
+        let token = oauth.exchange_client_credentials()
+            .add_scope(Scope::new("carbide".into()))
+            .request_async(&transport).await
+            // OAuth errors may contain the response body or URLs. Never expose
+            // provider diagnostics that could echo credentials or access tokens.
+            .map_err(|_| "SSA OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and carbide scope")?;
+        if token.token_type() != &oauth2::basic::BasicTokenType::Bearer {
+            return Err("SSA must issue a Bearer access token".into());
+        }
+        let access_token = token.access_token().secret();
+        if access_token.is_empty() || access_token.len() > 65536 {
             return Err(
-                "NICo token_file must contain a nonempty access token of at most 64 KiB".into(),
+                "SSA response must contain a nonempty access_token of at most 64 KiB".into(),
             );
         }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| "invalid NICo bearer token header")?;
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
+            .map_err(|_| "invalid SSA access token header")?;
         authorization.set_sensitive(true);
         for attempt in 0..2 {
             match self.discover_pages(&authorization).await {
@@ -246,6 +281,58 @@ impl NicoRestEndpointSource {
     }
 }
 
+// Keep OAuth protocol handling in oauth2, while applying the same bounded,
+// secret-safe HTTP policy as the discovery client.
+struct SsaHttpClient(reqwest::Client);
+impl<'a> AsyncHttpClient<'a> for SsaHttpClient {
+    type Error = std::io::Error;
+    type Future = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<oauth2::HttpResponse, Self::Error>>
+                + Send
+                + 'a,
+        >,
+    >;
+
+    fn call(&'a self, mut request: oauth2::HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            if let Some(header) = request.headers_mut().get_mut(AUTHORIZATION) {
+                header.set_sensitive(true);
+            }
+            let request = reqwest::Request::try_from(request).map_err(std::io::Error::other)?;
+            let mut response = self
+                .0
+                .execute(request)
+                .await
+                .map_err(std::io::Error::other)?;
+            let mut builder = oauth2::http::Response::builder().status(response.status());
+            *builder.headers_mut().expect("response builder headers") = response.headers().clone();
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(std::io::Error::other)? {
+                if chunk.len() > (128 * 1024usize).saturating_sub(body.len()) {
+                    return Err(std::io::Error::other("SSA response exceeds 128 KiB"));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            builder.body(body).map_err(std::io::Error::other)
+        })
+    }
+}
+
+async fn read_client_credential(path: &std::path::Path) -> Result<String> {
+    let value = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|_| "cannot read SSA client credential file")?;
+    let value = value.trim();
+    if value.is_empty() || value.len() > 65536 || value.contains(['\r', '\n']) {
+        return Err(
+            "SSA client credential files must contain a nonempty single value of at most 64 KiB"
+                .into(),
+        );
+    }
+    Ok(value.into())
+}
+
 #[derive(Debug)]
 struct ListingChanged;
 impl std::fmt::Display for ListingChanged {
@@ -361,8 +448,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    struct TokenFile(PathBuf);
-    impl TokenFile {
+    struct CredentialFiles(PathBuf);
+    impl CredentialFiles {
         fn new(token: &str) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
@@ -371,12 +458,14 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::write(&path, token).unwrap();
+            std::fs::write(path.with_extension("id"), "fixture-client").unwrap();
             Self(path)
         }
     }
-    impl Drop for TokenFile {
+    impl Drop for CredentialFiles {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(self.0.with_extension("id"));
         }
     }
 
@@ -385,7 +474,9 @@ mod tests {
             api_url: "https://nico.example.com/v2/".into(),
             org: "example".into(),
             site_id: "site-id".into(),
-            token_file: path,
+            token_url: "https://ssa.example.com/token".into(),
+            client_id_file: path.with_extension("id"),
+            client_secret_file: path,
             api_name: default_api_name(),
             credentials_profile: Some("bmc".into()),
             timeout_seconds: 2,
@@ -423,10 +514,21 @@ mod tests {
         replies: Vec<Reply>,
     ) -> (
         NicoRestEndpointSource,
-        TokenFile,
+        CredentialFiles,
         tokio::task::JoinHandle<Vec<String>>,
     ) {
-        let token = TokenFile::new("fixture-token");
+        fixture_with_ssa(replies, None).await
+    }
+
+    async fn fixture_with_ssa(
+        replies: Vec<Reply>,
+        token_reply: Option<Reply>,
+    ) -> (
+        NicoRestEndpointSource,
+        CredentialFiles,
+        tokio::task::JoinHandle<Vec<String>>,
+    ) {
+        let token = CredentialFiles::new("fixture-secret");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut source = NicoRestEndpointSource::new(config(token.0.clone())).unwrap();
         source.machines_url = Url::parse(&format!(
@@ -434,13 +536,15 @@ mod tests {
             listener.local_addr().unwrap()
         ))
         .unwrap();
+        source.token_url = source.machines_url.join("/token").unwrap();
         source.client = client_builder(Duration::from_secs(2))
             .no_proxy()
             .build()
             .unwrap();
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for reply in replies {
+            let mut replies = replies.into_iter().peekable();
+            while replies.peek().is_some() {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut bytes = Vec::new();
                 loop {
@@ -448,11 +552,48 @@ mod tests {
                     let count = socket.read(&mut buffer).await.unwrap();
                     assert_ne!(count, 0);
                     bytes.extend_from_slice(&buffer[..count]);
-                    if bytes.windows(4).any(|value| value == b"\r\n\r\n") {
-                        break;
+                    if let Some(header_end) =
+                        bytes.windows(4).position(|value| value == b"\r\n\r\n")
+                    {
+                        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                        let length = headers
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                            .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                            .unwrap_or(0);
+                        if bytes.len() >= header_end + 4 + length {
+                            break;
+                        }
                     }
                 }
-                requests.push(String::from_utf8(bytes).unwrap());
+                let request = String::from_utf8(bytes).unwrap();
+                let token_request = request.starts_with("POST /token ");
+                let reply = if token_request {
+                    let (headers, body) = request.split_once("\r\n\r\n").unwrap();
+                    let header = headers
+                        .lines()
+                        .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                        .unwrap();
+                    assert!(
+                        header.contains("Basic Zml4dHVyZS1jbGllbnQ6Zml4dHVyZS1zZWNyZXQ=")
+                            || header.contains("Basic cm90YXRlZC1jbGllbnQ6cm90YXRlZC1zZWNyZXQ="),
+                        "unexpected SSA authentication"
+                    );
+                    let parameters: std::collections::BTreeMap<_, _> =
+                        url::form_urlencoded::parse(body.as_bytes()).collect();
+                    assert_eq!(parameters.len(), 2);
+                    assert_eq!(parameters["grant_type"], "client_credentials");
+                    assert_eq!(parameters["scope"], "carbide");
+                    token_reply.clone().unwrap_or_else(|| Reply {
+                        status: 200, pagination: None, extra_header: String::new(),
+                        body: serde_json::json!({"access_token": if header.contains("cm90YXRlZC1jbGllbnQ6cm90YXRlZC1zZWNyZXQ=") {"rotated-token"} else {"fixture-token"}, "token_type": "Bearer", "expires_in": 900}).to_string(),
+                    })
+                } else {
+                    assert!(!request.contains("Basic "));
+                    requests.push(request);
+                    replies.next().unwrap()
+                };
                 let pagination = reply
                     .pagination
                     .map(|value| format!("X-Pagination: {value}\r\n"))
@@ -466,6 +607,9 @@ mod tests {
                 );
                 // A bounded-body reader may stop before an oversized reply ends.
                 let _ = socket.write_all(response.as_bytes()).await;
+                if token_request && token_reply.is_some() {
+                    break;
+                }
             }
             requests
         });
@@ -511,14 +655,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reloads_bearer_file_on_each_discovery_and_rejects_empty_tokens() {
+    async fn reloads_ssa_credentials_on_each_discovery_and_rejects_empty_secrets() {
         let (source, token, server) = fixture(vec![
             page(1, 1, vec![machine(0)]),
             page(1, 1, vec![machine(0)]),
         ])
         .await;
         source.discover().await.unwrap();
-        tokio::fs::write(&token.0, "rotated-token\n").await.unwrap();
+        tokio::fs::write(&token.0, "rotated-secret\n")
+            .await
+            .unwrap();
+        tokio::fs::write(token.0.with_extension("id"), "rotated-client\n")
+            .await
+            .unwrap();
         source.discover().await.unwrap();
         let requests = server.await.unwrap();
         assert!(requests[1].contains("Bearer rotated-token"));
@@ -530,8 +679,51 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("nonempty access token")
+                .contains("SSA client credential files")
         );
+    }
+
+    #[tokio::test]
+    async fn ssa_failures_do_not_query_nico_or_expose_credentials() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":"invalid_scope","error_description":"sensitive fixture-secret"}"#
+                    .to_string(),
+            ),
+            (
+                401,
+                r#"{"error":"invalid_client","error_description":"sensitive fixture-secret"}"#
+                    .into(),
+            ),
+            (500, "sensitive fixture-secret".into()),
+            (302, "sensitive fixture-secret".into()),
+            (200, "not JSON: sensitive fixture-secret".into()),
+            (200, r#"{"access_token":"","token_type":"Bearer"}"#.into()),
+            (
+                200,
+                r#"{"access_token":"sensitive","token_type":"MAC"}"#.into(),
+            ),
+            (200, "x".repeat(128 * 1024 + 1)),
+        ] {
+            let reply = Reply {
+                status,
+                body,
+                pagination: None,
+                extra_header: "Location: /must-not-follow\r\n".into(),
+            };
+            let (source, _files, server) =
+                fixture_with_ssa(vec![page(1, 1, vec![machine(0)])], Some(reply)).await;
+            let error = source.discover().await.unwrap_err().to_string();
+            assert!(error.contains("SSA"), "{error}");
+            for sensitive in ["fixture-secret", "fixture-client", "sensitive", "http://"] {
+                assert!(!error.contains(sensitive), "{error}");
+            }
+            assert!(
+                server.await.unwrap().is_empty(),
+                "no NICo query after failed SSA exchange"
+            );
+        }
     }
 
     #[tokio::test]
@@ -691,7 +883,7 @@ mod tests {
 
     #[test]
     fn validates_secure_settings_and_keeps_org_in_one_path_segment() {
-        let token = TokenFile::new("fixture-token");
+        let token = CredentialFiles::new("fixture-secret");
         let mut cfg = config(token.0.clone());
         cfg.org = "example/name".into();
         cfg.api_name = "carbide".into();
@@ -722,11 +914,12 @@ mod tests {
 
     #[tokio::test]
     async fn discovery_deadline_covers_an_unresponsive_server() {
-        let token = TokenFile::new("fixture-token");
+        let token = CredentialFiles::new("fixture-secret");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut source = NicoRestEndpointSource::new(config(token.0.clone())).unwrap();
         source.machines_url =
             Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        source.token_url = source.machines_url.join("/token").unwrap();
         source.client = client_builder(Duration::from_secs(2))
             .no_proxy()
             .build()

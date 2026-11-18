@@ -25,7 +25,9 @@ api_url = {{ required "endpointSource.nico.apiUrl is required" .Values.endpointS
 org = {{ required "endpointSource.nico.org is required" .Values.endpointSource.nico.org | toJson }}
 site_id = {{ required "endpointSource.nico.siteId is required" .Values.endpointSource.nico.siteId | toJson }}
 api_name = {{ .Values.endpointSource.nico.apiName | toJson }}
-token_file = "/run/secrets/nico-rest/access-token"
+token_url = {{ required "endpointSource.nico.tokenUrl is required" .Values.endpointSource.nico.tokenUrl | toJson }}
+client_id_file = "/run/secrets/nico-ssa/client_id"
+client_secret_file = "/run/secrets/nico-ssa/client_secret"
 timeout_seconds = {{ .Values.endpointSource.nico.timeoutSeconds }}
 {{ with .Values.endpointSource.nico.credentialsProfile }}credentials_profile = {{ . | toJson }}
 {{ end }}{{ end }}

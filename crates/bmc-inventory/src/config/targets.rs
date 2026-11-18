@@ -396,10 +396,12 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
     };
     let config_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     if let SourceSelection::Nico(source) = &mut config.endpoint_source {
-        if source.token_file.as_os_str().is_empty() {
-            return Err("NICo token_file must not be empty".into());
+        for path in [&mut source.client_id_file, &mut source.client_secret_file] {
+            if path.as_os_str().is_empty() {
+                return Err("SSA client credential paths must not be empty".into());
+            }
+            *path = std::path::absolute(config_dir.join(&*path))?;
         }
-        source.token_file = std::path::absolute(config_dir.join(&source.token_file))?;
     }
     // Keep symlinks intact so atomic credential-file replacement still works.
     let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
@@ -1695,7 +1697,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nico_selection_roots_token_path_and_needs_no_static_targets_or_bmc_passwords_for_discovery()
+    async fn nico_selection_roots_client_credential_paths_and_needs_no_static_targets_or_bmc_passwords_for_discovery()
      {
         let directory =
             std::env::temp_dir().join(format!("fleetint-nico-config-{}", std::process::id()));
@@ -1711,19 +1713,22 @@ mod tests {
             api_url = "https://nico.example.com/v2"
             org = "example"
             site_id = "site-id"
-            token_file = "token"
+            token_url = "https://ssa.example.com/token"
+            client_id_file = "client_id"
+            client_secret_file = "client_secret"
             credentials_profile = "bmc"
         "#;
         std::fs::write(&path, input).unwrap();
-        // An invalid header proves the rooted token file was read. No request is
+        // An invalid client ID proves the rooted credential file was read. No request is
         // sent and the nonexistent BMC credential file must not be consulted.
-        std::fs::write(directory.join("token"), "invalid\nheader-value").unwrap();
+        std::fs::write(directory.join("client_id"), "invalid\nheader-value").unwrap();
         let path = path.to_str().unwrap();
         let parsed = parse_config_parts(input, path).unwrap();
         let SourceSelection::Nico(config) = parsed.source else {
             panic!("NICo source not selected")
         };
-        assert_eq!(config.token_file, directory.join("token"));
+        assert_eq!(config.client_id_file, directory.join("client_id"));
+        assert_eq!(config.client_secret_file, directory.join("client_secret"));
         assert_eq!(config.api_name, "nico");
         let selected = load_source_config(path).await.unwrap();
         assert_eq!(
@@ -1731,7 +1736,7 @@ mod tests {
             Some("zone")
         );
         let discovery_error = selected.source.discover().await.unwrap_err().to_string();
-        assert!(discovery_error.contains("invalid NICo bearer token header"));
+        assert!(discovery_error.contains("SSA client credential files"));
         assert!(!discovery_error.contains("header-value"));
         let runtime_error = load_config_async(path).await.unwrap_err().to_string();
         assert_eq!(runtime_error, discovery_error);
@@ -1766,7 +1771,7 @@ mod tests {
                 .len(),
             1
         );
-        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\nsite_id='site-id'\ntoken_file='token'\n";
+        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\nsite_id='site-id'\ntoken_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
         let mixed = format!("{nico}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'");
         assert!(
             parse_config_parts(&mixed, "config.toml")
@@ -1778,10 +1783,10 @@ mod tests {
         for invalid in [
             nico.replace("type='nico'", "type='netbox'"),
             nico.replace(
-                "token_file='token'",
-                "token_file='token'\npassword='private-value'",
+                "token_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'",
+                "token_url='https://ssa.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\npassword='private-value'",
             ),
-            nico.replace("token_file='token'", "token_file=''"),
+            nico.replace("client_id_file='client_id'", "client_id_file=''"),
         ] {
             let error = parse_config_parts(&invalid, "config.toml")
                 .err()
