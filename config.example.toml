@@ -9,6 +9,21 @@ node_group = "gb200-training"
 [credentials]
 file = "/run/secrets/bmc/credentials.json"
 
+# Static targets below are the default endpoint source.
+# To discover through NICo instead, remove all [[targets]] blocks and enable:
+# [endpoint_source]
+# type = "nico"
+# api_url = "https://nico.example.com/v2"
+# org = "example-org"
+# token_url = "https://idp.example.com/token"
+# client_id_file = "/run/secrets/nico-oauth2/client_id"
+# client_secret_file = "/run/secrets/nico-oauth2/client_secret"
+# scopes = ["nico"] # Use scopes configured by your identity-provider administrator.
+# credentials_profile = "bmc" # Profile in the shared BMC credentials file.
+# timeout_seconds = 30
+# NICo site names supply node groups; country/state/city supply compute zones.
+# The global compute_zone above is a fallback for sites without location data.
+
 # Optional NICo collection controls; omit fields to use the bundle defaults below.
 # [nico_health]
 # sensor_fetch_interval_seconds = 60
