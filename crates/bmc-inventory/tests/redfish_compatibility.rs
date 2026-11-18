@@ -99,6 +99,7 @@ impl Fixture {
         });
         Self {
             target: Target {
+                proxy: None,
                 kind: TargetKind::Compute,
                 name: None,
                 compute_zone: None,

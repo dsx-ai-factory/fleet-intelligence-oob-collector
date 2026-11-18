@@ -35,6 +35,7 @@ pub struct RedfishAttestationSource {
     task_timeout: Duration,
     task_poll_interval: Duration,
     client: reqwest::Client,
+    request_timeout: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +120,8 @@ struct BmcSession<'a> {
     gate: RequestGate,
     reload_credentials: &'a CredentialReloader<'a>,
     credentials_reloaded: bool,
+    proxy: Option<bmc_dispatch::proxy::ProxyRoute>,
+    client: Option<reqwest::Client>,
 }
 
 /// Whether a request may be sent again after a transient failure.
@@ -130,24 +133,38 @@ enum Idempotency {
 }
 
 impl BmcSession<'_> {
+    fn resource_url(&self, path: &str) -> Result<Url, Box<dyn Error>> {
+        if self.proxy.is_some() {
+            // The proxy route validates the origin after resolving relative or
+            // absolute links supplied by the target BMC.
+            Ok(self.base_url.join(path)?)
+        } else {
+            join_redfish_path(&self.base_url, path)
+        }
+    }
+
     async fn request_json<T: serde::de::DeserializeOwned>(
         &mut self,
         idempotency: Idempotency,
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T, Box<dyn Error>> {
         loop {
-            let credentials = bmc_dispatch::BmcCredentials::new(
-                self.target.username.clone(),
-                self.target.password.clone(),
-            );
+            let credentials = if self.proxy.is_some() {
+                bmc_dispatch::BmcCredentials::anonymous()
+            } else {
+                bmc_dispatch::BmcCredentials::new(
+                    self.target.username.clone(),
+                    self.target.password.clone(),
+                )
+            };
             let send = || async {
-                request()
-                    .basic_auth(&self.target.username, Some(&self.target.password))
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json::<T>()
-                    .await
+                let request = request();
+                let request = if self.proxy.is_some() {
+                    request
+                } else {
+                    request.basic_auth(&self.target.username, Some(&self.target.password))
+                };
+                request.send().await?.error_for_status()?.json::<T>().await
             };
             let result = match idempotency {
                 Idempotency::Retry => {
@@ -208,6 +225,7 @@ impl RedfishAttestationSource {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
+            request_timeout,
             port,
             task_timeout,
             task_poll_interval,
@@ -252,12 +270,25 @@ impl RedfishAttestationSource {
         gate: RequestGate,
         reload_credentials: &CredentialReloader<'_>,
     ) -> Result<(RedfishAttestationReport, bool), Box<dyn Error>> {
+        let base_url = bmc_url(&target.address, self.port)?;
+        let (client, proxy) = match &target.proxy {
+            Some(config) => {
+                let (client, route) = config
+                    .connect(&base_url, self.request_timeout, USER_AGENT)
+                    .await?;
+                (Some(client), Some(route))
+            }
+            None => (None, None),
+        };
+        let proxy_mode = proxy.is_some();
         let mut session = BmcSession {
+            client,
+            proxy,
             target: target.clone(),
-            base_url: bmc_url(&target.address, self.port)?,
+            base_url,
             gate,
             reload_credentials,
-            credentials_reloaded: false,
+            credentials_reloaded: proxy_mode,
         };
         self.collect_session_report(&mut session, nonce, request)
             .await
@@ -436,9 +467,21 @@ impl RedfishAttestationSource {
         session: &mut BmcSession<'_>,
         path: &str,
     ) -> Result<T, Box<dyn Error>> {
-        let url = join_redfish_path(&session.base_url, path)?;
+        let url = session.resource_url(path)?;
+        let url = match &session.proxy {
+            Some(proxy) => proxy.route(&url)?,
+            None => url,
+        };
+        let headers = session
+            .proxy
+            .as_ref()
+            .map(|proxy| proxy.headers(&reqwest::header::HeaderMap::new()))
+            .unwrap_or_default();
+        let client = session.client.as_ref().unwrap_or(&self.client).clone();
         session
-            .request_json(Idempotency::Retry, || self.client.get(url.clone()))
+            .request_json(Idempotency::Retry, || {
+                client.get(url.clone()).headers(headers.clone())
+            })
             .await
     }
 
@@ -448,10 +491,20 @@ impl RedfishAttestationSource {
         path: &str,
         body: &B,
     ) -> Result<T, Box<dyn Error>> {
-        let url = join_redfish_path(&session.base_url, path)?;
+        let url = session.resource_url(path)?;
+        let url = match &session.proxy {
+            Some(proxy) => proxy.route(&url)?,
+            None => url,
+        };
+        let headers = session
+            .proxy
+            .as_ref()
+            .map(|proxy| proxy.headers(&reqwest::header::HeaderMap::new()))
+            .unwrap_or_default();
+        let client = session.client.as_ref().unwrap_or(&self.client).clone();
         session
             .request_json(Idempotency::SendOnce, || {
-                self.client.post(url.clone()).json(body)
+                client.post(url.clone()).headers(headers.clone()).json(body)
             })
             .await
     }
@@ -826,6 +879,7 @@ mod tests {
         };
         let mut session = BmcSession {
             target: crate::config::Target {
+                proxy: None,
                 name: "bmc-1".into(),
                 bmc_mac: "00:11:22:33:44:55".into(),
                 address: "192.0.2.1".into(),
@@ -837,6 +891,8 @@ mod tests {
             gate: dispatcher.attestation_gate("bmc-1").unwrap(),
             reload_credentials: &reload,
             credentials_reloaded: false,
+            proxy: None,
+            client: None,
         };
         let mut source = RedfishAttestationSource::new(
             443,
@@ -925,6 +981,7 @@ mod tests {
             };
             let mut session = BmcSession {
                 target: crate::config::Target {
+                    proxy: None,
                     name: "bmc-1".into(),
                     bmc_mac: "00:11:22:33:44:55".into(),
                     address: "192.0.2.1".into(),
@@ -936,6 +993,8 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: None,
+                client: None,
             };
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -1040,6 +1099,7 @@ mod tests {
             };
             let mut session = BmcSession {
                 target: crate::config::Target {
+                    proxy: None,
                     name: "bmc-1".into(),
                     bmc_mac: "00:11:22:33:44:55".into(),
                     address: "192.0.2.1".into(),
@@ -1051,6 +1111,8 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: None,
+                client: None,
             };
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -1109,6 +1171,7 @@ mod tests {
             let reload = |_: &crate::config::Target| Err("unused".into());
             let mut session = BmcSession {
                 target: crate::config::Target {
+                    proxy: None,
                     name: "bmc-1".into(),
                     bmc_mac: "00:11:22:33:44:55".into(),
                     address: "192.0.2.1".into(),
@@ -1120,6 +1183,8 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: None,
+                client: None,
             };
             let mut source = RedfishAttestationSource::new(
                 443,
@@ -1194,6 +1259,7 @@ mod tests {
             };
             let mut session = BmcSession {
                 target: crate::config::Target {
+                    proxy: None,
                     name: "bmc-1".to_string(),
                     bmc_mac: "00:11:22:33:44:55".to_string(),
                     address: "127.0.0.1".to_string(),
@@ -1207,6 +1273,8 @@ mod tests {
                     .expect("attestation gate"),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: None,
+                client: None,
             };
 
             let error = source
@@ -1262,6 +1330,7 @@ mod tests {
         )
         .expect("source");
         let target = crate::config::Target {
+            proxy: None,
             name: "bmc-1".to_string(),
             bmc_mac: "00:11:22:33:44:55".to_string(),
             address: "192.0.2.1".to_string(),
@@ -1276,6 +1345,8 @@ mod tests {
             gate: poll_gate,
             reload_credentials: &|_| panic!("no HTTP request should start"),
             credentials_reloaded: false,
+            proxy: None,
+            client: None,
         };
         let started_at = std::time::Instant::now();
         let error = source

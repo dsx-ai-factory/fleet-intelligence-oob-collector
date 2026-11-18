@@ -39,6 +39,7 @@ pub struct Target {
     pub bmc_mac: String,
     pub address: String,
     pub credentials_profile: Option<String>,
+    pub proxy: Option<bmc_dispatch::proxy::NicoBmcProxyConfig>,
     pub username: String,
     pub password: String,
 }

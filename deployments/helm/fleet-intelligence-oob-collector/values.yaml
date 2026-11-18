@@ -14,6 +14,20 @@ inventory:
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.
 
+# NICo-managed sites deploy only the FI collector; use the site's health/OTel services.
+nicoIntegration:
+  enabled: false
+  apiUrl: ""
+  org: ""
+  siteId: ""
+  apiName: nico
+  tokenSecretName: ""
+  tokenSecretKey: access-token
+  timeoutSeconds: 30
+  maxStaleSeconds: 108000
+  proxyUrl: ""
+  identitySecretName: ""
+
 # Shared BMC JSON file; credential values belong in the Secret.
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials

@@ -26,6 +26,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod proxy;
+
 use http::HeaderMap;
 /// Credentials whose rejection [`RequestGate::execute_classified`] records.
 pub use nv_redfish::bmc_http::BmcCredentials;
@@ -42,6 +44,7 @@ use nv_redfish_dispatcher::{
     RoundRobin, Runtime, RuntimeConfig, RuntimeHandle, RuntimeOutput, ScheduledWork, Scheduler,
     TokenBucket, TokenBucketConfig, WithCost,
 };
+use proxy::ProxyRoute;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use url::Url;
@@ -624,6 +627,8 @@ pub enum DispatchError<E> {
     Unavailable,
     /// The MVP adapter does not support this streaming operation.
     Unsupported,
+    /// A resource tried to leave the fixed proxy target.
+    InvalidProxyReference,
     /// The BMC rejected the credentials earlier in this cycle, so the request
     /// was not sent.
     CredentialsRejected,
@@ -639,6 +644,9 @@ impl<E: fmt::Display> fmt::Display for DispatchError<E> {
             Self::Unsupported => formatter.write_str("BMC dispatcher does not support SSE streams"),
             Self::CredentialsRejected => formatter
                 .write_str("BMC rejected credentials earlier in this cycle; request was not sent"),
+            Self::InvalidProxyReference => {
+                formatter.write_str("Redfish reference is outside the configured NICo proxy target")
+            }
             Self::Transport(error) => error.fmt(formatter),
         }
     }
@@ -648,9 +656,11 @@ impl<E: StdError + 'static> StdError for DispatchError<E> {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Transport(error) => Some(error),
-            Self::QueueFull | Self::Unavailable | Self::Unsupported | Self::CredentialsRejected => {
-                None
-            }
+            Self::QueueFull
+            | Self::Unavailable
+            | Self::Unsupported
+            | Self::InvalidProxyReference
+            | Self::CredentialsRejected => None,
         }
     }
 }
@@ -676,7 +686,7 @@ impl<E: BmcError + 'static> BmcError for DispatchError<E> {
             // A rejected admission failed before any response was received.
             // `Other` would let callers treat it as skippable resource data.
             Self::QueueFull | Self::Unavailable => BmcErrorClass::Transport,
-            Self::Unsupported => BmcErrorClass::Other,
+            Self::Unsupported | Self::InvalidProxyReference => BmcErrorClass::Other,
             // Classify like the 401 that set the latch, so callers treat it as
             // an authentication failure rather than missing resource data.
             Self::CredentialsRejected => BmcErrorClass::HttpResponse { status: 401 },
@@ -709,17 +719,46 @@ impl<E: RequestError> RequestError for DispatchError<E> {
 pub struct DispatchingHttpClient<C> {
     inner: C,
     gate: RequestGate,
+    proxy: Option<ProxyRoute>,
 }
 
 impl<C> DispatchingHttpClient<C> {
     /// Wrap an existing HTTP client with dispatcher admission.
     #[must_use]
     pub const fn new(inner: C, gate: RequestGate) -> Self {
-        Self { inner, gate }
+        Self {
+            inner,
+            gate,
+            proxy: None,
+        }
+    }
+}
+
+impl<C> DispatchingHttpClient<C> {
+    /// Pin every request to one NICo proxy and suppress device credentials.
+    pub fn with_proxy(mut self, proxy: ProxyRoute) -> Self {
+        self.proxy = Some(proxy);
+        self
     }
 }
 
 impl<C: HttpClient> DispatchingHttpClient<C> {
+    fn route_request(
+        &self,
+        url: Url,
+        headers: &HeaderMap,
+    ) -> Result<(Url, HeaderMap), DispatchError<C::Error>> {
+        match &self.proxy {
+            Some(proxy) => Ok((
+                proxy
+                    .route(&url)
+                    .map_err(|_| DispatchError::InvalidProxyReference)?,
+                proxy.headers(headers),
+            )),
+            None => Ok((url, headers.clone())),
+        }
+    }
+
     /// A 401 to a request carrying `credentials` sets the endpoint's
     /// credential latch for them.
     async fn dispatch<T>(
@@ -765,12 +804,19 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch_read(credentials, || {
             self.inner.get(
                 url.clone(),
                 credentials,
                 etag.clone(),
-                custom_headers,
+                &custom_headers,
                 repair,
             )
         })
@@ -786,8 +832,15 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch_read(credentials, || {
-            self.inner.poll(url.clone(), credentials, custom_headers)
+            self.inner.poll(url.clone(), credentials, &custom_headers)
         })
         .await
     }
@@ -803,9 +856,16 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch(
             Some(credentials),
-            self.inner.post(url, body, credentials, custom_headers),
+            self.inner.post(url, body, credentials, &custom_headers),
         )
         .await
     }
@@ -820,7 +880,8 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
-        self.dispatch(None, self.inner.post_session(url, body, custom_headers))
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        self.dispatch(None, self.inner.post_session(url, body, &custom_headers))
             .await
     }
 
@@ -836,10 +897,17 @@ where
         T: DeserializeOwned + Send + Sync,
         V: Serialize + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch(
             Some(credentials),
             self.inner
-                .post_multipart_update(url, request, credentials, custom_headers),
+                .post_multipart_update(url, request, credentials, &custom_headers),
         )
         .await
     }
@@ -855,10 +923,17 @@ where
         U: UploadReader,
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch(
             Some(credentials),
             self.inner
-                .post_http_push_uri_update(url, request, credentials, custom_headers),
+                .post_http_push_uri_update(url, request, credentials, &custom_headers),
         )
         .await
     }
@@ -875,10 +950,17 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch(
             Some(credentials),
             self.inner
-                .patch(url, etag, body, credentials, custom_headers),
+                .patch(url, etag, body, credentials, &custom_headers),
         )
         .await
     }
@@ -892,9 +974,16 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let (url, custom_headers) = self.route_request(url, custom_headers)?;
+        let anonymous = BmcCredentials::anonymous();
+        let credentials = if self.proxy.is_some() {
+            &anonymous
+        } else {
+            credentials
+        };
         self.dispatch(
             Some(credentials),
-            self.inner.delete(url, credentials, custom_headers),
+            self.inner.delete(url, credentials, &custom_headers),
         )
         .await
     }
