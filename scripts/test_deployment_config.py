@@ -53,7 +53,8 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             "endpointSource.nico.apiUrl": "https://nico.example.com/v2",
             "endpointSource.nico.org": "example-org",
             "endpointSource.nico.siteId": "00000000-0000-0000-0000-000000000001",
-            "endpointSource.nico.tokenSecretName": "nico-access-token",
+            "endpointSource.nico.credentialsSecretName": "nico-ssa-credentials",
+            "endpointSource.nico.tokenUrl": "https://ssa.example.com/token",
             "endpointSource.nico.credentialsProfile": "bmc",
             "nicoHardwareHealth.enabled": False,
             "otelGateway.enabled": False,
@@ -63,13 +64,14 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             command.extend(["--set-json", f"{key}={json.dumps(value)}"])
         return subprocess.run(command, capture_output=True, text=True)
 
-    def test_discovery_mounts_token_file_and_generates_collector_config(self):
-        result = self.render(**{"endpointSource.nico.tokenSecretKey": "token"})
+    def test_discovery_mounts_ssa_credentials_and_generates_collector_config(self):
+        result = self.render()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.count("kind: Deployment"), 1)
-        self.assertIn('secretName: "nico-access-token"', result.stdout)
-        self.assertRegex(result.stdout, r'key: "token"\s+path: access-token')
-        self.assertIn("mountPath: /run/secrets/nico-rest", result.stdout)
+        self.assertIn('secretName: "nico-ssa-credentials"', result.stdout)
+        self.assertRegex(result.stdout, r'key: client_id\s+path: client_id')
+        self.assertRegex(result.stdout, r'key: client_secret\s+path: client_secret')
+        self.assertIn("mountPath: /run/secrets/nico-ssa", result.stdout)
         self.assertNotIn("subPath:", result.stdout)
         contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
         config = tomllib.loads(textwrap.dedent(contents))
@@ -77,14 +79,16 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         self.assertEqual(config["endpoint_source"], {
             "type": "nico", "api_url": "https://nico.example.com/v2", "org": "example-org",
             "site_id": "00000000-0000-0000-0000-000000000001", "api_name": "nico",
-            "credentials_profile": "bmc", "token_file": "/run/secrets/nico-rest/access-token",
+            "credentials_profile": "bmc", "token_url": "https://ssa.example.com/token",
+            "client_id_file": "/run/secrets/nico-ssa/client_id",
+            "client_secret_file": "/run/secrets/nico-ssa/client_secret",
             "timeout_seconds": 30,
         })
         # Discovery changes no Redfish authentication or transport settings.
         self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
 
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
-        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "siteId", "tokenSecretName")]
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "siteId", "tokenUrl", "credentialsSecretName")]
         cases.extend([
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
             {"nicoHardwareHealth.enabled": True},

@@ -45,12 +45,11 @@
             "credentialsProfile": {
               "type": "string"
             },
-            "tokenSecretName": {
+            "credentialsSecretName": {
               "type": "string"
             },
-            "tokenSecretKey": {
-              "type": "string",
-              "minLength": 1
+            "tokenUrl": {
+              "type": "string"
             },
             "apiName": {
               "type": "string",

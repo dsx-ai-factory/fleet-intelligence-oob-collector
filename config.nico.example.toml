@@ -14,8 +14,10 @@ type = "nico"
 api_url = "https://nico.example.com/v2"
 org = "example-org"
 site_id = "00000000-0000-0000-0000-000000000001"
-# File containing only a bearer access token; refresh it externally.
-token_file = "nico-access-token"
+# VSO keeps the SSA client credentials current in these mounted files.
+token_url = "https://ssa.example.com/token"
+client_id_file = "nico-ssa/client_id"
+client_secret_file = "nico-ssa/client_secret"
 # Default: nico. Use carbide for deployments with the legacy REST route.
 api_name = "nico"
 # Shared BMC credentials, not NICo REST credentials.
