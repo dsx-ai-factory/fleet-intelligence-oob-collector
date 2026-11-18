@@ -73,9 +73,11 @@ The JSON output includes IP, MAC, hostname, kind, compute zone, and node group. 
 
 The collector first lists sites with `/v2/org/{org}/nico/site`, then lists machines for each returned site with `/v2/org/{org}/nico/machine?siteId={id}&includeMetadata=true`. There is no configured site ID; access is scoped by the organization and OAuth2 identity. Each NICo site represents an FI node group.
 
-Every machine inherits `node_group` from its site's trimmed name. Its `compute_zone` combines the site's country, state, and city in that order, lowercases the text, replaces runs of punctuation or whitespace with a hyphen, and omits missing components. For example, `USA`, `AZ`, and `Phoenix` become `usa-az-phoenix`. Sites at the same location share a compute zone. Renaming a site changes its machines' node group on the next successful discovery.
+Explicitly configured `inventory.nodeGroup` and `inventory.computeZone` (TOML `node_group` and `compute_zone`) take precedence over site information, independently for each field. The overrides apply to every discovered machine and appear in `discover` output as well as collected inventory.
 
-A site with no usable location leaves the endpoint's compute zone unset; `inventory.computeZone` (TOML `compute_zone`) supplies the fallback if configured. Site-derived placement takes precedence over global defaults. A site with an empty ID or name fails discovery. Sites with no machines are allowed, but an entirely empty usable target snapshot is rejected.
+When node group is not configured, every machine inherits `node_group` from its site's trimmed name. When compute zone is not configured, `compute_zone` combines the site's country, state, and city in that order, lowercases the text, replaces runs of punctuation or whitespace with a hyphen, and omits missing components. For example, `USA`, `AZ`, and `Phoenix` become `usa-az-phoenix`. Sites at the same location share a compute zone. Renaming a site changes its machines' derived node group on the next successful discovery.
+
+A site with no usable location leaves compute zone unset unless you configure it explicitly. A site with an empty ID or name fails discovery. Sites with no machines are allowed, but an entirely empty usable target snapshot is rejected.
 
 The runtime discovers targets when each collection cycle loads its configuration. Inventory and attestation share that target list. There is no separate refresh loop or cached target fallback. A discovery failure aborts the cycle; at startup it exits the process, allowing Kubernetes to restart it.
 

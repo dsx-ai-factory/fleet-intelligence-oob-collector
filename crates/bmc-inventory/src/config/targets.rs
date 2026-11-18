@@ -340,7 +340,12 @@ impl ParsedConfig {
         match self.source {
             SourceSelection::Nico(config) => Ok(SourceConfig {
                 source: Box::new(
-                    NicoRestEndpointSource::new(config).map_err(|error| error as Box<dyn Error>)?,
+                    NicoRestEndpointSource::new(config)
+                        .map_err(|error| error as Box<dyn Error>)?
+                        .with_placement_overrides(
+                            self.settings.defaults.compute_zone.clone(),
+                            self.settings.defaults.node_group.clone(),
+                        ),
                 ),
                 settings: self.settings,
             }),

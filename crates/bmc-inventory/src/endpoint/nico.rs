@@ -60,6 +60,8 @@ pub struct NicoRestEndpointSource {
     token_url: Url,
     client: reqwest::Client,
     timeout: Duration,
+    compute_zone_override: Option<String>,
+    node_group_override: Option<String>,
 }
 
 impl NicoRestEndpointSource {
@@ -128,7 +130,20 @@ impl NicoRestEndpointSource {
             token_url,
             client,
             timeout,
+            compute_zone_override: None,
+            node_group_override: None,
         })
+    }
+
+    // Shared configuration validates and normalizes these values before use.
+    pub(crate) fn with_placement_overrides(
+        mut self,
+        compute_zone: Option<String>,
+        node_group: Option<String>,
+    ) -> Self {
+        self.compute_zone_override = compute_zone;
+        self.node_group_override = node_group;
+        self
     }
 
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
@@ -268,7 +283,14 @@ impl NicoRestEndpointSource {
                     ],
                 )
                 .await?;
-            let compute_zone = site.compute_zone();
+            let compute_zone = self
+                .compute_zone_override
+                .clone()
+                .or_else(|| site.compute_zone());
+            let node_group = self
+                .node_group_override
+                .clone()
+                .unwrap_or_else(|| site.name.trim().to_string());
             for machine in machines {
                 let machine_id = super::safe_source_reference(&machine.id);
                 if machine.site_id != site.id || machine.id.trim().is_empty() {
@@ -291,7 +313,7 @@ impl NicoRestEndpointSource {
                         continue;
                     }
                 };
-                endpoint.node_group = Some(site.name.trim().to_string());
+                endpoint.node_group = Some(node_group.clone());
                 endpoint.compute_zone = compute_zone.clone();
                 if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
                     return Err(format!(
@@ -772,6 +794,27 @@ mod tests {
                     .to_lowercase()
                     .contains("authorization: bearer fixture-token")
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_placement_overrides_site_fields_independently_in_discovery_output() {
+        for (zone, group) in [
+            (None, None),
+            (Some("configured-zone"), None),
+            (None, Some("configured-group")),
+            (Some("configured-zone"), Some("configured-group")),
+        ] {
+            let (source, _files, server) = fixture(vec![page(1, 1, vec![machine(0)])]).await;
+            let source = source
+                .with_placement_overrides(zone.map(str::to_string), group.map(str::to_string));
+            let endpoints = source.discover().await.unwrap();
+            let mut output = Vec::new();
+            super::super::write_discovery_json(&endpoints, &mut output).unwrap();
+            let rows: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(rows[0]["compute_zone"], zone.unwrap_or("usa-az-phoenix"));
+            assert_eq!(rows[0]["node_group"], group.unwrap_or("test-cluster"));
+            server.await.unwrap();
         }
     }
 
