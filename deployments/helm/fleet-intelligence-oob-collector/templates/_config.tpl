@@ -24,10 +24,10 @@ type = "nico"
 api_url = {{ required "endpointSource.nico.apiUrl is required" .Values.endpointSource.nico.apiUrl | toJson }}
 org = {{ required "endpointSource.nico.org is required" .Values.endpointSource.nico.org | toJson }}
 site_id = {{ required "endpointSource.nico.siteId is required" .Values.endpointSource.nico.siteId | toJson }}
-api_name = {{ .Values.endpointSource.nico.apiName | toJson }}
 token_url = {{ required "endpointSource.nico.tokenUrl is required" .Values.endpointSource.nico.tokenUrl | toJson }}
-client_id_file = "/run/secrets/nico-ssa/client_id"
-client_secret_file = "/run/secrets/nico-ssa/client_secret"
+client_id_file = "/run/secrets/nico-oauth2/client_id"
+client_secret_file = "/run/secrets/nico-oauth2/client_secret"
+scopes = {{ .Values.endpointSource.nico.scopes | toJson }}
 timeout_seconds = {{ .Values.endpointSource.nico.timeoutSeconds }}
 {{ with .Values.endpointSource.nico.credentialsProfile }}credentials_profile = {{ . | toJson }}
 {{ end }}{{ end }}

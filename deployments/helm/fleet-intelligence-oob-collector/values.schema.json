@@ -45,18 +45,15 @@
             "credentialsProfile": {
               "type": "string"
             },
-            "credentialsSecretName": {
+            "oauth2CredentialsSecretName": {
               "type": "string"
             },
             "tokenUrl": {
               "type": "string"
             },
-            "apiName": {
-              "type": "string",
-              "enum": [
-                "nico",
-                "carbide"
-              ]
+            "scopes": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1}
             },
             "timeoutSeconds": {
               "type": "integer",

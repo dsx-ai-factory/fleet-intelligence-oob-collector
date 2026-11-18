@@ -14,17 +14,17 @@ inventory:
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.
 
-# Target source; NICo REST uses OAuth2 with VSO-managed SSA client credentials.
+# Target source; NICo REST uses mounted OAuth2 client credentials.
 endpointSource:
   type: static # static | nico
   nico:
     apiUrl: "" # HTTPS REST prefix, including /v2.
     org: ""
     siteId: ""
-    apiName: nico # Use carbide for deployments with the legacy REST route.
     credentialsProfile: "" # Existing shared BMC credential profile.
-    tokenUrl: "" # DSX SSA OAuth2 token endpoint.
-    credentialsSecretName: "" # Keys: client_id and client_secret.
+    tokenUrl: "" # OAuth2 token endpoint.
+    oauth2CredentialsSecretName: "" # Keys: client_id and client_secret.
+    scopes: [] # Scopes required by the configured identity provider.
     timeoutSeconds: 30
 
 # Shared BMC JSON file; credential values belong in the Secret.
