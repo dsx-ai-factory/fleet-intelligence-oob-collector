@@ -27,6 +27,7 @@ const REDACTED_URL: &str = "[URL_REDACTED]";
 const URL_SCHEMES: &[&str] = &["https://", "http://", "ftps://", "ftp://", "file://", "//"];
 
 /// Format a BMC's IP and effective port without URL credentials, paths, or queries.
+/// Explicit ports win; `default_port` applies only when the input omits a port.
 /// Hostnames and malformed addresses remain unavailable; this never resolves DNS.
 pub fn bmc_log_address(address: &str, default_port: u16) -> String {
     let socket = address
@@ -40,6 +41,21 @@ pub fn bmc_log_address(address: &str, default_port: u16) -> String {
                 .map(|ip| SocketAddr::new(ip, default_port))
         })
         .or_else(|| {
+            // Url::port() removes explicit scheme defaults (:80/:443). Read the
+            // original authority first, excluding userinfo and all path/query data.
+            let authority = address
+                .split_once("://")?
+                .1
+                .split(['/', '?', '#', '\\'])
+                .next()?
+                .rsplit('@')
+                .next()?;
+            let explicit_port = authority
+                .rsplit_once(':')
+                .filter(|(_, port)| !port.is_empty() && !port.ends_with(']'))
+                .map(|(_, port)| port.trim().parse::<u16>())
+                .transpose()
+                .ok()?;
             let url = Url::parse(address).ok()?;
             if !matches!(url.scheme(), "http" | "https") {
                 return None;
@@ -49,7 +65,10 @@ pub fn bmc_log_address(address: &str, default_port: u16) -> String {
                 url::Host::Ipv6(ip) => IpAddr::V6(ip),
                 url::Host::Domain(_) => return None,
             };
-            Some(SocketAddr::new(ip, url.port().unwrap_or(default_port)))
+            Some(SocketAddr::new(
+                ip,
+                explicit_port.or(url.port()).unwrap_or(default_port),
+            ))
         });
     socket
         .map(|socket| socket.to_string())
@@ -244,6 +263,18 @@ mod tests {
     #[test]
     fn endpoint_logs_share_ip_port_and_redaction_policy() {
         for (address, port, expected) in [
+            ("http://192.0.2.10:80", 443, "192.0.2.10:80"),
+            ("https://192.0.2.10:443", 8443, "192.0.2.10:443"),
+            ("http://[2001:db8::10]:80", 443, "[2001:db8::10]:80"),
+            ("https://[2001:db8::10]:443", 8443, "[2001:db8::10]:443"),
+            ("http://192.0.2.10", 8443, "192.0.2.10:8443"),
+            ("https://192.0.2.10", 9443, "192.0.2.10:9443"),
+            ("https://[2001:db8::10]", 8443, "[2001:db8::10]:8443"),
+            (
+                "http://user:99@192.0.2.10:80/path?token=443",
+                443,
+                "192.0.2.10:80",
+            ),
             ("192.0.2.10", 443, "192.0.2.10:443"),
             ("192.0.2.10", 8443, "192.0.2.10:8443"),
             ("192.0.2.10:9443", 8443, "192.0.2.10:9443"),
