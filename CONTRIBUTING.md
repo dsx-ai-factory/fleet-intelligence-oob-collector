@@ -135,6 +135,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 
 | Command | What it does |
 | --- | --- |
+| `discover` | Lists endpoints from the configured source without reading BMC passwords or querying hardware. |
 | `inventory` | Collects once and prints a table. Add `--format json` for JSON or `--detail` for more columns. |
 | `run` | Enrolls with Fleet Intelligence, then collects and uploads inventory and attestation on a schedule. |
 | `render-nico-config --output nico.toml` | Generates NICo configuration that references the credentials file without copying passwords. The Helm chart runs it in NICo's init container. |

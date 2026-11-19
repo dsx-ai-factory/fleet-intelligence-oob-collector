@@ -14,6 +14,18 @@ inventory:
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.
 
+# Target source; NICo REST uses mounted OAuth2 client credentials.
+endpointSource:
+  type: static # static | nico
+  nico:
+    apiUrl: "" # HTTPS REST prefix, including /v2.
+    org: ""
+    credentialsProfile: "" # Required for NICo: existing shared BMC credential profile.
+    tokenUrl: "" # OAuth2 token endpoint.
+    oauth2CredentialsSecretName: "" # Keys: client_id and client_secret.
+    scopes: [] # Scopes required by the configured identity provider.
+    timeoutSeconds: 30
+
 # Shared BMC JSON file; credential values belong in the Secret.
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials

@@ -18,6 +18,8 @@ use mac_address::MacAddress;
 
 use crate::models::TargetKind;
 
+pub mod nico;
+
 /// Credential-free BMC connection and placement information. The BMC MAC remains
 /// the Fleet Intelligence identity, regardless of where the endpoint came from.
 #[derive(Clone, Debug)]
@@ -87,4 +89,44 @@ impl EndpointSource for StaticEndpointSource {
     async fn discover(&self) -> Result<EndpointSnapshot, EndpointSourceError> {
         Ok(self.endpoints.clone())
     }
+}
+
+/// Write the credential-free source listing for discovery diagnostics.
+/// Shared labels/defaults and BMC credential resolution have not run yet.
+pub fn write_discovery_json(
+    endpoints: &[Endpoint],
+    mut output: impl std::io::Write,
+) -> Result<(), Box<dyn Error>> {
+    let records: Vec<_> = endpoints
+        .iter()
+        .map(|endpoint| {
+            serde_json::json!({
+                "ip": endpoint.ip,
+                "mac": endpoint.mac.to_string().to_uppercase(),
+                "name": endpoint.name,
+                "kind": endpoint.kind,
+                "compute_zone": endpoint.compute_zone,
+                "node_group": endpoint.node_group,
+                "labels": endpoint.labels,
+                "credentials_profile": endpoint.credentials_profile,
+            })
+        })
+        .collect();
+    serde_json::to_writer_pretty(&mut output, &records)?;
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+// Bound and sanitize provider identifiers before including them in diagnostics.
+pub(crate) fn safe_source_reference(id: &str) -> String {
+    id.chars()
+        .take(128)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.:".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

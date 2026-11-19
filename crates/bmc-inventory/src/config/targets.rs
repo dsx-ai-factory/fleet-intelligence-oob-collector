@@ -24,6 +24,7 @@ use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::{NicoHealthSettings, TargetKind};
+use crate::endpoint::nico::{NicoRestConfig, NicoRestEndpointSource};
 use crate::endpoint::{Endpoint, EndpointSource, StaticEndpointSource};
 
 const MAX_NICO_LABELS: usize = 32;
@@ -75,6 +76,12 @@ pub struct CollectorConfig {
     pub targets: Vec<Target>,
     pub credentials_file: PathBuf,
     pub nico_health: NicoHealthSettings,
+}
+
+/// Selected endpoint source paired with shared settings, before discovery.
+pub struct SourceConfig {
+    pub source: Box<dyn EndpointSource>,
+    pub settings: EndpointConfig,
 }
 
 /// Static endpoint definitions paired with provider-independent settings.
@@ -185,6 +192,16 @@ struct Config {
     credentials: CredentialsConfig,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
+    #[serde(default)]
+    endpoint_source: SourceSelection,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum SourceSelection {
+    #[default]
+    Static,
+    Nico(NicoRestConfig),
 }
 
 #[derive(Deserialize)]
@@ -213,6 +230,12 @@ struct RawTargetConfig {
     credentials_profile: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
+}
+
+/// Load the selected source without resolving BMC credentials or contacting it.
+pub async fn load_source_config(path: &str) -> Result<SourceConfig, Box<dyn Error>> {
+    let contents = tokio::fs::read_to_string(path).await?;
+    parse_config_parts(&contents, path)?.into_source()
 }
 
 /// Read shared settings without requiring or constructing static targets.
@@ -257,7 +280,16 @@ pub fn load_target_credentials(
 /// credentials-file-before-target-validation error precedence.
 pub async fn load_config_async(path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let contents = tokio::fs::read_to_string(path).await?;
-    let parsed = parse_static_parts(&contents, path)?;
+    let raw = parse_raw_config(&contents, path)?;
+    if !matches!(raw.endpoint_source, SourceSelection::Static) {
+        let selected = prepare_config(raw, path)?.into_source()?;
+        return selected
+            .settings
+            .resolve_from(selected.source.as_ref())
+            .await;
+    }
+    require_static_targets(&raw, path)?;
+    let parsed = prepare_config(raw, path)?;
     let credentials = SharedCredentials::load_async(&parsed.settings.credentials_file).await?;
     let config = parsed.into_static()?;
     let endpoints = config
@@ -284,17 +316,52 @@ fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<d
 struct ParsedConfig {
     targets: Vec<RawTargetConfig>,
     settings: EndpointConfig,
+    source: SourceSelection,
 }
 
 fn parse_static_parts(contents: &str, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
     let config = parse_raw_config(contents, path)?;
-    if config.targets.is_empty() {
-        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
-    }
+    require_static_targets(&config, path)?;
     prepare_config(config, path)
 }
 
+fn require_static_targets(config: &Config, path: &str) -> Result<(), Box<dyn Error>> {
+    if !matches!(config.endpoint_source, SourceSelection::Static) {
+        return Err("this configuration tool supports static targets only; use the collector or discover command for NICo REST".into());
+    }
+    if config.targets.is_empty() {
+        return Err(format!("no BMC targets found in {path}; configure [[targets]]").into());
+    }
+    Ok(())
+}
+
 impl ParsedConfig {
+    fn into_source(self) -> Result<SourceConfig, Box<dyn Error>> {
+        match self.source {
+            SourceSelection::Nico(config) => Ok(SourceConfig {
+                source: Box::new(
+                    NicoRestEndpointSource::new(config)
+                        .map_err(|error| error as Box<dyn Error>)?
+                        .with_placement_overrides(
+                            self.settings.defaults.compute_zone.clone(),
+                            self.settings.defaults.node_group.clone(),
+                        ),
+                ),
+                settings: self.settings,
+            }),
+            SourceSelection::Static => {
+                if self.targets.is_empty() {
+                    return Err("no BMC targets found; configure [[targets]] for the static endpoint source".into());
+                }
+                let config = self.into_static()?;
+                Ok(SourceConfig {
+                    source: Box::new(config.source),
+                    settings: config.settings,
+                })
+            }
+        }
+    }
+
     fn into_static(self) -> Result<StaticConfig, Box<dyn Error>> {
         let endpoints = self
             .targets
@@ -321,7 +388,10 @@ fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>
     })
 }
 
-fn prepare_config(config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
+fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
+    if matches!(config.endpoint_source, SourceSelection::Nico(_)) && !config.targets.is_empty() {
+        return Err("NICo REST endpoint_source cannot be combined with [[targets]]".into());
+    }
     config.nico_health.validate()?;
     validate_nico_labels("labels", &config.labels)?;
     let defaults = EndpointDefaults {
@@ -330,10 +400,19 @@ fn prepare_config(config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Er
         labels: config.labels,
     };
     let config_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    if let SourceSelection::Nico(source) = &mut config.endpoint_source {
+        for path in [&mut source.client_id_file, &mut source.client_secret_file] {
+            if path.as_os_str().is_empty() {
+                return Err("OAuth2 client credential paths must not be empty".into());
+            }
+            *path = std::path::absolute(config_dir.join(&*path))?;
+        }
+    }
     // Keep symlinks intact so atomic credential-file replacement still works.
     let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
     Ok(ParsedConfig {
         targets: config.targets,
+        source: config.endpoint_source,
         settings: EndpointConfig {
             credentials_file,
             nico_health: config.nico_health,
@@ -451,7 +530,7 @@ fn validate_nico_labels(
     Ok(())
 }
 
-fn normalize_config_value(
+pub(crate) fn normalize_config_value(
     context: &str,
     value: Option<String>,
 ) -> Result<Option<String>, Box<dyn Error>> {
@@ -1416,6 +1495,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn newly_discovered_macs_resolve_through_the_shared_profile_with_overrides_preserved() {
+        let credentials_path = write_credential(
+            "newly-discovered-profile",
+            r#"{
+            "profiles":{"bmc":{"username":"fixture-user","password":"fixture-password"}},
+            "overrides":{"00:11:22:33:44:55":{"username":"override-user"}}
+        }"#,
+        );
+        let _cleanup = TestFileCleanup(credentials_path.clone());
+        let contents = format!(
+            "[credentials]\nfile={:?}",
+            credentials_path.to_str().unwrap()
+        );
+        let config = parse_config_parts(&contents, "config.toml")
+            .unwrap()
+            .settings;
+        let existing = provider_endpoint();
+        let mut newly_discovered = existing.clone();
+        newly_discovered.mac = "00:11:22:33:44:56".parse().unwrap();
+        newly_discovered.ip = "192.0.2.2".parse().unwrap();
+        let resolved = config
+            .resolve_from(&ProviderSource(vec![existing, newly_discovered].into()))
+            .await
+            .unwrap();
+        assert_eq!(resolved.targets.len(), 2);
+        assert_eq!(resolved.targets[0].username, "override-user");
+        assert_eq!(resolved.targets[1].username, "fixture-user");
+        assert_eq!(resolved.targets[1].password, "fixture-password");
+    }
+
+    #[tokio::test]
     async fn provider_only_config_applies_shared_settings_and_finalization() {
         let contents = with_test_credentials(
             r#"
@@ -1620,6 +1730,114 @@ mod tests {
             );
             assert_eq!(async_error, sync_error);
         }
+    }
+
+    #[tokio::test]
+    async fn nico_selection_roots_client_credential_paths_and_needs_no_static_targets_or_bmc_passwords_for_discovery()
+     {
+        let directory =
+            std::env::temp_dir().join(format!("fleetint-nico-config-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let _cleanup = TestDirectoryCleanup(directory.clone());
+        let path = directory.join("config.toml");
+        let input = r#"
+            compute_zone = "zone"
+            [credentials]
+            file = "missing-bmc-credentials.json"
+            [endpoint_source]
+            type = "nico"
+            api_url = "https://nico.example.com/v2"
+            org = "example"
+            token_url = "https://idp.example.com/token"
+            client_id_file = "client_id"
+            client_secret_file = "client_secret"
+            credentials_profile = "bmc"
+        "#;
+        std::fs::write(&path, input).unwrap();
+        // An invalid client ID proves the rooted credential file was read. No request is
+        // sent and the nonexistent BMC credential file must not be consulted.
+        std::fs::write(directory.join("client_id"), "invalid\nheader-value").unwrap();
+        let path = path.to_str().unwrap();
+        let parsed = parse_config_parts(input, path).unwrap();
+        let SourceSelection::Nico(config) = parsed.source else {
+            panic!("NICo source not selected")
+        };
+        assert_eq!(config.client_id_file, directory.join("client_id"));
+        assert_eq!(config.client_secret_file, directory.join("client_secret"));
+        let selected = load_source_config(path).await.unwrap();
+        assert_eq!(
+            selected.settings.defaults.compute_zone.as_deref(),
+            Some("zone")
+        );
+        let discovery_error = selected.source.discover().await.unwrap_err().to_string();
+        assert!(discovery_error.contains("OAuth2 client credential files"));
+        assert!(!discovery_error.contains("header-value"));
+        let runtime_error = load_config_async(path).await.unwrap_err().to_string();
+        assert_eq!(runtime_error, discovery_error);
+        assert!(
+            load_config(path)
+                .unwrap_err()
+                .to_string()
+                .contains("supports static targets only")
+        );
+    }
+
+    #[tokio::test]
+    async fn source_selection_keeps_static_default_and_rejects_ambiguous_or_unknown_config() {
+        let contents = with_test_credentials(
+            "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'",
+        );
+        let path = write_config("selected-static", &contents);
+        let _cleanup = TestFileCleanup(path.clone());
+        let selected = load_source_config(path.to_str().unwrap()).await.unwrap();
+        let snapshot = selected.source.discover().await.unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].mac.to_string(), "00:11:22:33:44:55");
+        let resolved = load_config_async(path.to_str().unwrap()).await.unwrap();
+        assert_eq!(resolved.targets[0].username, "admin");
+        let explicit_static = format!("{contents}\n[endpoint_source]\ntype='static'\n");
+        std::fs::write(&path, explicit_static).unwrap();
+        assert_eq!(
+            load_config_async(path.to_str().unwrap())
+                .await
+                .unwrap()
+                .targets
+                .len(),
+            1
+        );
+        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
+        let mixed = format!("{nico}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'");
+        assert!(
+            parse_config_parts(&mixed, "config.toml")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("cannot be combined")
+        );
+        for invalid in [
+            nico.replace("type='nico'", "type='netbox'"),
+            nico.replace(
+                "token_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'",
+                "token_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\npassword='private-value'",
+            ),
+            nico.replace("client_id_file='client_id'", "client_id_file=''"),
+        ] {
+            let error = parse_config_parts(&invalid, "config.toml")
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(!error.contains("private-value"));
+        }
+        let invalid = nico.replace("https://nico.example.com/v2", "http://nico.example.com/v2");
+        assert!(
+            parse_config_parts(&invalid, "config.toml")
+                .unwrap()
+                .into_source()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("HTTPS")
+        );
     }
 
     struct TestDirectoryCleanup(PathBuf);

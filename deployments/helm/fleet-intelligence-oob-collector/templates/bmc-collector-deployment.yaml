@@ -99,6 +99,11 @@ spec:
             - name: hardware-config
               mountPath: /etc/fleet-intelligence
               readOnly: true
+            {{- if eq (default dict .Values.endpointSource).type "nico" }}
+            - name: nico-oauth2-credentials
+              mountPath: /run/secrets/nico-oauth2
+              readOnly: true
+            {{- end }}
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
@@ -110,6 +115,17 @@ spec:
               - key: collector.toml
                 path: config.toml
                 mode: 0440
+        {{- if eq (default dict .Values.endpointSource).type "nico" }}
+        - name: nico-oauth2-credentials
+          secret:
+            secretName: {{ required "endpointSource.nico.oauth2CredentialsSecretName is required" .Values.endpointSource.nico.oauth2CredentialsSecretName | quote }}
+            defaultMode: 0440
+            items:
+              - key: client_id
+                path: client_id
+              - key: client_secret
+                path: client_secret
+        {{- end }}
         - name: bmc-credentials
           secret:
             secretName: {{ .Values.credentials.existingSecret | quote }}
