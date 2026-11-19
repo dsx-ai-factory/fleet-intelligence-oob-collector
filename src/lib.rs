@@ -19,6 +19,7 @@ mod backend;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ use bmc_inventory::sink::{
 use bmc_inventory::source::{InventorySource, LatencyProbe, RedfishSource, TcpProbeConfig};
 use futures::stream::{self, Stream, StreamExt};
 use tokio::sync::watch;
+use tracing::Instrument;
 
 use backend::{BackendEndpoints, BackendSession, is_auth_failure, required_backend_option};
 
@@ -284,6 +286,7 @@ async fn run_runtime_until_shutdown(
         };
         if let Err(err) = cycle.await {
             tracing::error!(
+                phase = "cycle", operation = "collection", outcome = "failed",
                 next_attempt_seconds = interval.as_secs(),
                 error = %err,
                 "collection cycle failed"
@@ -365,6 +368,7 @@ async fn run_collection_cycle(
             "inventory backend sync completed"
         ),
         Err(err) => tracing::error!(
+            phase = "inventory", operation = "upload", outcome = "failed",
             elapsed_seconds = started_at.elapsed().as_secs_f64(),
             error = %err,
             "inventory backend sync failed; attempting attestation for configured sources"
@@ -526,7 +530,10 @@ async fn collect_and_upload_attestation(
     if let Some(retry_delay) = retry_delay
         && !outcome.retry_bmc_macs.is_empty()
     {
-        tracing::info!(
+        tracing::warn!(
+            phase = "attestation",
+            operation = "retry",
+            outcome = "scheduled",
             target_count = outcome.retry_bmc_macs.len(),
             retry_delay_seconds = retry_delay.as_secs(),
             "retrying failed attestation targets after a delay"
@@ -552,6 +559,8 @@ async fn collect_and_upload_attestation(
                     }
                     Err(_) => tracing::warn!(
                         bmc_mac = %target.bmc_mac,
+                        bmc_address = %bmc_log_address(&target.address),
+                        phase = "attestation", operation = "credentials", outcome = "failed",
                         "failed to reload BMC credentials; retrying with this cycle's credentials"
                     ),
                 }
@@ -666,28 +675,56 @@ async fn upload_attestation_batches(
                     );
                 }
                 for (bmc_mac, outcome) in outcome.targets {
+                    let record = batch.results_by_bmc_mac.get(&bmc_mac);
+                    let bmc_address = record
+                        .map(|record| bmc_log_address(&record.bmc_address))
+                        .unwrap_or_else(|| "unavailable".to_string());
+                    let context = tracing::warn_span!(
+                        "bmc", phase = "attestation", operation = "upload", %bmc_mac, %bmc_address
+                    );
+                    let _entered = context.enter();
                     match outcome {
                         TargetUploadOutcome::Accepted => {
                             summary.accepted += 1;
-                            tracing::info!(%bmc_mac, "attestation target export accepted");
+                            tracing::info!(
+                                outcome = "accepted",
+                                collection_outcome = record.map(|record| {
+                                    if !record.success {
+                                        "failed"
+                                    } else if record.component_errors.is_empty() {
+                                        "succeeded"
+                                    } else {
+                                        "partial"
+                                    }
+                                }),
+                                evidence_count = record.map(|record| record.evidences.len()),
+                                component_error_count =
+                                    record.map(|record| record.component_errors.len()),
+                                "attestation target export accepted"
+                            );
                         }
                         TargetUploadOutcome::Rejected(status) => {
                             summary.rejected += 1;
-                            tracing::warn!(%bmc_mac, %status, "attestation target export rejected");
+                            tracing::warn!(outcome = "rejected", %status, "attestation target export rejected");
                         }
                         TargetUploadOutcome::Missing | TargetUploadOutcome::Duplicate => {
                             summary.unconfirmed += 1;
-                            tracing::warn!(%bmc_mac, reason = ?outcome, "attestation target export unconfirmed");
+                            tracing::warn!(outcome = "unconfirmed", reason = ?outcome, "attestation target export unconfirmed");
                         }
                     }
                 }
             }
             Err(err) => {
                 summary.unconfirmed += node_count;
-                for bmc_mac in batch.results_by_bmc_mac.keys() {
-                    tracing::warn!(%bmc_mac, error = %err, "attestation target export unconfirmed");
+                for (bmc_mac, record) in &batch.results_by_bmc_mac {
+                    tracing::warn!(
+                        phase = "attestation", operation = "upload", outcome = "unconfirmed",
+                        %bmc_mac, bmc_address = %bmc_log_address(&record.bmc_address),
+                        "attestation target export unconfirmed"
+                    );
                 }
                 tracing::error!(
+                    phase = "attestation", operation = "upload", outcome = "failed",
                     batch_index = index + 1,
                     batch_count,
                     node_count,
@@ -825,6 +862,9 @@ async fn collect_and_upload_inventory(
             upload_inventory_batch(&mut backend_sink, session, batch).await?;
         match upload_result {
             Ok(outcome) => {
+                for (index, inventory) in uploaded.iter().enumerate() {
+                    log_inventory_upload(inventory, outcome.item_outcome(index));
+                }
                 let outcomes = (0..uploaded.len()).map(|index| outcome.item_outcome(index));
                 let (accepted, failures) = partition_uploaded_inventory(uploaded, outcomes);
                 if accepted_uploads == 0 && accepted > 0 {
@@ -834,24 +874,6 @@ async fn collect_and_upload_inventory(
                     );
                 }
                 failed_uploads += failures.len();
-                for failure in &failures {
-                    match failure {
-                        InventoryUploadFailure::Rejected {
-                            mac,
-                            status,
-                            message,
-                        } => tracing::warn!(
-                            mac,
-                            status,
-                            message = message.as_deref().unwrap_or(""),
-                            "backend rejected inventory node"
-                        ),
-                        InventoryUploadFailure::MissingResult { mac } => tracing::warn!(
-                            mac,
-                            "backend returned success without a result row for inventory node"
-                        ),
-                    }
-                }
                 if !failures.is_empty() {
                     tracing::warn!(
                         exportable_count,
@@ -866,7 +888,16 @@ async fn collect_and_upload_inventory(
             }
             Err(err) => {
                 failed_uploads += exportable_count;
+                for inventory in &uploaded {
+                    tracing::warn!(
+                        phase = "inventory", operation = "upload", outcome = "unconfirmed",
+                        bmc_mac = %inventory.source.mac,
+                        bmc_address = %bmc_log_address(&inventory.source.address),
+                        "inventory target export unconfirmed"
+                    );
+                }
                 tracing::error!(
+                    phase = "inventory", operation = "upload", outcome = "failed",
                     exportable_count,
                     error = %err,
                     "inventory mini-batch export failed"
@@ -958,7 +989,10 @@ async fn collect_inventory_with_retry(
         return forward_held(held, &sender).await;
     }
 
-    tracing::info!(
+    tracing::warn!(
+        phase = "inventory",
+        operation = "retry",
+        outcome = "scheduled",
         target_count = held.len(),
         retry_delay_seconds = delay.as_secs(),
         "retrying failed inventory targets after a delay"
@@ -981,6 +1015,8 @@ async fn collect_inventory_with_retry(
                 }
                 Err(_) => tracing::warn!(
                     bmc_mac = %target.mac,
+                    bmc_address = %SocketAddr::new(target.ip, target.port.unwrap_or(443)),
+                    phase = "inventory", operation = "credentials", outcome = "failed",
                     "failed to reload BMC credentials; retrying with this cycle's credentials"
                 ),
             }
@@ -1050,7 +1086,7 @@ async fn forward_inventory(
                 None => break,
             },
         };
-        log_inventory_collection_errors(&inventory);
+        log_inventory_collection(&inventory);
         if hold(&inventory) {
             held.push(inventory);
             continue;
@@ -1071,24 +1107,86 @@ async fn forward_inventory(
     Ok(held)
 }
 
-/// Report collection errors before a retry can delay their upload. Only the
-/// configured MAC and sanitized model errors/references identify the failure.
-fn log_inventory_collection_errors(inventory: &NodeInventory) {
+/// Format only validated IP addresses and ports; never echo a raw URL into logs.
+fn bmc_log_address(address: &str) -> String {
+    address
+        .parse::<SocketAddr>()
+        .or_else(|_| {
+            address
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .map(|ip| SocketAddr::new(ip, attestation_config::defaults::DEFAULT_PORT))
+        })
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| "unavailable".to_string())
+}
+
+/// Report each collection result before a retry can delay its upload.
+fn log_inventory_collection(inventory: &NodeInventory) {
+    let bmc_address = bmc_log_address(&inventory.source.address);
+    let context = tracing::warn_span!(
+        "bmc",
+        phase = "inventory",
+        operation = "collection",
+        bmc_mac = %inventory.source.mac,
+        %bmc_address,
+    );
+    let _entered = context.enter();
     if let Some(error) = &inventory.target_error {
-        tracing::warn!(
-            bmc_mac = %inventory.source.mac,
-            error = %error,
-            "inventory target collection failed"
+        tracing::warn!(outcome = "failed", %error, "inventory target collection failed");
+    } else if inventory.domain_errors.is_empty() {
+        tracing::info!(
+            outcome = "succeeded",
+            system_count = inventory.systems.len(),
+            chassis_count = inventory.chassis.len(),
+            firmware_count = inventory.firmware.len(),
+            "inventory target collection succeeded"
         );
     }
     for error in &inventory.domain_errors {
         tracing::warn!(
-            bmc_mac = %inventory.source.mac,
+            outcome = "partial",
             domain = %error.domain,
             resource = error.resource.as_ref().map(|resource| resource.as_ref()),
             error = %error.message,
             "inventory domain collection failed"
         );
+    }
+}
+
+/// Distinguish upload acceptance from the collection outcome of an observation.
+fn log_inventory_upload(inventory: &NodeInventory, outcome: BackendNodeOutcome<'_>) {
+    let bmc_address = bmc_log_address(&inventory.source.address);
+    let context = tracing::warn_span!(
+        "bmc",
+        phase = "inventory",
+        operation = "upload",
+        bmc_mac = %inventory.source.mac,
+        %bmc_address,
+    );
+    let _entered = context.enter();
+    match outcome {
+        BackendNodeOutcome::Succeeded => tracing::info!(
+            outcome = "accepted",
+            collection_outcome = if inventory.target_error.is_some() {
+                "failed"
+            } else if inventory.domain_errors.is_empty() {
+                "succeeded"
+            } else {
+                "partial"
+            },
+            domain_error_count = inventory.domain_errors.len(),
+            "inventory target export accepted"
+        ),
+        BackendNodeOutcome::Rejected { status, .. } => tracing::warn!(
+            outcome = "rejected",
+            status,
+            "backend rejected inventory node"
+        ),
+        BackendNodeOutcome::Missing => tracing::warn!(
+            outcome = "unconfirmed",
+            "backend returned success without a result row for inventory node"
+        ),
     }
 }
 
@@ -1314,7 +1412,17 @@ fn inventory_collections<'a>(
     concurrency: usize,
     order: CollectionOrder,
 ) -> Pin<Box<dyn Stream<Item = NodeInventory> + Send + 'a>> {
-    let collections = stream::iter(targets).map(|target| source.collect(target));
+    let collections = stream::iter(targets).map(move |target| {
+        let context = tracing::warn_span!(
+            "bmc", phase = "inventory", operation = "collection",
+            bmc_mac = %target.mac,
+            bmc_address = %SocketAddr::new(target.ip, target.port.unwrap_or(attestation_config::defaults::DEFAULT_PORT)),
+        );
+        async move {
+            tracing::info!(outcome = "started", "inventory target collection started");
+            source.collect(target).await
+        }.instrument(context)
+    });
     match order {
         CollectionOrder::Configured => Box::pin(collections.buffered(concurrency)),
         CollectionOrder::Completion => Box::pin(collections.buffer_unordered(concurrency)),
@@ -1382,19 +1490,19 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let mut failed = inventory("https://example-user:example-password@bmc");
+            let mut failed = inventory("192.0.2.10:8443");
             failed.source.mac = format!("02:00:00:00:00:{index:02X}");
             failed.target_error = Some(message.into());
             inventories.push(failed);
         }
-        let mut partial = inventory("https://example-user:example-password@bmc");
+        let mut partial = inventory("192.0.2.10:8443");
         partial.domain_errors.push(DomainError {
             domain: "firmware".into(),
             resource: Some("https://bmc/redfish/v1/UpdateService?token=secret-token".into()),
             message: "HTTP 403 Forbidden for https://bmc/redfish?token=secret-token".into(),
         });
         inventories.push(partial);
-        inventories.push(inventory("https://bmc"));
+        inventories.push(inventory("[2001:db8::10]"));
         let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
         let (_signal, shutdown) = watch::channel(false);
         let held = forward_inventory(
@@ -1411,7 +1519,7 @@ mod tests {
         assert_eq!(receiver.try_recv().unwrap().domain_errors.len(), 1);
         assert!(receiver.try_recv().unwrap().domain_errors.is_empty());
         let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
-        assert_eq!(logs.lines().count(), 4, "{logs}");
+        assert_eq!(logs.lines().count(), 5, "{logs}");
         for (index, reason) in ["401 Unauthorized", "TLS certificate", "connection refused"]
             .into_iter()
             .enumerate()
@@ -1421,13 +1529,15 @@ mod tests {
                 line.contains(&format!("bmc_mac=02:00:00:00:00:{index:02X}")),
                 "{line}"
             );
+            assert!(line.contains("bmc_address=192.0.2.10:8443"), "{line}");
+            assert!(line.contains("phase=\"inventory\""), "{line}");
             assert!(line.contains(reason), "{line}");
             assert!(
                 line.contains("inventory target collection failed"),
                 "{line}"
             );
         }
-        let domain = logs.lines().last().unwrap();
+        let domain = logs.lines().nth(3).unwrap();
         assert!(
             domain.contains("inventory domain collection failed"),
             "{domain}"
@@ -1445,6 +1555,62 @@ mod tests {
             "https://",
         ] {
             assert!(!logs.contains(secret), "{logs}");
+        }
+    }
+
+    #[test]
+    fn endpoint_logs_preserve_identity_at_warn_and_separate_upload_acceptance() {
+        for level in [tracing::Level::INFO, tracing::Level::WARN] {
+            let logs = LogWriter::default();
+            let writer = logs.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_max_level(level)
+                .with_writer(move || writer.clone())
+                .finish();
+            let mut failed = inventory("[2001:db8::10]:8443");
+            failed.target_error = Some("connection refused".into());
+            tracing::subscriber::with_default(subscriber, || {
+                log_inventory_collection(&failed);
+                log_inventory_upload(&failed, BackendNodeOutcome::Succeeded);
+                log_inventory_upload(
+                    &failed,
+                    BackendNodeOutcome::Rejected {
+                        status: "CONFLICT",
+                        message: Some("https://user:secret@bmc/?token=private"),
+                    },
+                );
+            });
+            let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+            for line in logs.lines() {
+                assert!(line.contains("bmc_mac=00:11:22:33:44:55"), "{line}");
+                assert!(line.contains("bmc_address=[2001:db8::10]:8443"), "{line}");
+                assert!(line.contains("phase=\"inventory\""), "{line}");
+                assert!(!line.contains("secret"), "{line}");
+            }
+            assert!(logs.contains("outcome=\"failed\""), "{logs}");
+            assert!(logs.contains("outcome=\"rejected\""), "{logs}");
+            if level == tracing::Level::INFO {
+                assert!(logs.contains("collection_outcome=\"failed\""), "{logs}");
+                assert!(logs.contains("outcome=\"accepted\""), "{logs}");
+            } else {
+                assert!(!logs.contains("outcome=\"accepted\""), "{logs}");
+            }
+        }
+    }
+
+    #[test]
+    fn endpoint_log_addresses_include_effective_port_and_reject_urls() {
+        for (address, expected) in [
+            ("192.0.2.10", "192.0.2.10:443"),
+            ("192.0.2.10:8443", "192.0.2.10:8443"),
+            ("[2001:db8::10]", "[2001:db8::10]:443"),
+            ("[2001:db8::10]:8443", "[2001:db8::10]:8443"),
+            ("https://user:secret@192.0.2.10/path?token=x", "unavailable"),
+            ("invalid", "unavailable"),
+        ] {
+            assert_eq!(bmc_log_address(address), expected);
         }
     }
 

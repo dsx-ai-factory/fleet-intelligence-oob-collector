@@ -288,6 +288,10 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
         .find(|line| line.contains("inventory target collection failed"))
         .unwrap();
     assert!(failure.contains("bmc_mac=02:00:00:00:00:01"), "{logs}");
+    assert!(
+        failure.contains(&format!("bmc_address=127.0.0.1:{bmc_port}")),
+        "{logs}"
+    );
     assert!(failure.contains("error="), "{logs}");
     assert!(!logs.contains("first inventory upload accepted"), "{logs}");
     assert!(
@@ -591,6 +595,21 @@ async fn rejected_attestation_item_is_not_logged_as_successful_sync() {
         logs.contains("attestation target export rejected"),
         "{logs}"
     );
+    for message in [
+        "attestation target collection failed",
+        "attestation target export rejected",
+    ] {
+        let line = logs
+            .lines()
+            .find(|line| line.contains(message))
+            .expect(&logs);
+        assert!(line.contains("bmc_mac=02:00:00:00:00:01"), "{line}");
+        assert!(
+            line.contains(&format!("bmc_address=127.0.0.1:{bmc_port}")),
+            "{line}"
+        );
+        assert!(line.contains("phase=\"attestation\""), "{line}");
+    }
     assert!(
         !logs
             .lines()

@@ -412,7 +412,8 @@ impl CredentialLatch {
         {
             tracing::warn!(
                 endpoint = %self.endpoint_id,
-                "BMC rejected credentials; skipping its remaining requests with them until the next cycle"
+                outcome = "rejected", step = "authentication",
+                "BMC rejected credentials; remaining requests paused"
             );
         }
     }
