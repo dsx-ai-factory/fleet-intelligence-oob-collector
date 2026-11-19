@@ -7,7 +7,6 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use futures::FutureExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
@@ -302,7 +301,12 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
     );
     assert!(failure.contains("error="), "{logs}");
     assert!(!logs.contains("first inventory upload accepted"), "{logs}");
-    assert!(backend.accept().now_or_never().is_none());
+    assert!(
+        timeout(Duration::from_millis(250), backend.accept())
+            .await
+            .is_err(),
+        "inventory must remain held throughout the retry-wait observation window"
+    );
 
     runtime.signal("-TERM").await;
     let (mut upload, _) = accept_request(&backend).await;
@@ -524,22 +528,41 @@ async fn cycle_uses_one_target_and_credential_snapshot_without_inventory_uuid() 
 
 #[tokio::test]
 async fn inventory_reenrollment_failure_does_not_skip_attestation_for_existing_sources() {
-    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
-    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
-    let bmc_port = unavailable.local_addr().unwrap().port();
-    drop(unavailable);
-    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
-    let (mut enrollment, _) = accept_request(&backend).await;
-    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
-    let (mut inventory, request) = accept_request(&backend).await;
-    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
-    reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
-    let (mut reenrollment, request) = accept_request(&backend).await;
-    assert!(request.starts_with("POST /v1/agent/enroll "));
-    reply_status(&mut reenrollment, 503, r#"{"error":"unavailable"}"#).await;
-    // The nonce endpoint may still serve an enrolled source with the retained
-    // token. An inventory-phase error must not suppress the attempt.
-    finish_attestation(&backend, &mut runtime).await;
+    for status in [403, 503] {
+        let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+        let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+        let bmc_port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+        let (mut enrollment, _) = accept_request(&backend).await;
+        reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+        let (mut inventory, request) = accept_request(&backend).await;
+        assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+        reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
+        let (mut reenrollment, request) = accept_request(&backend).await;
+        assert!(request.starts_with("POST /v1/agent/enroll "));
+        reply_status(&mut reenrollment, status, r#"{"error":"unavailable"}"#).await;
+        // The nonce endpoint may still serve an enrolled source with the retained
+        // token. An inventory-phase error must not suppress the attempt.
+        finish_attestation(&backend, &mut runtime).await;
+        let mut logs = String::new();
+        runtime
+            .child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut logs)
+            .await
+            .unwrap();
+        let failure = logs
+            .lines()
+            .find(|line| line.contains("inventory backend sync failed"))
+            .expect(&logs);
+        assert!(
+            failure.contains(&format!("http_status={status}")),
+            "{failure}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -730,6 +753,20 @@ async fn partial_uploads_report_each_target_and_continue_later_batches() {
             .find(|line| line.contains("attestation backend sync completed with upload failures"))
             .expect(&logs);
         if malformed {
+            let failure = logs
+                .lines()
+                .find(|line| line.contains("attestation mini-batch export failed"))
+                .expect(&logs);
+            for mac in [
+                "02:00:00:00:00:01",
+                "02:00:00:00:00:02",
+                "02:00:00:00:00:03",
+            ] {
+                assert!(failure.contains(mac), "{failure}");
+            }
+            assert!(failure.contains("omitted_bmc_count=0"), "{failure}");
+        }
+        if malformed {
             assert!(
                 summary.contains("accepted_count=1") && summary.contains("unconfirmed_count=3"),
                 "{summary}"
@@ -863,22 +900,30 @@ async fn nonce_unauthorized_reenrolls_once_for_multiple_targets() {
         r#"{"results":[{"status":"OK"},{"status":"OK"},{"status":"OK"}]}"#,
     )
     .await;
-    for _ in 0..3 {
+    // Permit either early auth-failure cancellation or collection of all targets.
+    let mut reenrollment = loop {
+        let (mut stream, request) = accept_request(&backend).await;
+        if request.starts_with("POST /v1/agent/enroll ") {
+            break stream;
+        }
+        assert!(request.contains("/nonce "));
+        reply_status(&mut stream, 401, r#"{"error":"expired"}"#).await;
+    };
+    reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
+    let mut renewed = 0;
+    while renewed < 3 {
         let (mut nonce, request) = accept_request(&backend).await;
         assert!(request.contains("/nonce "));
-        reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
-    }
-    let (mut reenrollment, request) = accept_request(&backend).await;
-    assert!(request.starts_with("POST /v1/agent/enroll "));
-    reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
-    for _ in 0..3 {
-        let (mut nonce, request) = accept_request(&backend).await;
-        assert!(
-            request
-                .to_ascii_lowercase()
-                .contains("authorization: bearer renewed-jwt")
-        );
-        reply_status(&mut nonce, 403, r#"{"error":"forbidden"}"#).await;
+        if request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer renewed-jwt")
+        {
+            reply_status(&mut nonce, 403, r#"{"error":"forbidden"}"#).await;
+            renewed += 1;
+        } else {
+            // An already in-flight old-session request can arrive after enrollment.
+            reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+        }
     }
     let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
     let mut logs = String::new();
@@ -896,6 +941,14 @@ async fn nonce_unauthorized_reenrolls_once_for_multiple_targets() {
             .count(),
         1,
         "{logs}"
+    );
+    let recovery = logs
+        .lines()
+        .find(|line| line.contains("backend JWT rejected during nonce collection"))
+        .unwrap();
+    assert!(
+        recovery.contains("INFO") && recovery.contains("http_status=401"),
+        "{recovery}"
     );
     assert!(!logs.contains("backend session rejected"), "{logs}");
 }

@@ -53,6 +53,7 @@ pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
 pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
+const MAX_LOGGED_BMC_MACS: usize = 8;
 const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// How long to wait before collecting targets that failed as a whole once more
 /// in the same cycle. Long enough for a rebooting BMC to come back and for a
@@ -198,6 +199,13 @@ impl Shutdown {
     }
 }
 
+/// HTTP status is a numeric field; never infer it from an error body or print that body here.
+fn backend_http_status(error: &(dyn Error + 'static)) -> Option<u16> {
+    error
+        .downcast_ref::<backend_client::BackendHttpError>()
+        .map(|error| error.status())
+}
+
 async fn shutdown_signal() -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -289,6 +297,7 @@ async fn run_runtime_until_shutdown(
                 phase = "cycle", operation = "collection", outcome = "failed",
                 next_attempt_seconds = interval.as_secs(),
                 error = %err,
+                http_status = backend_http_status(err.as_ref()),
                 "collection cycle failed"
             );
         }
@@ -371,6 +380,7 @@ async fn run_collection_cycle(
             phase = "inventory", operation = "upload", outcome = "failed",
             elapsed_seconds = started_at.elapsed().as_secs_f64(),
             error = %err,
+            http_status = backend_http_status(err.as_ref()),
             "inventory backend sync failed; attempting attestation for configured sources"
         ),
     }
@@ -488,6 +498,7 @@ async fn collect_attestation_with_reenroll(
                 phase = "attestation",
                 operation = "enrollment",
                 outcome = "retrying",
+                http_status = backend_http_status(err.as_ref()),
                 "backend JWT rejected during nonce collection; enrolling again before retry"
             );
             session.reenroll().await?;
@@ -663,6 +674,7 @@ async fn upload_attestation_batches(
                 phase = "attestation",
                 operation = "enrollment",
                 outcome = "retrying",
+                http_status = backend_http_status(err.as_ref()),
                 batch_index = index + 1,
                 batch_count,
                 "backend JWT rejected on attestation upload; enrolling again before retry"
@@ -718,6 +730,8 @@ async fn upload_attestation_batches(
                     batch_index = index + 1,
                     batch_count,
                     node_count,
+                    bmc_macs = ?bmc_mac_sample(&batch),
+                    omitted_bmc_count = node_count.saturating_sub(MAX_LOGGED_BMC_MACS),
                     error = %err,
                     "attestation mini-batch export failed"
                 );
@@ -726,6 +740,16 @@ async fn upload_attestation_batches(
     }
 
     Ok(summary)
+}
+
+/// Keep failed-batch identities useful without letting one batch flood a log line.
+fn bmc_mac_sample(batch: &BatchAttestation) -> Vec<&str> {
+    batch
+        .results_by_bmc_mac
+        .keys()
+        .take(MAX_LOGGED_BMC_MACS)
+        .map(String::as_str)
+        .collect()
 }
 
 #[derive(Default)]
@@ -1286,6 +1310,7 @@ async fn upload_inventory_batch(
             phase = "inventory",
             operation = "enrollment",
             outcome = "retrying",
+            http_status = 401u16,
             "backend JWT rejected; enrolling again before retry"
         );
         session.reenroll().await?;
@@ -1468,6 +1493,24 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    #[test]
+    fn failed_batch_mac_sample_is_capped_and_deterministic() {
+        let batch = BatchAttestation::new(
+            "fixture".into(),
+            (0..12)
+                .rev()
+                .map(|index| {
+                    let mac = format!("02:00:00:00:00:{index:02X}");
+                    NodeAttestation::failed(mac.clone(), mac, "192.0.2.10".into(), "fixture")
+                })
+                .collect(),
+        );
+        let sample = bmc_mac_sample(&batch);
+        assert_eq!(sample.len(), MAX_LOGGED_BMC_MACS);
+        assert_eq!(sample.first(), Some(&"02:00:00:00:00:00"));
+        assert_eq!(sample.last(), Some(&"02:00:00:00:00:07"));
     }
 
     #[test]
