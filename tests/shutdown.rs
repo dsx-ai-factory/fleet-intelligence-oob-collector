@@ -246,6 +246,105 @@ async fn reply_status(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 #[tokio::test]
+async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime =
+        Runtime::start_with_target_retry(backend.local_addr().unwrap().port(), bmc_port, 300);
+    let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    let mut logs = String::new();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let mut line = String::new();
+            assert!(stderr.read_line(&mut line).await.unwrap() > 0, "{logs}");
+            logs.push_str(&line);
+            if line.contains("retrying failed inventory targets after a delay") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("diagnostics must be emitted before the five-minute retry delay");
+    let lines = logs.lines().collect::<Vec<_>>();
+    let positions = [
+        "starting OOB collector",
+        "collector configuration validated",
+        "backend enrollment started",
+        "backend enrollment succeeded",
+        "inventory collection started",
+        "inventory target collection failed",
+        "retrying failed inventory targets after a delay",
+    ]
+    .map(|milestone| {
+        let matches = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains(milestone))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "{milestone}: {logs}");
+        matches[0]
+    });
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{logs}");
+    let version = Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
+        .arg("--version")
+        .output()
+        .await
+        .expect("read collector CLI version");
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let (_, version) = version
+        .trim()
+        .split_once(' ')
+        .expect("collector name and version");
+    assert!(
+        lines[positions[0]]
+            .split_whitespace()
+            .any(|field| field.strip_prefix("version=") == Some(version)),
+        "startup log must report --version ({version}): {logs}"
+    );
+    let failure = logs
+        .lines()
+        .find(|line| line.contains("inventory target collection failed"))
+        .unwrap();
+    assert!(failure.contains("bmc_mac=02:00:00:00:00:01"), "{logs}");
+    assert!(
+        failure.contains(&format!("bmc_address=127.0.0.1:{bmc_port}")),
+        "{logs}"
+    );
+    assert!(failure.contains("error="), "{logs}");
+    assert!(!logs.contains("first inventory upload accepted"), "{logs}");
+    assert!(
+        timeout(Duration::from_millis(250), backend.accept())
+            .await
+            .is_err(),
+        "inventory must remain held throughout the retry-wait observation window"
+    );
+
+    runtime.signal("-TERM").await;
+    let (mut upload, _) = accept_request(&backend).await;
+    reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    runtime.expect_clean_exit().await;
+    stderr.read_to_string(&mut logs).await.unwrap();
+    assert!(
+        logs.contains("first inventory upload accepted in this cycle"),
+        "{logs}"
+    );
+    for secret in [
+        "example-token",
+        "example-jwt",
+        "example-user",
+        "example-password",
+    ] {
+        assert!(!logs.contains(secret), "{logs}");
+    }
+}
+
+#[tokio::test]
 async fn signals_stop_during_pending_enrollment() {
     for signal in ["-INT", "-TERM"] {
         let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
@@ -414,7 +513,7 @@ async fn complete_attestation(backend: &TcpListener, mac: &str, upload_status: &
     );
     reply(
         &mut upload,
-        &format!(r#"{{"results":[{{"bmcMac":"{mac}","status":"{upload_status}"}}]}}"#),
+        &format!(r#"{{"results":[{{"bmcMac":"{mac}","status":"{upload_status}","message":"invalid evidence at https://fixture-user:fixture-password@bmc/path?token=private"}}]}}"#),
     )
     .await;
 }
@@ -446,22 +545,41 @@ async fn cycle_uses_one_target_and_credential_snapshot_without_inventory_uuid() 
 
 #[tokio::test]
 async fn inventory_reenrollment_failure_does_not_skip_attestation_for_existing_sources() {
-    let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
-    let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
-    let bmc_port = unavailable.local_addr().unwrap().port();
-    drop(unavailable);
-    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
-    let (mut enrollment, _) = accept_request(&backend).await;
-    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
-    let (mut inventory, request) = accept_request(&backend).await;
-    assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
-    reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
-    let (mut reenrollment, request) = accept_request(&backend).await;
-    assert!(request.starts_with("POST /v1/agent/enroll "));
-    reply_status(&mut reenrollment, 503, r#"{"error":"unavailable"}"#).await;
-    // The nonce endpoint may still serve an enrolled source with the retained
-    // token. An inventory-phase error must not suppress the attempt.
-    finish_attestation(&backend, &mut runtime).await;
+    for status in [403, 503] {
+        let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");
+        let unavailable = TcpListener::bind("127.0.0.1:0").await.expect("unused port");
+        let bmc_port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+        let (mut enrollment, _) = accept_request(&backend).await;
+        reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+        let (mut inventory, request) = accept_request(&backend).await;
+        assert!(request.starts_with("PUT /v1/agent/oob_nodes "));
+        reply_status(&mut inventory, 401, r#"{"error":"expired"}"#).await;
+        let (mut reenrollment, request) = accept_request(&backend).await;
+        assert!(request.starts_with("POST /v1/agent/enroll "));
+        reply_status(&mut reenrollment, status, r#"{"error":"unavailable"}"#).await;
+        // The nonce endpoint may still serve an enrolled source with the retained
+        // token. An inventory-phase error must not suppress the attempt.
+        finish_attestation(&backend, &mut runtime).await;
+        let mut logs = String::new();
+        runtime
+            .child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut logs)
+            .await
+            .unwrap();
+        let failure = logs
+            .lines()
+            .find(|line| line.contains("inventory backend sync failed"))
+            .expect(&logs);
+        assert!(
+            failure.contains(&format!("http_status={status}")),
+            "{failure}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -521,6 +639,32 @@ async fn rejected_attestation_item_is_not_logged_as_successful_sync() {
         logs.contains("attestation target export rejected"),
         "{logs}"
     );
+    for message in [
+        "attestation target collection failed",
+        "attestation target export rejected",
+    ] {
+        let line = logs
+            .lines()
+            .find(|line| line.contains(message))
+            .expect(&logs);
+        assert!(line.contains("bmc_mac=02:00:00:00:00:01"), "{line}");
+        assert!(
+            line.contains(&format!("bmc_address=127.0.0.1:{bmc_port}")),
+            "{line}"
+        );
+        assert!(line.contains("phase=\"attestation\""), "{line}");
+    }
+    let rejection = logs
+        .lines()
+        .find(|line| line.contains("attestation target export rejected"))
+        .unwrap();
+    assert!(
+        rejection.contains("reason=\"invalid evidence at [URL_REDACTED]\""),
+        "{rejection}"
+    );
+    for secret in ["fixture-user", "fixture-password", "token=private"] {
+        assert!(!logs.contains(secret), "{logs}");
+    }
     assert!(
         !logs
             .lines()
@@ -618,13 +762,27 @@ async fn partial_uploads_report_each_target_and_continue_later_batches() {
         runtime.signal("-TERM").await;
         runtime.expect_clean_exit().await;
         assert!(
-            logs.contains("attestation target export accepted"),
+            !logs.contains("attestation target export accepted"),
             "{logs}"
         );
         let summary = logs
             .lines()
             .find(|line| line.contains("attestation backend sync completed with upload failures"))
             .expect(&logs);
+        if malformed {
+            let failure = logs
+                .lines()
+                .find(|line| line.contains("attestation mini-batch export failed"))
+                .expect(&logs);
+            for mac in [
+                "02:00:00:00:00:01",
+                "02:00:00:00:00:02",
+                "02:00:00:00:00:03",
+            ] {
+                assert!(failure.contains(mac), "{failure}");
+            }
+            assert!(failure.contains("omitted_bmc_count=0"), "{failure}");
+        }
         if malformed {
             assert!(
                 summary.contains("accepted_count=1") && summary.contains("unconfirmed_count=3"),
@@ -744,23 +902,72 @@ async fn nonce_errors_skip_uploads_and_targets_are_retried_next_cycle() {
 }
 
 #[tokio::test]
-async fn nonce_unauthorized_reenrolls_before_retrying() {
+async fn nonce_unauthorized_reenrolls_once_for_multiple_targets() {
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bmc_port = unavailable.local_addr().unwrap().port();
     drop(unavailable);
-    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+    let mut runtime =
+        Runtime::start_with_targets(backend.local_addr().unwrap().port(), bmc_port, 86400, 3, 3);
     let (mut enrollment, _) = accept_request(&backend).await;
     reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
     let (mut inventory, _) = accept_request(&backend).await;
-    reply(&mut inventory, r#"{"results":[{"status":"OK"}]}"#).await;
-    let (mut nonce, request) = accept_request(&backend).await;
-    assert!(request.contains("/nonce "));
-    reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
-    let (mut reenrollment, request) = accept_request(&backend).await;
-    assert!(request.starts_with("POST /v1/agent/enroll "));
+    reply(
+        &mut inventory,
+        r#"{"results":[{"status":"OK"},{"status":"OK"},{"status":"OK"}]}"#,
+    )
+    .await;
+    // Permit either early auth-failure cancellation or collection of all targets.
+    let mut reenrollment = loop {
+        let (mut stream, request) = accept_request(&backend).await;
+        if request.starts_with("POST /v1/agent/enroll ") {
+            break stream;
+        }
+        assert!(request.contains("/nonce "));
+        reply_status(&mut stream, 401, r#"{"error":"expired"}"#).await;
+    };
     reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
-    finish_attestation(&backend, &mut runtime).await;
+    let mut renewed = 0;
+    while renewed < 3 {
+        let (mut nonce, request) = accept_request(&backend).await;
+        assert!(request.contains("/nonce "));
+        if request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer renewed-jwt")
+        {
+            reply_status(&mut nonce, 403, r#"{"error":"forbidden"}"#).await;
+            renewed += 1;
+        } else {
+            // An already in-flight old-session request can arrive after enrollment.
+            reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+        }
+    }
+    let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
+    let mut logs = String::new();
+    timeout(Duration::from_secs(3), async {
+        while !logs.contains("sleeping until next cycle") {
+            assert!(stderr.read_line(&mut logs).await.unwrap() > 0);
+        }
+    })
+    .await
+    .unwrap();
+    runtime.signal("-TERM").await;
+    runtime.expect_clean_exit().await;
+    assert_eq!(
+        logs.matches("backend JWT rejected during nonce collection")
+            .count(),
+        1,
+        "{logs}"
+    );
+    let recovery = logs
+        .lines()
+        .find(|line| line.contains("backend JWT rejected during nonce collection"))
+        .unwrap();
+    assert!(
+        recovery.contains("INFO") && recovery.contains("http_status=401"),
+        "{recovery}"
+    );
+    assert!(!logs.contains("backend session rejected"), "{logs}");
 }
 
 #[tokio::test]

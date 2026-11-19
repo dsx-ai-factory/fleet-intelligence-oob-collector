@@ -19,6 +19,7 @@ mod backend;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use bmc_attestation::sink::{
     HttpBackendClient as AttestationBackendClient, TargetUploadOutcome,
 };
 use bmc_dispatch::{Dispatcher, DispatcherConfig};
+use bmc_error::{SanitizedErrorMessage, bmc_log_address as format_bmc_log_address};
 use bmc_inventory::config;
 use bmc_inventory::models::NodeInventory;
 use bmc_inventory::sink::{
@@ -51,6 +53,7 @@ pub const DEFAULT_BMC_REQUESTS_PER_SECOND: u64 = 10;
 pub const DEFAULT_BMC_BURST: u64 = 10;
 pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
+const MAX_LOGGED_BMC_MACS: usize = 8;
 const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// How long to wait before collecting targets that failed as a whole once more
 /// in the same cycle. Long enough for a rebooting BMC to come back and for a
@@ -196,6 +199,13 @@ impl Shutdown {
     }
 }
 
+/// HTTP status is a numeric field; never infer it from an error body or print that body here.
+fn backend_http_status(error: &(dyn Error + 'static)) -> Option<u16> {
+    error
+        .downcast_ref::<backend_client::BackendHttpError>()
+        .map(|error| error.status())
+}
+
 async fn shutdown_signal() -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -230,6 +240,10 @@ async fn run_runtime_until_shutdown(
     mut options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
+    tracing::info!(
+        version = %bmc_inventory::COLLECTOR_VERSION,
+        "starting OOB collector"
+    );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let target_config = config::load_config(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(
@@ -240,13 +254,19 @@ async fn run_runtime_until_shutdown(
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let enrollment_token =
         required_backend_option(options.enrollment_token.take(), "enrollment token")?;
+    tracing::info!(
+        target_count = target_config.targets.len(),
+        "collector configuration validated"
+    );
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
+    tracing::info!("backend enrollment started");
     let mut session = tokio::select! {
         biased;
         () = shutdown.wait() => return Ok(()),
         session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), enrollment_token) => session?,
     };
+    tracing::info!("backend enrollment succeeded");
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
     // Reuse startup validation as the first cycle's snapshot. Later cycles reload
@@ -274,8 +294,10 @@ async fn run_runtime_until_shutdown(
         };
         if let Err(err) = cycle.await {
             tracing::error!(
+                phase = "cycle", operation = "collection", outcome = "failed",
                 next_attempt_seconds = interval.as_secs(),
                 error = %err,
+                http_status = backend_http_status(err.as_ref()),
                 "collection cycle failed"
             );
         }
@@ -355,8 +377,10 @@ async fn run_collection_cycle(
             "inventory backend sync completed"
         ),
         Err(err) => tracing::error!(
+            phase = "inventory", operation = "upload", outcome = "failed",
             elapsed_seconds = started_at.elapsed().as_secs_f64(),
             error = %err,
+            http_status = backend_http_status(err.as_ref()),
             "inventory backend sync failed; attempting attestation for configured sources"
         ),
     }
@@ -368,6 +392,10 @@ async fn run_collection_cycle(
     settings.insecure_tls = options.inventory.insecure_tls;
     settings.concurrency = options.inventory.target_concurrency;
     settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
+    tracing::info!(
+        target_count = attestation_targets.len(),
+        "attestation collection started"
+    );
     let uploads = collect_and_upload_attestation(
         AttestationTargets {
             targets: &attestation_targets,
@@ -466,7 +494,13 @@ async fn collect_attestation_with_reenroll(
     match result {
         Ok(outcome) => Ok(Some(outcome)),
         Err(err) if is_auth_failure(err.as_ref()) => {
-            tracing::warn!(error = %err, "backend JWT rejected during nonce collection; enrolling again before retry");
+            tracing::info!(
+                phase = "attestation",
+                operation = "enrollment",
+                outcome = "retrying",
+                http_status = backend_http_status(err.as_ref()),
+                "backend JWT rejected during nonce collection; enrolling again before retry"
+            );
             session.reenroll().await?;
             tokio::select! {
                 biased;
@@ -512,7 +546,10 @@ async fn collect_and_upload_attestation(
     if let Some(retry_delay) = retry_delay
         && !outcome.retry_bmc_macs.is_empty()
     {
-        tracing::info!(
+        tracing::warn!(
+            phase = "attestation",
+            operation = "retry",
+            outcome = "scheduled",
             target_count = outcome.retry_bmc_macs.len(),
             retry_delay_seconds = retry_delay.as_secs(),
             "retrying failed attestation targets after a delay"
@@ -538,6 +575,8 @@ async fn collect_and_upload_attestation(
                     }
                     Err(_) => tracing::warn!(
                         bmc_mac = %target.bmc_mac,
+                        bmc_address = %bmc_log_address(&target.address),
+                        phase = "attestation", operation = "credentials", outcome = "failed",
                         "failed to reload BMC credentials; retrying with this cycle's credentials"
                     ),
                 }
@@ -631,8 +670,11 @@ async fn upload_attestation_batches(
         if let Err(err) = &result
             && is_auth_failure(err.as_ref())
         {
-            tracing::warn!(
-                error = %err,
+            tracing::info!(
+                phase = "attestation",
+                operation = "enrollment",
+                outcome = "retrying",
+                http_status = backend_http_status(err.as_ref()),
                 batch_index = index + 1,
                 batch_count,
                 "backend JWT rejected on attestation upload; enrolling again before retry"
@@ -652,31 +694,44 @@ async fn upload_attestation_batches(
                     );
                 }
                 for (bmc_mac, outcome) in outcome.targets {
+                    let record = batch.results_by_bmc_mac.get(&bmc_mac);
+                    let bmc_address = record
+                        .map(|record| bmc_log_address(&record.bmc_address))
+                        .unwrap_or_else(|| "unavailable".to_string());
+                    let context = tracing::warn_span!(
+                        "bmc", phase = "attestation", operation = "upload", %bmc_mac, %bmc_address
+                    );
+                    let _entered = context.enter();
                     match outcome {
                         TargetUploadOutcome::Accepted => {
                             summary.accepted += 1;
-                            tracing::info!(%bmc_mac, "attestation target export accepted");
+                            tracing::debug!(
+                                outcome = "accepted",
+                                "attestation target export accepted"
+                            );
                         }
-                        TargetUploadOutcome::Rejected(status) => {
+                        TargetUploadOutcome::Rejected { status, reason } => {
                             summary.rejected += 1;
-                            tracing::warn!(%bmc_mac, %status, "attestation target export rejected");
+                            tracing::warn!(outcome = "rejected", %status,
+                                reason = reason.as_ref().map(|reason| reason.as_ref()),
+                                "attestation target export rejected");
                         }
                         TargetUploadOutcome::Missing | TargetUploadOutcome::Duplicate => {
                             summary.unconfirmed += 1;
-                            tracing::warn!(%bmc_mac, reason = ?outcome, "attestation target export unconfirmed");
+                            tracing::warn!(outcome = "unconfirmed", reason = ?outcome, "attestation target export unconfirmed");
                         }
                     }
                 }
             }
             Err(err) => {
                 summary.unconfirmed += node_count;
-                for bmc_mac in batch.results_by_bmc_mac.keys() {
-                    tracing::warn!(%bmc_mac, error = %err, "attestation target export unconfirmed");
-                }
                 tracing::error!(
+                    phase = "attestation", operation = "upload", outcome = "failed",
                     batch_index = index + 1,
                     batch_count,
                     node_count,
+                    bmc_macs = ?bmc_mac_sample(&batch),
+                    omitted_bmc_count = node_count.saturating_sub(MAX_LOGGED_BMC_MACS),
                     error = %err,
                     "attestation mini-batch export failed"
                 );
@@ -685,6 +740,16 @@ async fn upload_attestation_batches(
     }
 
     Ok(summary)
+}
+
+/// Keep failed-batch identities useful without letting one batch flood a log line.
+fn bmc_mac_sample(batch: &BatchAttestation) -> Vec<&str> {
+    batch
+        .results_by_bmc_mac
+        .keys()
+        .take(MAX_LOGGED_BMC_MACS)
+        .map(String::as_str)
+        .collect()
 }
 
 #[derive(Default)]
@@ -778,6 +843,7 @@ async fn collect_and_upload_inventory(
     retry: InventoryRetry,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
+    tracing::info!(target_count = targets.len(), "inventory collection started");
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
@@ -810,32 +876,27 @@ async fn collect_and_upload_inventory(
             upload_inventory_batch(&mut backend_sink, session, batch).await?;
         match upload_result {
             Ok(outcome) => {
-                let outcomes = (0..uploaded.len()).map(|index| outcome.item_outcome(index));
-                let (accepted, failures) = partition_uploaded_inventory(uploaded, outcomes);
-                failed_uploads += failures.len();
-                for failure in &failures {
-                    match failure {
-                        InventoryUploadFailure::Rejected {
-                            mac,
-                            status,
-                            message,
-                        } => tracing::warn!(
-                            mac,
-                            status,
-                            message = message.as_deref().unwrap_or(""),
-                            "backend rejected inventory node"
-                        ),
-                        InventoryUploadFailure::MissingResult { mac } => tracing::warn!(
-                            mac,
-                            "backend returned success without a result row for inventory node"
-                        ),
-                    }
+                for (index, inventory) in uploaded.iter().enumerate() {
+                    log_inventory_upload(inventory, outcome.item_outcome(index));
                 }
-                if !failures.is_empty() {
+                let accepted = (0..uploaded.len())
+                    .filter(|index| {
+                        matches!(outcome.item_outcome(*index), BackendNodeOutcome::Succeeded)
+                    })
+                    .count();
+                let failed = exportable_count - accepted;
+                if accepted_uploads == 0 && accepted > 0 {
+                    tracing::info!(
+                        accepted_upload_count = accepted,
+                        "first inventory upload accepted in this cycle"
+                    );
+                }
+                failed_uploads += failed;
+                if failed > 0 {
                     tracing::warn!(
                         exportable_count,
                         accepted_upload_count = accepted,
-                        failed_count = failures.len(),
+                        failed_count = failed,
                         "inventory mini-batch export completed with failed nodes"
                     );
                 } else {
@@ -846,6 +907,7 @@ async fn collect_and_upload_inventory(
             Err(err) => {
                 failed_uploads += exportable_count;
                 tracing::error!(
+                    phase = "inventory", operation = "upload", outcome = "failed",
                     exportable_count,
                     error = %err,
                     "inventory mini-batch export failed"
@@ -937,7 +999,10 @@ async fn collect_inventory_with_retry(
         return forward_held(held, &sender).await;
     }
 
-    tracing::info!(
+    tracing::warn!(
+        phase = "inventory",
+        operation = "retry",
+        outcome = "scheduled",
         target_count = held.len(),
         retry_delay_seconds = delay.as_secs(),
         "retrying failed inventory targets after a delay"
@@ -960,6 +1025,8 @@ async fn collect_inventory_with_retry(
                 }
                 Err(_) => tracing::warn!(
                     bmc_mac = %target.mac,
+                    bmc_address = %SocketAddr::new(target.ip, target.port.unwrap_or(attestation_config::defaults::DEFAULT_PORT)),
+                    phase = "inventory", operation = "credentials", outcome = "failed",
                     "failed to reload BMC credentials; retrying with this cycle's credentials"
                 ),
             }
@@ -1029,6 +1096,7 @@ async fn forward_inventory(
                 None => break,
             },
         };
+        log_inventory_collection(&inventory);
         if hold(&inventory) {
             held.push(inventory);
             continue;
@@ -1047,6 +1115,73 @@ async fn forward_inventory(
         }
     }
     Ok(held)
+}
+
+/// Runtime inventory targets use the default Redfish port unless explicitly configured.
+fn bmc_log_address(address: &str) -> String {
+    format_bmc_log_address(address, attestation_config::defaults::DEFAULT_PORT)
+}
+
+/// Report each collection result before a retry can delay its upload.
+fn log_inventory_collection(inventory: &NodeInventory) {
+    let bmc_address = bmc_log_address(&inventory.source.address);
+    let context = tracing::warn_span!(
+        "bmc",
+        phase = "inventory",
+        operation = "collection",
+        bmc_mac = %inventory.source.mac,
+        %bmc_address,
+    );
+    let _entered = context.enter();
+    if let Some(error) = &inventory.target_error {
+        tracing::warn!(outcome = "failed", %error, "inventory target collection failed");
+    } else if inventory.domain_errors.is_empty() {
+        tracing::debug!(
+            outcome = "succeeded",
+            system_count = inventory.systems.len(),
+            chassis_count = inventory.chassis.len(),
+            firmware_count = inventory.firmware.len(),
+            "inventory target collection succeeded"
+        );
+    }
+    for error in &inventory.domain_errors {
+        tracing::warn!(
+            outcome = "partial",
+            domain = %error.domain,
+            resource = error.resource.as_ref().map(|resource| resource.as_ref()),
+            error = %error.message,
+            "inventory domain collection failed"
+        );
+    }
+}
+
+/// Distinguish upload acceptance from the collection outcome of an observation.
+fn log_inventory_upload(inventory: &NodeInventory, outcome: BackendNodeOutcome<'_>) {
+    let bmc_address = bmc_log_address(&inventory.source.address);
+    let context = tracing::warn_span!(
+        "bmc",
+        phase = "inventory",
+        operation = "upload",
+        bmc_mac = %inventory.source.mac,
+        %bmc_address,
+    );
+    let _entered = context.enter();
+    match outcome {
+        BackendNodeOutcome::Succeeded => {
+            tracing::debug!(outcome = "accepted", "inventory target export accepted")
+        }
+        BackendNodeOutcome::Rejected { status, message } => {
+            let status = SanitizedErrorMessage::new(status);
+            let reason = message.map(SanitizedErrorMessage::new);
+            tracing::warn!(outcome = "rejected", %status,
+                reason = reason.as_ref().map(|reason| reason.as_ref()),
+                "backend rejected inventory node");
+        }
+        BackendNodeOutcome::Missing => tracing::warn!(
+            outcome = "unconfirmed",
+            "backend returned success without a result row for inventory node"
+        ),
+    }
 }
 
 struct InventorySyncOutcome {
@@ -1170,9 +1305,12 @@ async fn upload_inventory_batch(
 ) -> Result<(Vec<NodeInventory>, Result<BackendBatchOutcome, UploadError>), Box<dyn Error>> {
     stamp_enrolled_at(&mut inventories, session.enrolled_at());
     let mut result = upload_inventory(sink, &inventories).await;
-    if let Err(UploadError::AuthFailure(message)) = &result {
-        tracing::warn!(
-            error = %message,
+    if matches!(&result, Err(UploadError::AuthFailure(_))) {
+        tracing::info!(
+            phase = "inventory",
+            operation = "enrollment",
+            outcome = "retrying",
+            http_status = 401u16,
             "backend JWT rejected; enrolling again before retry"
         );
         session.reenroll().await?;
@@ -1182,44 +1320,6 @@ async fn upload_inventory_batch(
     }
 
     Ok((inventories, result))
-}
-
-fn partition_uploaded_inventory<'a>(
-    inventories: Vec<NodeInventory>,
-    outcomes: impl IntoIterator<Item = BackendNodeOutcome<'a>>,
-) -> (usize, Vec<InventoryUploadFailure>) {
-    let mut accepted = 0;
-    let mut failures = Vec::new();
-    let mut outcomes = outcomes.into_iter();
-    for inventory in inventories {
-        let mac = inventory.source.mac;
-        match outcomes.next().unwrap_or(BackendNodeOutcome::Missing) {
-            BackendNodeOutcome::Succeeded => accepted += 1,
-            BackendNodeOutcome::Rejected { status, message } => {
-                failures.push(InventoryUploadFailure::Rejected {
-                    mac,
-                    status: status.to_string(),
-                    message: message.map(str::to_string),
-                });
-            }
-            BackendNodeOutcome::Missing => {
-                failures.push(InventoryUploadFailure::MissingResult { mac });
-            }
-        }
-    }
-    (accepted, failures)
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum InventoryUploadFailure {
-    Rejected {
-        mac: String,
-        status: String,
-        message: Option<String>,
-    },
-    MissingResult {
-        mac: String,
-    },
 }
 
 #[derive(Debug)]
@@ -1299,10 +1399,119 @@ fn start_dispatcher(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use bmc_attestation::models::{AttestationEvidence, ComponentError, NodeAttestation};
     use bmc_inventory::models::{DomainError, InventorySourceInfo};
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_logs(level: tracing::Level, action: impl FnOnce()) -> String {
+        let logs = LogWriter::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(level)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        String::from_utf8(logs.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn collection_warnings_identify_target_and_domain() {
+        let mut failed = inventory("[2001:db8::10]:8443");
+        failed.target_error = Some("connection refused".into());
+        let mut partial = inventory("192.0.2.10");
+        partial.domain_errors.push(DomainError {
+            domain: "firmware".into(),
+            resource: None,
+            message: "HTTP 403 Forbidden".into(),
+        });
+        let logs = capture_logs(tracing::Level::WARN, || {
+            log_inventory_collection(&failed);
+            log_inventory_collection(&partial);
+        });
+        assert_eq!(logs.lines().count(), 2, "{logs}");
+        for field in [
+            "bmc_mac=00:11:22:33:44:55",
+            "bmc_address=[2001:db8::10]:8443",
+            "connection refused",
+            "domain=firmware",
+            "HTTP 403 Forbidden",
+        ] {
+            assert!(logs.contains(field), "{logs}");
+        }
+    }
+
+    #[test]
+    fn upload_rejection_preserves_identity_and_sanitized_reason_at_warn() {
+        let failed = inventory("[2001:db8::10]:8443");
+        let logs = capture_logs(tracing::Level::WARN, || {
+            log_inventory_upload(
+                &failed,
+                BackendNodeOutcome::Rejected {
+                    status: "CONFLICT",
+                    message: Some("ambiguous identity at https://user:secret@bmc/?token=private"),
+                },
+            )
+        });
+        for field in [
+            "bmc_mac=00:11:22:33:44:55",
+            "bmc_address=[2001:db8::10]:8443",
+            "phase=\"inventory\"",
+            "outcome=\"rejected\"",
+            "ambiguous identity at [URL_REDACTED]",
+        ] {
+            assert!(logs.contains(field), "{logs}");
+        }
+        assert!(!logs.contains("secret"), "{logs}");
+    }
+
+    #[test]
+    fn healthy_inventory_endpoint_is_quiet_at_info() {
+        let healthy = inventory("192.0.2.10");
+        assert!(
+            capture_logs(tracing::Level::INFO, || {
+                log_inventory_collection(&healthy);
+                log_inventory_upload(&healthy, BackendNodeOutcome::Succeeded);
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn failed_batch_mac_sample_is_capped_and_deterministic() {
+        let batch = BatchAttestation::new(
+            "fixture".into(),
+            (0..12)
+                .rev()
+                .map(|index| {
+                    let mac = format!("02:00:00:00:00:{index:02X}");
+                    NodeAttestation::failed(mac.clone(), mac, "192.0.2.10".into(), "fixture")
+                })
+                .collect(),
+        );
+        let sample = bmc_mac_sample(&batch);
+        assert_eq!(sample.len(), MAX_LOGGED_BMC_MACS);
+        assert_eq!(sample.first(), Some(&"02:00:00:00:00:00"));
+        assert_eq!(sample.last(), Some(&"02:00:00:00:00:07"));
+    }
 
     #[test]
     fn inventory_summary_distinguishes_success_partial_and_failure() {
@@ -1324,51 +1533,6 @@ mod tests {
                 partial: 1,
                 failed: 1,
             }
-        );
-    }
-
-    #[test]
-    fn upload_results_count_acceptance_and_map_failures_to_mac_by_position() {
-        let first = inventory("10.0.0.1");
-        let mut partial = inventory("10.0.0.5");
-        partial.source.mac = "00:11:22:33:44:65".to_string();
-        partial.domain_errors.push(DomainError {
-            domain: "firmware".to_string(),
-            resource: None,
-            message: "unavailable".into(),
-        });
-        let mut failed_collection = inventory("10.0.0.2");
-        failed_collection.source.mac = "00:11:22:33:44:66".to_string();
-        failed_collection.target_error = Some("unavailable".into());
-        let mut rejected = inventory("10.0.0.3");
-        rejected.source.mac = "00:11:22:33:44:77".to_string();
-        let mut missing = inventory("10.0.0.4");
-        missing.source.mac = "00:11:22:33:44:88".to_string();
-        let (accepted, failures) = partition_uploaded_inventory(
-            vec![first, partial, failed_collection, rejected, missing],
-            [
-                BackendNodeOutcome::Succeeded,
-                BackendNodeOutcome::Succeeded,
-                BackendNodeOutcome::Succeeded,
-                BackendNodeOutcome::Rejected {
-                    status: "CONFLICT",
-                    message: Some("ambiguous identity"),
-                },
-            ],
-        );
-        assert_eq!(accepted, 3);
-        assert_eq!(
-            failures,
-            vec![
-                InventoryUploadFailure::Rejected {
-                    mac: "00:11:22:33:44:77".to_string(),
-                    status: "CONFLICT".to_string(),
-                    message: Some("ambiguous identity".to_string()),
-                },
-                InventoryUploadFailure::MissingResult {
-                    mac: "00:11:22:33:44:88".to_string()
-                },
-            ]
         );
     }
 

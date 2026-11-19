@@ -69,6 +69,7 @@ name = "bmc-collector"
 path = "src/main.rs"
 
 [dependencies]
+bmc-error.workspace = true
 backend-client.workspace = true
 reqwest.workspace = true
 clap.workspace = true

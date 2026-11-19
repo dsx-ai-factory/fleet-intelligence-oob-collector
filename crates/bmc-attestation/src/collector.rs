@@ -23,11 +23,13 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::time::Instant;
 
 use backend_client::is_auth_failure;
 use bmc_dispatch::Dispatcher;
-use bmc_error::SanitizedErrorMessage;
+use bmc_error::{SanitizedErrorMessage, bmc_log_address};
 use futures::stream::{self, StreamExt};
+use tracing::Instrument;
 
 use crate::config::{AttestationConfig, Target};
 use crate::mapper::{AttestationMapper, RedfishMapper};
@@ -92,8 +94,17 @@ pub async fn collect(
             let target = target.clone();
             let bmc_mac = target.bmc_mac.clone();
             let gate = dispatcher.attestation_gate(&target.name);
+            let bmc_address = bmc_log_address(&target.address, settings.port);
+            let context = tracing::warn_span!(
+                "bmc", phase = "attestation", operation = "collection", %bmc_mac, %bmc_address
+            );
             async move {
+                let started = Instant::now();
                 let Some(gate) = gate else {
+                    tracing::warn!(
+                        outcome = "failed",
+                        "attestation dispatcher endpoint missing"
+                    );
                     return Ok((
                         Some(NodeAttestation::failed(
                             bmc_mac,
@@ -112,7 +123,7 @@ pub async fn collect(
                     Err(err) if is_auth_failure(err.as_ref()) => return Err(err),
                     Err(err) => {
                         tracing::warn!(
-                            %bmc_mac,
+                            outcome = "skipped", step = "nonce",
                             error = %SanitizedErrorMessage::new(err.to_string()),
                             "nonce request failed; skipping attestation for target"
                         );
@@ -137,8 +148,11 @@ pub async fn collect(
                     )
                     .await;
                 let retryable = record.retryable;
-                Ok((Some(mapper.map(record)), refreshed_jwt, retryable))
+                let record = mapper.map(record);
+                log_collection_result(&record, started.elapsed().as_secs_f64());
+                Ok((Some(record), refreshed_jwt, retryable))
             }
+            .instrument(context)
         })
         .buffered(concurrency)
         .collect()
@@ -169,6 +183,37 @@ pub async fn collect(
         refreshed_jwt,
         retry_bmc_macs,
     })
+}
+
+/// Collection success describes evidence retrieval, independently of verification or upload.
+fn log_collection_result(record: &NodeAttestation, elapsed_seconds: f64) {
+    if !record.success {
+        tracing::warn!(
+            outcome = "failed",
+            error = record.error_message.as_ref().map(|error| error.as_ref()),
+            "attestation target collection failed"
+        );
+    } else if !record.component_errors.is_empty() {
+        tracing::warn!(
+            outcome = "partial",
+            component_error_count = record.component_errors.len(),
+            "attestation target collection incomplete"
+        );
+    } else {
+        tracing::debug!(
+            outcome = "succeeded",
+            evidence_count = record.evidences.len(),
+            elapsed_seconds,
+            "attestation target collection succeeded"
+        );
+    }
+    for error in &record.component_errors {
+        let component_id = error.component_id.as_ref().map(SanitizedErrorMessage::new);
+        tracing::warn!(
+            outcome = "partial", component_id = component_id.as_ref().map(|id| id.as_ref()),
+            error = %error.message, "attestation component collection failed"
+        );
+    }
 }
 
 #[cfg(test)]

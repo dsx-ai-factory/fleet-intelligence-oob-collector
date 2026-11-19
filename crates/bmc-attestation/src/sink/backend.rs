@@ -37,12 +37,16 @@ struct BatchResponse {
 struct BatchItemResult {
     bmc_mac: Option<String>,
     status: String,
+    message: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TargetUploadOutcome {
     Accepted,
-    Rejected(SanitizedErrorMessage),
+    Rejected {
+        status: SanitizedErrorMessage,
+        reason: Option<SanitizedErrorMessage>,
+    },
     Missing,
     Duplicate,
 }
@@ -80,7 +84,10 @@ impl BatchResponse {
             } else if item.status.eq_ignore_ascii_case("OK") {
                 TargetUploadOutcome::Accepted
             } else {
-                TargetUploadOutcome::Rejected(SanitizedErrorMessage::new(item.status))
+                TargetUploadOutcome::Rejected {
+                    status: SanitizedErrorMessage::new(item.status),
+                    reason: item.message.map(SanitizedErrorMessage::new),
+                }
             };
         }
         outcome

@@ -123,6 +123,8 @@ Running pods don't prove everything works. Check that:
 - The collector logs show inventory uploads succeeding.
 - The gateway logs show no enrollment or export errors.
 
+At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the failure reason, before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
+
 If something fails:
 
 | Problem | What to check |

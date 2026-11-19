@@ -354,6 +354,7 @@ dependencies = [
  "backend-client",
  "bmc-attestation",
  "bmc-dispatch",
+ "bmc-error",
  "bmc-inventory",
  "clap",
  "futures",
