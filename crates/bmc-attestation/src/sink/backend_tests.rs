@@ -10,6 +10,28 @@ use crate::models::NodeAttestation;
 const FIRST_MAC: &str = "AA:BB:CC:DD:EE:55";
 const SECOND_MAC: &str = "AA:BB:CC:DD:EE:66";
 
+#[test]
+fn rejection_preserves_sanitized_status_and_reason() {
+    let response: BatchResponse = serde_json::from_value(serde_json::json!({
+        "results": [{"bmcMac": FIRST_MAC, "status": "ERROR https://secret@bmc/status",
+            "message": "invalid evidence at https://user:password@bmc/path?token=private"}]
+    }))
+    .unwrap();
+    let outcome = response.outcomes(&batch());
+    let TargetUploadOutcome::Rejected { status, reason } = &outcome.targets[FIRST_MAC] else {
+        panic!("expected rejection");
+    };
+    assert_eq!(status.as_ref(), "ERROR [URL_REDACTED]");
+    assert_eq!(
+        reason.as_ref().unwrap().as_ref(),
+        "invalid evidence at [URL_REDACTED]"
+    );
+    let rendered = format!("{outcome:?}");
+    for secret in ["password", "private", "secret@", "https://"] {
+        assert!(!rendered.contains(secret), "{rendered}");
+    }
+}
+
 fn batch() -> BatchAttestation {
     BatchAttestation::new(
         "2026-01-01T00:00:00Z".to_string(),
@@ -90,7 +112,10 @@ fn preserves_accepted_targets_in_partial_or_invalid_responses() {
                 {"bmcMac": SECOND_MAC, "status": "INTERNAL_ERROR"}
             ]),
             TargetUploadOutcome::Accepted,
-            TargetUploadOutcome::Rejected(SanitizedErrorMessage::new("INTERNAL_ERROR")),
+            TargetUploadOutcome::Rejected {
+                status: SanitizedErrorMessage::new("INTERNAL_ERROR"),
+                reason: None,
+            },
             0,
         ),
         (
@@ -138,18 +163,20 @@ fn preserves_accepted_targets_in_partial_or_invalid_responses() {
 }
 
 #[test]
-fn upload_diagnostics_do_not_expose_backend_urls_or_messages() {
+fn upload_diagnostics_preserve_reasons_without_exposing_backend_urls() {
     let response: BatchResponse = serde_json::from_value(serde_json::json!({
         "results": [
             {"bmcMac": FIRST_MAC, "status": "https://user:secret@example.com/error"},
-            {"bmcMac": SECOND_MAC, "status": "ERROR", "message": "private-body"}
+            {"bmcMac": SECOND_MAC, "status": "ERROR", "message": "invalid evidence at https://user:private-body@example.com/path?token=hidden"}
         ]
     }))
     .unwrap();
     let outcome = format!("{:?}", response.outcomes(&batch()));
     assert!(outcome.contains("URL_REDACTED"));
     assert!(!outcome.contains("secret"));
+    assert!(outcome.contains("invalid evidence at [URL_REDACTED]"));
     assert!(!outcome.contains("private-body"));
+    assert!(!outcome.contains("token=hidden"));
 }
 
 /// Exercise the real HTTP submit/deserialize path against a localhost fixture.
@@ -242,7 +269,7 @@ async fn http_success_returns_per_target_outcomes() {
     assert_eq!(partial.targets[FIRST_MAC], TargetUploadOutcome::Accepted);
     assert!(matches!(
         partial.targets[SECOND_MAC],
-        TargetUploadOutcome::Rejected(_)
+        TargetUploadOutcome::Rejected { .. }
     ));
     assert_eq!(
         submit_response(200, r#"{"results":[]}"#)

@@ -23,12 +23,11 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use backend_client::is_auth_failure;
 use bmc_dispatch::Dispatcher;
-use bmc_error::SanitizedErrorMessage;
+use bmc_error::{SanitizedErrorMessage, bmc_log_address};
 use futures::stream::{self, StreamExt};
 use tracing::Instrument;
 
@@ -95,13 +94,13 @@ pub async fn collect(
             let target = target.clone();
             let bmc_mac = target.bmc_mac.clone();
             let gate = dispatcher.attestation_gate(&target.name);
-            let bmc_address = log_address(&target.address, settings.port);
+            let bmc_address = bmc_log_address(&target.address, settings.port);
             let context = tracing::warn_span!(
                 "bmc", phase = "attestation", operation = "collection", %bmc_mac, %bmc_address
             );
             async move {
                 let started = Instant::now();
-                tracing::info!(outcome = "started", "attestation target collection started");
+                tracing::debug!(outcome = "started", "attestation target collection started");
                 let Some(gate) = gate else {
                     tracing::warn!(
                         outcome = "failed",
@@ -122,14 +121,7 @@ pub async fn collect(
                     Ok(response) => response,
                     // A rejected JWT cannot be recovered per target: abort the batch so
                     // the caller can re-enroll and retry with a fresh token.
-                    Err(err) if is_auth_failure(err.as_ref()) => {
-                        tracing::warn!(
-                            outcome = "failed",
-                            step = "nonce",
-                            "backend session rejected"
-                        );
-                        return Err(err);
-                    }
+                    Err(err) if is_auth_failure(err.as_ref()) => return Err(err),
                     Err(err) => {
                         tracing::warn!(
                             outcome = "skipped", step = "nonce",
@@ -194,22 +186,6 @@ pub async fn collect(
     })
 }
 
-/// Derive an IP:port from the same URL policy as collection, without logging URL data.
-fn log_address(address: &str, default_port: u16) -> String {
-    crate::source::bmc_url(address, default_port)
-        .ok()
-        .and_then(|url| {
-            let ip = match url.host()? {
-                url::Host::Ipv4(ip) => IpAddr::V4(ip),
-                url::Host::Ipv6(ip) => IpAddr::V6(ip),
-                url::Host::Domain(_) => return None,
-            };
-            Some(SocketAddr::new(ip, url.port_or_known_default()?))
-        })
-        .map(|address| address.to_string())
-        .unwrap_or_else(|| "unavailable".to_string())
-}
-
 /// Collection success describes evidence retrieval, independently of verification or upload.
 fn log_collection_result(record: &NodeAttestation, elapsed_seconds: f64) {
     if !record.success {
@@ -225,7 +201,7 @@ fn log_collection_result(record: &NodeAttestation, elapsed_seconds: f64) {
             "attestation target collection incomplete"
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             outcome = "succeeded",
             evidence_count = record.evidences.len(),
             elapsed_seconds,
@@ -247,25 +223,6 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-
-    #[test]
-    fn log_address_uses_collection_port_without_url_credentials_or_paths() {
-        for (address, port, expected) in [
-            ("192.0.2.10", 443, "192.0.2.10:443"),
-            ("192.0.2.10", 8443, "192.0.2.10:8443"),
-            ("192.0.2.10:9443", 8443, "192.0.2.10:9443"),
-            ("[2001:db8::10]", 443, "[2001:db8::10]:443"),
-            ("[2001:db8::10]:9443", 443, "[2001:db8::10]:9443"),
-            (
-                "https://user:secret@192.0.2.10/path?token=x",
-                443,
-                "192.0.2.10:443",
-            ),
-            ("not an address", 443, "unavailable"),
-        ] {
-            assert_eq!(log_address(address, port), expected);
-        }
-    }
 
     #[test]
     fn classifies_unauthorized_as_auth_failure() {

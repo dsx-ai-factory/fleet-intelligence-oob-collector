@@ -642,7 +642,7 @@ fn join_redfish_path(base_url: &Url, path: &str) -> Result<Url, Box<dyn Error>> 
     Ok(url)
 }
 
-pub(crate) fn bmc_url(address: &str, default_port: u16) -> Result<Url, Box<dyn Error>> {
+fn bmc_url(address: &str, default_port: u16) -> Result<Url, Box<dyn Error>> {
     let mut url: Url = if address.starts_with("http://") || address.starts_with("https://") {
         address.parse()?
     } else {

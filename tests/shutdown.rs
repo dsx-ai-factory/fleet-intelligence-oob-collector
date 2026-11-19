@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use futures::FutureExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
@@ -269,8 +270,8 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
     })
     .await
     .expect("diagnostics must be emitted before the five-minute retry delay");
-    let mut previous = 0;
-    for milestone in [
+    let lines = logs.lines().collect::<Vec<_>>();
+    let positions = [
         "starting OOB collector",
         "collector configuration validated",
         "backend enrollment started",
@@ -278,11 +279,18 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
         "inventory collection started",
         "inventory target collection failed",
         "retrying failed inventory targets after a delay",
-    ] {
-        let index = logs.find(milestone).expect(&logs);
-        assert!(index >= previous, "{logs}");
-        previous = index;
-    }
+    ]
+    .map(|milestone| {
+        let matches = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains(milestone))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "{milestone}: {logs}");
+        matches[0]
+    });
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{logs}");
     let failure = logs
         .lines()
         .find(|line| line.contains("inventory target collection failed"))
@@ -294,11 +302,7 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
     );
     assert!(failure.contains("error="), "{logs}");
     assert!(!logs.contains("first inventory upload accepted"), "{logs}");
-    assert!(
-        timeout(Duration::from_millis(100), backend.accept())
-            .await
-            .is_err()
-    );
+    assert!(backend.accept().now_or_never().is_none());
 
     runtime.signal("-TERM").await;
     let (mut upload, _) = accept_request(&backend).await;
@@ -488,7 +492,7 @@ async fn complete_attestation(backend: &TcpListener, mac: &str, upload_status: &
     );
     reply(
         &mut upload,
-        &format!(r#"{{"results":[{{"bmcMac":"{mac}","status":"{upload_status}"}}]}}"#),
+        &format!(r#"{{"results":[{{"bmcMac":"{mac}","status":"{upload_status}","message":"invalid evidence at https://fixture-user:fixture-password@bmc/path?token=private"}}]}}"#),
     )
     .await;
 }
@@ -610,6 +614,17 @@ async fn rejected_attestation_item_is_not_logged_as_successful_sync() {
         );
         assert!(line.contains("phase=\"attestation\""), "{line}");
     }
+    let rejection = logs
+        .lines()
+        .find(|line| line.contains("attestation target export rejected"))
+        .unwrap();
+    assert!(
+        rejection.contains("reason=\"invalid evidence at [URL_REDACTED]\""),
+        "{rejection}"
+    );
+    for secret in ["fixture-user", "fixture-password", "token=private"] {
+        assert!(!logs.contains(secret), "{logs}");
+    }
     assert!(
         !logs
             .lines()
@@ -707,7 +722,7 @@ async fn partial_uploads_report_each_target_and_continue_later_batches() {
         runtime.signal("-TERM").await;
         runtime.expect_clean_exit().await;
         assert!(
-            logs.contains("attestation target export accepted"),
+            !logs.contains("attestation target export accepted"),
             "{logs}"
         );
         let summary = logs
