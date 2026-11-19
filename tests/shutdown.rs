@@ -246,6 +246,76 @@ async fn reply_status(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 #[tokio::test]
+async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
+    let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bmc_port = unavailable.local_addr().unwrap().port();
+    drop(unavailable);
+    let mut runtime =
+        Runtime::start_with_target_retry(backend.local_addr().unwrap().port(), bmc_port, 300);
+    let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
+    let (mut enrollment, _) = accept_request(&backend).await;
+    reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
+    let mut logs = String::new();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let mut line = String::new();
+            assert!(stderr.read_line(&mut line).await.unwrap() > 0, "{logs}");
+            logs.push_str(&line);
+            if line.contains("retrying failed inventory targets after a delay") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("diagnostics must be emitted before the five-minute retry delay");
+    let mut previous = 0;
+    for milestone in [
+        "starting OOB collector",
+        "collector configuration validated",
+        "backend enrollment started",
+        "backend enrollment succeeded",
+        "inventory collection started",
+        "inventory target collection failed",
+        "retrying failed inventory targets after a delay",
+    ] {
+        let index = logs.find(milestone).expect(&logs);
+        assert!(index >= previous, "{logs}");
+        previous = index;
+    }
+    let failure = logs
+        .lines()
+        .find(|line| line.contains("inventory target collection failed"))
+        .unwrap();
+    assert!(failure.contains("bmc_mac=02:00:00:00:00:01"), "{logs}");
+    assert!(failure.contains("error="), "{logs}");
+    assert!(!logs.contains("first inventory upload accepted"), "{logs}");
+    assert!(
+        timeout(Duration::from_millis(100), backend.accept())
+            .await
+            .is_err()
+    );
+
+    runtime.signal("-TERM").await;
+    let (mut upload, _) = accept_request(&backend).await;
+    reply(&mut upload, r#"{"results":[{"status":"OK"}]}"#).await;
+    runtime.expect_clean_exit().await;
+    stderr.read_to_string(&mut logs).await.unwrap();
+    assert!(
+        logs.contains("first inventory upload accepted in this cycle"),
+        "{logs}"
+    );
+    for secret in [
+        "example-token",
+        "example-jwt",
+        "example-user",
+        "example-password",
+    ] {
+        assert!(!logs.contains(secret), "{logs}");
+    }
+}
+
+#[tokio::test]
 async fn signals_stop_during_pending_enrollment() {
     for signal in ["-INT", "-TERM"] {
         let backend = TcpListener::bind("127.0.0.1:0").await.expect("backend");

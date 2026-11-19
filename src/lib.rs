@@ -230,6 +230,10 @@ async fn run_runtime_until_shutdown(
     mut options: RuntimeOptions,
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting OOB collector"
+    );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
     let target_config = config::load_config(&options.inventory.config)?;
     let dispatcher = Arc::new(start_dispatcher(
@@ -240,13 +244,19 @@ async fn run_runtime_until_shutdown(
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
     let enrollment_token =
         required_backend_option(options.enrollment_token.take(), "enrollment token")?;
+    tracing::info!(
+        target_count = target_config.targets.len(),
+        "collector configuration validated"
+    );
     // The session owns the JWT lifecycle: enrolled_at is captured at enrollment and
     // refreshed whenever the agent re-enrolls (e.g. after a JWT rejection).
+    tracing::info!("backend enrollment started");
     let mut session = tokio::select! {
         biased;
         () = shutdown.wait() => return Ok(()),
         session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), enrollment_token) => session?,
     };
+    tracing::info!("backend enrollment succeeded");
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
 
     // Reuse startup validation as the first cycle's snapshot. Later cycles reload
@@ -368,6 +378,10 @@ async fn run_collection_cycle(
     settings.insecure_tls = options.inventory.insecure_tls;
     settings.concurrency = options.inventory.target_concurrency;
     settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
+    tracing::info!(
+        target_count = attestation_targets.len(),
+        "attestation collection started"
+    );
     let uploads = collect_and_upload_attestation(
         AttestationTargets {
             targets: &attestation_targets,
@@ -778,6 +792,7 @@ async fn collect_and_upload_inventory(
     retry: InventoryRetry,
     shutdown: Shutdown,
 ) -> Result<InventorySyncOutcome, Box<dyn Error>> {
+    tracing::info!(target_count = targets.len(), "inventory collection started");
     let mut backend_sink = InventoryBackendSink::new(endpoint, session.jwt(), collector_config)?;
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
@@ -812,6 +827,12 @@ async fn collect_and_upload_inventory(
             Ok(outcome) => {
                 let outcomes = (0..uploaded.len()).map(|index| outcome.item_outcome(index));
                 let (accepted, failures) = partition_uploaded_inventory(uploaded, outcomes);
+                if accepted_uploads == 0 && accepted > 0 {
+                    tracing::info!(
+                        accepted_upload_count = accepted,
+                        "first inventory upload accepted in this cycle"
+                    );
+                }
                 failed_uploads += failures.len();
                 for failure in &failures {
                     match failure {
@@ -1029,6 +1050,7 @@ async fn forward_inventory(
                 None => break,
             },
         };
+        log_inventory_collection_errors(&inventory);
         if hold(&inventory) {
             held.push(inventory);
             continue;
@@ -1047,6 +1069,27 @@ async fn forward_inventory(
         }
     }
     Ok(held)
+}
+
+/// Report collection errors before a retry can delay their upload. Only the
+/// configured MAC and sanitized model errors/references identify the failure.
+fn log_inventory_collection_errors(inventory: &NodeInventory) {
+    if let Some(error) = &inventory.target_error {
+        tracing::warn!(
+            bmc_mac = %inventory.source.mac,
+            error = %error,
+            "inventory target collection failed"
+        );
+    }
+    for error in &inventory.domain_errors {
+        tracing::warn!(
+            bmc_mac = %inventory.source.mac,
+            domain = %error.domain,
+            resource = error.resource.as_ref().map(|resource| resource.as_ref()),
+            error = %error.message,
+            "inventory domain collection failed"
+        );
+    }
 }
 
 struct InventorySyncOutcome {
@@ -1299,10 +1342,111 @@ fn start_dispatcher(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use bmc_attestation::models::{AttestationEvidence, ComponentError, NodeAttestation};
     use bmc_inventory::models::{DomainError, InventorySourceInfo};
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn inventory_errors_are_logged_before_holding_targets_and_remain_sanitized() {
+        let logs = LogWriter::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        let mut inventories = Vec::new();
+        for (index, message) in [
+            "HTTP 401 Unauthorized for https://example-user:example-password@bmc/redfish?token=secret-token",
+            "TLS certificate verification failed for https://bmc/redfish?token=secret-token",
+            "connection refused for https://bmc/redfish?token=secret-token",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut failed = inventory("https://example-user:example-password@bmc");
+            failed.source.mac = format!("02:00:00:00:00:{index:02X}");
+            failed.target_error = Some(message.into());
+            inventories.push(failed);
+        }
+        let mut partial = inventory("https://example-user:example-password@bmc");
+        partial.domain_errors.push(DomainError {
+            domain: "firmware".into(),
+            resource: Some("https://bmc/redfish/v1/UpdateService?token=secret-token".into()),
+            message: "HTTP 403 Forbidden for https://bmc/redfish?token=secret-token".into(),
+        });
+        inventories.push(partial);
+        inventories.push(inventory("https://bmc"));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let (_signal, shutdown) = watch::channel(false);
+        let held = forward_inventory(
+            stream::iter(inventories),
+            &sender,
+            &mut Shutdown(shutdown),
+            |inventory| inventory.target_error.is_some(),
+        )
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+
+        assert_eq!(held.len(), 3);
+        assert_eq!(receiver.try_recv().unwrap().domain_errors.len(), 1);
+        assert!(receiver.try_recv().unwrap().domain_errors.is_empty());
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(logs.lines().count(), 4, "{logs}");
+        for (index, reason) in ["401 Unauthorized", "TLS certificate", "connection refused"]
+            .into_iter()
+            .enumerate()
+        {
+            let line = logs.lines().nth(index).unwrap();
+            assert!(
+                line.contains(&format!("bmc_mac=02:00:00:00:00:{index:02X}")),
+                "{line}"
+            );
+            assert!(line.contains(reason), "{line}");
+            assert!(
+                line.contains("inventory target collection failed"),
+                "{line}"
+            );
+        }
+        let domain = logs.lines().last().unwrap();
+        assert!(
+            domain.contains("inventory domain collection failed"),
+            "{domain}"
+        );
+        assert!(domain.contains("domain=firmware"), "{domain}");
+        assert!(
+            domain.contains("resource=\"/redfish/v1/UpdateService\""),
+            "{domain}"
+        );
+        assert!(domain.contains("403 Forbidden"), "{domain}");
+        for secret in [
+            "example-user",
+            "example-password",
+            "secret-token",
+            "https://",
+        ] {
+            assert!(!logs.contains(secret), "{logs}");
+        }
+    }
 
     #[test]
     fn inventory_summary_distinguishes_success_partial_and_failure() {

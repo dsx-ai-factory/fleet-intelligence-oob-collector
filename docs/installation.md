@@ -123,6 +123,10 @@ Running pods don't prove everything works. Check that:
 - The collector logs show inventory uploads succeeding.
 - The gateway logs show no enrollment or export errors.
 
+At the default `info` log level, the collector reports `starting OOB collector`, `collector configuration validated` with the target count, `backend enrollment started`, and `backend enrollment succeeded`. Each cycle reports `inventory collection started` and `attestation collection started`. `first inventory upload accepted in this cycle` confirms that the backend accepted at least one inventory observation; an accepted observation can still contain collection errors, so also check the collection summary's successful, partial, and failed counts.
+
+An `inventory target collection failed` warning identifies the BMC by `bmc_mac` and includes its sanitized error. An `inventory domain collection failed` warning also identifies the affected `domain` and, when available, `resource`. These warnings appear as each target finishes, before any retry delay, so you can investigate an authentication, TLS, or connectivity problem while the collector waits. Successfully collected parts of a target's inventory are still preserved.
+
 If something fails:
 
 | Problem | What to check |
