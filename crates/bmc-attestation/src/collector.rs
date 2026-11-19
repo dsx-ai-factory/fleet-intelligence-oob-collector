@@ -100,7 +100,6 @@ pub async fn collect(
             );
             async move {
                 let started = Instant::now();
-                tracing::debug!(outcome = "started", "attestation target collection started");
                 let Some(gate) = gate else {
                     tracing::warn!(
                         outcome = "failed",

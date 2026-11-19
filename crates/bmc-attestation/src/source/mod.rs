@@ -178,11 +178,7 @@ impl BmcSession<'_> {
                 .map_err(|_| "failed to reload BMC credentials")?;
             self.target.username = username;
             self.target.password = password;
-            tracing::info!(
-                bmc_mac = %self.target.bmc_mac,
-                outcome = "retrying", step = "authentication",
-                "BMC credentials reloaded; retrying authentication once"
-            );
+            tracing::info!(bmc_mac = %self.target.bmc_mac, "BMC credentials reloaded; retrying authentication once");
         }
     }
 }

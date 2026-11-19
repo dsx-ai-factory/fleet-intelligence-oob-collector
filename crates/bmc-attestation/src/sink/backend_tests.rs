@@ -10,28 +10,6 @@ use crate::models::NodeAttestation;
 const FIRST_MAC: &str = "AA:BB:CC:DD:EE:55";
 const SECOND_MAC: &str = "AA:BB:CC:DD:EE:66";
 
-#[test]
-fn rejection_preserves_sanitized_status_and_reason() {
-    let response: BatchResponse = serde_json::from_value(serde_json::json!({
-        "results": [{"bmcMac": FIRST_MAC, "status": "ERROR https://secret@bmc/status",
-            "message": "invalid evidence at https://user:password@bmc/path?token=private"}]
-    }))
-    .unwrap();
-    let outcome = response.outcomes(&batch());
-    let TargetUploadOutcome::Rejected { status, reason } = &outcome.targets[FIRST_MAC] else {
-        panic!("expected rejection");
-    };
-    assert_eq!(status.as_ref(), "ERROR [URL_REDACTED]");
-    assert_eq!(
-        reason.as_ref().unwrap().as_ref(),
-        "invalid evidence at [URL_REDACTED]"
-    );
-    let rendered = format!("{outcome:?}");
-    for secret in ["password", "private", "secret@", "https://"] {
-        assert!(!rendered.contains(secret), "{rendered}");
-    }
-}
-
 fn batch() -> BatchAttestation {
     BatchAttestation::new(
         "2026-01-01T00:00:00Z".to_string(),

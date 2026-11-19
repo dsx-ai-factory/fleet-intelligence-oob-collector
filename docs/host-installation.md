@@ -111,6 +111,8 @@ sudo journalctl -u fleetint-oob-collector.service \
   -n 100 --no-pager
 ```
 
+At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the failure reason, before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
+
 Check for successful inventory collection and uploads, and address any NICo or gateway errors. Confirm fresh inventory and telemetry for your target in Fleet Intelligence.
 
 For troubleshooting and collection settings, use [Configure Linux packages](host-configuration.md#troubleshooting).

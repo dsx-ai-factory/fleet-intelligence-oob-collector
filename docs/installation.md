@@ -123,20 +123,7 @@ Running pods don't prove everything works. Check that:
 - The collector logs show inventory uploads succeeding.
 - The gateway logs show no enrollment or export errors.
 
-At the default `info` log level, the collector reports `starting OOB collector`, `collector configuration validated` with the target count, `backend enrollment started`, and `backend enrollment succeeded`. Each cycle reports `inventory collection started` and `attestation collection started`. `first inventory upload accepted in this cycle` confirms that the backend accepted at least one inventory observation; an accepted observation can still contain collection errors, so also check the collection summary's successful, partial, and failed counts.
-
-Per-BMC logs use the same fields for inventory and attestation: `phase`, `operation`, `outcome`, `bmc_mac`, and `bmc_address`. The address includes the effective port, such as `192.0.2.10:443` or `[2001:db8::10]:8443`. Addresses are built from the IP and port; URL credentials, paths, and query strings are excluded.
-
-| Level | What you see |
-| --- | --- |
-| `info` (collector default) | Startup, enrollment/session recovery, first inventory upload acceptance, and phase/batch summaries. Healthy endpoints do not emit individual INFO messages. |
-| `warn` | Target or domain/component failures, skipped collection, scheduled retries, and rejected or unconfirmed uploads. Each endpoint warning includes its MAC and address with the failure reason or status. |
-| `error` | A collection cycle or upload batch could not complete after its recovery attempts. Batch errors are reported once rather than repeating the same error text for every endpoint. |
-| `debug` | Per-BMC collection starts, successful results, and accepted uploads, plus lower-level request and response diagnostics. |
-
-A rejected backend JWT is reported once at INFO where the session is renewed, rather than as a failure for every BMC. Collection warnings appear as each target finishes, before any retry delay. An inventory domain warning includes `domain` and, when available, `resource`; an attestation component warning includes the affected `component_id`. Successfully collected inventory and evidence are preserved when another domain or component fails. At `debug`, an accepted upload reports `collection_outcome` as `succeeded`, `partial`, or `failed`: accepting a failure record does not mean collection succeeded or hardware verification passed.
-
-NICo application logs default to `warn` independently of the collector's `info` default, in both Helm and Linux packages. Use `bmcCollector.logLevel` and `nicoHardwareHealth.logLevel` in Helm, or `RUST_LOG` and `FLEETINT_NICO_LOG_LEVEL` on Linux, to change application verbosity. These settings do not disable BMC event collection or telemetry export.
+At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the failure reason, before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
 
 If something fails:
 

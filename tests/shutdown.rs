@@ -848,23 +848,56 @@ async fn nonce_errors_skip_uploads_and_targets_are_retried_next_cycle() {
 }
 
 #[tokio::test]
-async fn nonce_unauthorized_reenrolls_before_retrying() {
+async fn nonce_unauthorized_reenrolls_once_for_multiple_targets() {
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let unavailable = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bmc_port = unavailable.local_addr().unwrap().port();
     drop(unavailable);
-    let mut runtime = Runtime::start(backend.local_addr().unwrap().port(), bmc_port);
+    let mut runtime =
+        Runtime::start_with_targets(backend.local_addr().unwrap().port(), bmc_port, 86400, 3, 3);
     let (mut enrollment, _) = accept_request(&backend).await;
     reply(&mut enrollment, r#"{"jwtAssertion":"example-jwt"}"#).await;
     let (mut inventory, _) = accept_request(&backend).await;
-    reply(&mut inventory, r#"{"results":[{"status":"OK"}]}"#).await;
-    let (mut nonce, request) = accept_request(&backend).await;
-    assert!(request.contains("/nonce "));
-    reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+    reply(
+        &mut inventory,
+        r#"{"results":[{"status":"OK"},{"status":"OK"},{"status":"OK"}]}"#,
+    )
+    .await;
+    for _ in 0..3 {
+        let (mut nonce, request) = accept_request(&backend).await;
+        assert!(request.contains("/nonce "));
+        reply_status(&mut nonce, 401, r#"{"error":"expired"}"#).await;
+    }
     let (mut reenrollment, request) = accept_request(&backend).await;
     assert!(request.starts_with("POST /v1/agent/enroll "));
     reply(&mut reenrollment, r#"{"jwtAssertion":"renewed-jwt"}"#).await;
-    finish_attestation(&backend, &mut runtime).await;
+    for _ in 0..3 {
+        let (mut nonce, request) = accept_request(&backend).await;
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer renewed-jwt")
+        );
+        reply_status(&mut nonce, 403, r#"{"error":"forbidden"}"#).await;
+    }
+    let mut stderr = BufReader::new(runtime.child.stderr.take().unwrap());
+    let mut logs = String::new();
+    timeout(Duration::from_secs(3), async {
+        while !logs.contains("sleeping until next cycle") {
+            assert!(stderr.read_line(&mut logs).await.unwrap() > 0);
+        }
+    })
+    .await
+    .unwrap();
+    runtime.signal("-TERM").await;
+    runtime.expect_clean_exit().await;
+    assert_eq!(
+        logs.matches("backend JWT rejected during nonce collection")
+            .count(),
+        1,
+        "{logs}"
+    );
+    assert!(!logs.contains("backend session rejected"), "{logs}");
 }
 
 #[tokio::test]
