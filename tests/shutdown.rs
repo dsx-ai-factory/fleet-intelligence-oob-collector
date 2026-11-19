@@ -290,6 +290,23 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
         matches[0]
     });
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{logs}");
+    let version = Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
+        .arg("--version")
+        .output()
+        .await
+        .expect("read collector CLI version");
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let (_, version) = version
+        .trim()
+        .split_once(' ')
+        .expect("collector name and version");
+    assert!(
+        lines[positions[0]]
+            .split_whitespace()
+            .any(|field| field.strip_prefix("version=") == Some(version)),
+        "startup log must report --version ({version}): {logs}"
+    );
     let failure = logs
         .lines()
         .find(|line| line.contains("inventory target collection failed"))

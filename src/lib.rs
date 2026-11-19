@@ -241,7 +241,7 @@ async fn run_runtime_until_shutdown(
     mut shutdown: Shutdown,
 ) -> Result<(), Box<dyn Error>> {
     tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
+        version = %bmc_inventory::COLLECTOR_VERSION,
         "starting OOB collector"
     );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
