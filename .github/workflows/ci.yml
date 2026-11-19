@@ -25,6 +25,22 @@ jobs:
           toolchain: 1.95.0
       - run: cargo test --workspace --locked
 
+  installer:
+    name: Installer (Helm ${{ matrix.helm }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        helm: [v3.19.0, v4.0.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: ${{ matrix.helm }}
+      - name: Test interactive installer and render its values with Helm
+        run: python3 -m unittest discover -s scripts -p 'test_installer.py'
+
   packaging:
     name: Validate packaging
     runs-on: ubuntu-latest
