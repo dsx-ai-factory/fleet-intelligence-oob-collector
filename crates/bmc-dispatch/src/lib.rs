@@ -43,7 +43,7 @@ use nv_redfish_dispatcher::{
     TokenBucket, TokenBucketConfig, WithCost,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::oneshot;
 use url::Url;
 
 type Work = FutureWork<(), Infallible>;
@@ -104,13 +104,11 @@ struct EndpointConfig {
 
 struct DispatcherLifecycle {
     handle: Handle,
-    notify: Arc<Notify>,
 }
 
 impl Drop for DispatcherLifecycle {
     fn drop(&mut self) {
         self.handle.graceful_shutdown();
-        self.notify.notify_one();
     }
 }
 
@@ -144,7 +142,6 @@ impl Dispatcher {
             queue_capacity: config.workflow_queue_capacity,
         };
 
-        let notify = Arc::new(Notify::new());
         let mut root = Root::new();
         let mut pending_gates = HashMap::new();
         let mut child_ids = HashMap::new();
@@ -169,26 +166,36 @@ impl Dispatcher {
             root,
         );
         let handle = runtime.handle();
-        let driver_notify = Arc::clone(&notify);
         tokio::spawn(async move {
+            // The runtime emits each deadline once and then parks, so the
+            // driver must keep the timer armed while it keeps polling. Queue
+            // changes and shutdown wake `runtime.next()` directly.
+            let timer = tokio::time::sleep(Duration::ZERO);
+            tokio::pin!(timer);
+            let mut armed = false;
             loop {
-                match runtime.next().await {
+                let output = tokio::select! {
+                    output = runtime.next() => output,
+                    () = &mut timer, if armed => {
+                        armed = false;
+                        continue;
+                    }
+                };
+                match output {
                     RuntimeOutput::Work { .. } => {}
                     RuntimeOutput::SleepUntil(when) => {
-                        tokio::select! {
-                            () = tokio::time::sleep_until(when.into()) => {}
-                            () = driver_notify.notified() => {}
-                        }
+                        // The runtime emits only a deadline earlier than the
+                        // one it retains, or a new one after its previous
+                        // deadline passed, so the latest emission is current.
+                        timer.as_mut().reset(when.into());
+                        armed = true;
                     }
                     RuntimeOutput::Shutdown => break,
                     RuntimeOutput::Runtime(event) => match event {},
                 }
             }
         });
-        let lifecycle = Arc::new(DispatcherLifecycle {
-            handle,
-            notify: Arc::clone(&notify),
-        });
+        let lifecycle = Arc::new(DispatcherLifecycle { handle });
 
         let gates = pending_gates
             .into_iter()
@@ -480,7 +487,7 @@ impl RequestGate {
             }
             queue.push_back(ScheduledWork::new((), work));
         }
-        self.lifecycle.notify.notify_one();
+        // Waking the runtime lets the driver admit the queued request.
         let _ = self.lifecycle.handle.with_root_mut::<Root, _>(|_| ());
 
         started_rx.await.map_err(|_| DispatchError::Unavailable)?;
@@ -1175,6 +1182,108 @@ mod tests {
             bmc_burst: 100,
             workflow_queue_capacity: 8,
         }
+    }
+
+    #[tokio::test]
+    async fn resumes_queued_requests_after_burst_is_exhausted() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                bmc_requests_per_second: 20,
+                bmc_burst: 1,
+                ..config()
+            },
+            ["bmc-1".to_string()],
+        )
+        .expect("dispatcher");
+        let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for _ in 0..6 {
+                gate.execute(async { Ok::<_, Infallible>(()) })
+                    .await
+                    .expect("request");
+            }
+        })
+        .await
+        .expect("queue notifications must not discard token-refill deadlines");
+    }
+
+    #[tokio::test]
+    async fn keeps_later_refill_deadline_after_earlier_one_expires() {
+        // Each refill admits one request and immediately yields the next
+        // refill deadline, racing the expired timer for the earlier one.
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 8,
+                bmc_max_in_flight: 8,
+                bmc_requests_per_second: 20,
+                bmc_burst: 1,
+                ..config()
+            },
+            ["bmc-1".to_string()],
+        )
+        .expect("dispatcher");
+        let gate = dispatcher.inventory_gate("bmc-1").expect("gate");
+
+        let requests = (0..8).map(|_| {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.execute(async { Ok::<_, Infallible>(()) }).await })
+        });
+        tokio::time::timeout(Duration::from_secs(3), futures::future::join_all(requests))
+            .await
+            .expect("each emitted refill deadline must be kept until it fires")
+            .into_iter()
+            .for_each(|result| {
+                result.expect("task").expect("request");
+            });
+    }
+
+    #[tokio::test]
+    async fn serves_other_endpoints_while_waiting_for_token_refill() {
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_requests_per_second: 1,
+                bmc_burst: 1,
+                ..config()
+            },
+            ["bmc-1".to_string(), "bmc-2".to_string()],
+        )
+        .expect("dispatcher");
+        let first = dispatcher.inventory_gate("bmc-1").expect("first gate");
+        let second = dispatcher.inventory_gate("bmc-2").expect("second gate");
+
+        first
+            .execute(async { Ok::<_, Infallible>(()) })
+            .await
+            .expect("first request");
+        let waiting_gate = first.clone();
+        let waiting = tokio::spawn(async move {
+            waiting_gate
+                .execute(async { Ok::<_, Infallible>(()) })
+                .await
+        });
+        for _ in 0..100 {
+            if first.queue.lock().expect("queue").len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(first.queue.lock().expect("queue").len(), 1);
+
+        tokio::time::timeout(Duration::from_millis(500), async {
+            second
+                .execute(async { Ok::<_, Infallible>(()) })
+                .await
+                .expect("second endpoint must not wait for the first endpoint's refill");
+        })
+        .await
+        .expect("other endpoints must make progress before token refill");
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .expect("rate-limited request must resume")
+            .expect("task")
+            .expect("rate-limited request");
     }
 
     #[tokio::test]
