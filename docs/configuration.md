@@ -241,6 +241,8 @@ Auto fallback uses the configured log-polling fields. Mode changes can replay or
 
 Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` and restart `fleetint-nico-health.service` on native installations.
 
+Save a working copy before changing NICo settings. Follow the rollback steps for [Kubernetes](installation.md#roll-back-bundled-nico-health-settings) or [Linux packages](host-configuration.md#roll-back-nico-health-settings).
+
 ## Collection settings
 
 | Setting | Default | Description |

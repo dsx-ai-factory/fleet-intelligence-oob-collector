@@ -132,7 +132,7 @@ logs_sse_max_backoff_seconds = 60
 
 The full [NICo collection controls](configuration.md#nico-collection-controls) table lists TOML names, defaults, and validation shared with Helm. Timing fields preserve a collector's enabled state; set its corresponding `*_enabled` field when enabling an otherwise disabled collector.
 
-NICo regenerates its private configuration from `config.toml` every time its service starts. Restart NICo after changing these controls. Files under `/run/fleetint-nico-health/` are temporary and replaced on startup; edit the source TOML under `/etc`.
+NICo regenerates its private configuration from `config.toml` every time its service starts. Restart NICo after changing these controls. Use the source TOML under `/etc` for edits and [rollback](#roll-back-nico-health-settings). Files under `/run/fleetint-nico-health/` are temporary.
 
 Resource-status settings live in `service.conf`:
 
@@ -199,9 +199,37 @@ When running the collector CLI directly, certificate verification is enabled unl
 
 ## Apply changes
 
-Use `sudo systemctl restart fleetint-oob.target` after changing shared configuration or environment settings. For changes limited to NICo controls, restart only NICo with `sudo systemctl restart fleetint-nico-health.service`. Check the individual service states and logs afterward, as described in [installation verification](host-installation.md#start-and-verify-collection).
+After editing configuration, apply the change to the affected services:
+
+1. For shared targets, placement, or settings used by several services, run `sudo systemctl restart fleetint-oob.target`. For a [collector-only installation](host-installation.md#keep-an-existing-nico-deployment), restart `fleetint-oob-collector.service` instead.
+2. For changes limited to `[nico_health]` controls or NICo environment settings, restart NICo with the commands below. Each start regenerates its private configuration; a failed generation prevents NICo from starting.
+
+   ```bash
+   sudo systemctl restart fleetint-nico-health.service
+   systemctl is-active fleetint-nico-health.service
+   sudo journalctl -u fleetint-nico-health.service -n 100 --no-pager
+   ```
+
+3. Confirm the affected services are active and address errors in their logs. Check fresh inventory and expected health telemetry in Fleet Intelligence, allowing for your selected polling intervals. Follow the full [installation verification](host-installation.md#start-and-verify-collection) when restarting the stack.
+
+The collector's configuration report describes configured values. It does not establish that a running NICo process has loaded your edits; complete the restart and telemetry checks.
 
 For password and token rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
+
+## Roll back NICo health settings
+
+1. Before editing, save a private copy of the working configuration and record the directory printed by the command.
+
+   ```bash
+   NICO_BACKUP_DIR="$(sudo mktemp -d /root/fleetint-nico-backup.XXXXXX)" &&
+     sudo install -m 0600 /etc/fleetint-oob/config.toml "$NICO_BACKUP_DIR/config.toml" &&
+     printf 'Saved working configuration in %s\n' "$NICO_BACKUP_DIR"
+   ```
+
+   If you also plan to edit NICo settings in `service.conf`, save it in the same protected directory. In the same terminal, run `sudo install -m 0600 /etc/fleetint-oob/service.conf "${NICO_BACKUP_DIR:?Set the backup directory}/service.conf"`.
+
+2. If the change causes problems, use `sudoedit /etc/fleetint-oob/config.toml` to restore the saved `[nico_health]` section. If you added the section and the saved file has none, remove it. If NICo settings were your only edits to that file, you can replace its entire contents with the backup. Restore any NICo settings you changed in `service.conf` too. Leave the current BMC targets, credential references, and enrollment settings in place.
+3. Use the NICo restart and log checks under [Apply changes](#apply-changes). Restarting regenerates NICo's configuration from the restored files. Confirm the service is active and fresh health readings arrive for the affected BMCs in Fleet Intelligence.
 
 ## Troubleshooting
 

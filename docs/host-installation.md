@@ -1,6 +1,12 @@
 # Install on Linux (DEB/RPM)
 
-Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and a Fleet Intelligence enrollment token. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
+Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access on a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
+
+## Plan your installation
+
+Start with one BMC, using its real IP and MAC, its login, and Redfish port `443` unless your hardware uses a different port. Confirm that the Linux host can reach both the BMC and Fleet Intelligence. Have your enrollment token ready before starting the services.
+
+For a new setup, use the bundled NICo health service and gateway with their defaults. If NICo already monitors the same BMCs, keep its existing telemetry path and use the [collector-only startup steps](#keep-an-existing-nico-deployment). If you already installed this package, use [Apply changes](host-configuration.md#apply-changes) to update its configuration.
 
 ## Download the package
 
@@ -75,6 +81,14 @@ credentials_profile = "bmc"
 
 Add one `[[targets]]` entry per BMC. The collector and NICo use this shared target list and credential file.
 
+If your BMC uses a custom Redfish port, set `port` on that target. See [Target fields](host-configuration.md#targets-and-placement).
+
+### Review NICo health collection
+
+The package uses the shared targets and BMC credentials to configure NICo, which sends health metrics and events through the local gateway. For a first installation, leave `[nico_health]` out and use the defaults. Start the services and confirm telemetry from your first BMC before deciding whether to tune collection.
+
+To change collection later, save the working file first, then add `[nico_health]` before the first `[[targets]]` in `/etc/fleetint-oob/config.toml` and restart NICo. The service generates a new configuration on startup. See [NICo health collection controls](host-configuration.md#nico-health-collection) and [backup and rollback](host-configuration.md#roll-back-nico-health-settings).
+
 ### Set the enrollment token
 
 Create a protected file containing only your enrollment token:
@@ -95,7 +109,7 @@ The collector and gateway use the same token. The packaged backend addresses poi
 
 ## Start and verify collection
 
-Start the services and enable them at boot:
+If you're keeping an existing NICo deployment, follow [collector-only startup](#keep-an-existing-nico-deployment). For a new bundled deployment, start all three services and enable them at boot.
 
 ```bash
 sudo systemctl enable --now fleetint-oob.target
@@ -113,9 +127,31 @@ sudo journalctl -u fleetint-oob-collector.service \
 
 At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the failure reason, before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
 
-Check for successful inventory collection and uploads, and address any NICo or gateway errors. Confirm fresh inventory and telemetry for your target in Fleet Intelligence.
+In Fleet Intelligence, find the target using its BMC MAC and confirm that fresh inventory and expected health readings arrive. If inventory arrives without health data, check NICo and gateway logs and allow time for the configured polling interval. Once the first BMC is verified, add the remaining targets and [apply the shared configuration changes](host-configuration.md#apply-changes).
 
 For troubleshooting and collection settings, use [Configure Linux packages](host-configuration.md#troubleshooting).
+
+## Keep an existing NICo deployment
+
+Use this path for a new package installation when your existing NICo already monitors the same BMCs and sends health data to Fleet Intelligence. Install the package, configure targets and credentials, and set the enrollment token as above. In `/etc/fleetint-oob/service.conf`, set the following so the inventory report reflects the package services you are using:
+
+```ini
+FLEETINT_NICO_ENABLED=false
+FLEETINT_NICO_TELEMETRY_DESTINATION=disabled
+FLEETINT_OTEL_GATEWAY_ENABLED=false
+```
+
+Start the collector and enable it at boot with these commands.
+
+```bash
+sudo systemctl enable --now fleetint-oob-collector.service
+systemctl is-active fleetint-oob-collector.service
+sudo journalctl -u fleetint-oob-collector.service -n 100 --no-pager
+```
+
+Use the collector log checks above, then confirm fresh inventory and continued telemetry from your existing NICo in Fleet Intelligence. After changing targets or placement on this setup, restart `fleetint-oob-collector.service`. Continue to manage NICo health targets and credentials in the existing deployment.
+
+If you edit the existing NICo configuration, save a working copy and follow the [rollback steps for a separately managed NICo](installation.md#roll-back-a-separately-managed-nico).
 
 ## Disconnect a BMC or target
 
@@ -125,7 +161,7 @@ To stop collecting from a BMC, remove its `[[targets]]` entry from `/etc/fleetin
 sudoedit /etc/fleetint-oob/config.toml
 ```
 
-If other targets remain, restart the stack and check that collection continues for them:
+If other targets remain, restart the stack and check that collection continues for them. For a collector-only installation, restart `fleetint-oob-collector.service` in place of the target.
 
 ```bash
 sudo systemctl restart fleetint-oob.target
