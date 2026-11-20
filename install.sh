@@ -11,6 +11,8 @@ fleetint_install() {
   child_pid=''
   REPLY=''
   ui_active=no
+  ui_reading=no
+  pending_cancel=''
   terminal_state=''
   ui_indent='  '
 
@@ -36,9 +38,16 @@ fleetint_install() {
     printf '%s\n' 'Installation cancelled. Any resources already created remain in the cluster.' >&2
     exit "$1"
   }
+  request_cancel() {
+    if [[ $ui_reading == yes ]]; then
+      pending_cancel=$1
+    else
+      cancel "$1"
+    fi
+  }
   trap cleanup EXIT
-  trap 'cancel 130' INT
-  trap 'cancel 143' TERM
+  trap 'request_cancel 130' INT
+  trap 'request_cancel 143' TERM
   trap 'ui_leave; printf "%s\n" "Installation stopped after a command failed. Review the diagnostic above, resolve the error, and retry; existing Secrets are preserved." >&2' ERR
 
   # Waiting on a background child lets the signal traps cancel long Helm operations.
@@ -441,15 +450,40 @@ fleetint_install() {
     ui_paragraph "$hint" "$ui_muted"
     ui_emit '\n'
   }
+  ui_read() {
+    local count=$1 destination=$2 once=${3-} status
+    # Bash 3.2 reports an idle timeout the same way it reports EOF.
+    if (( BASH_VERSINFO[0] < 4 )); then
+      if [[ $once == once ]]; then
+        IFS= read -r -s -n "$count" -t 1 "$destination" <&3
+      else
+        IFS= read -r -s -n "$count" "$destination" <&3
+      fi
+      return
+    fi
+    while :; do
+      status=0
+      ui_reading=yes
+      if [[ -z $pending_cancel ]]; then
+        # A signal trap may return to a blocked read, so bound the wait.
+        IFS= read -r -s -n "$count" -t 1 "$destination" <&3 || status=$?
+      fi
+      ui_reading=no
+      # Bash restores read's saved tty modes when the builtin returns.
+      # Restore the original terminal only after that cleanup has finished.
+      if [[ -n $pending_cancel ]]; then cancel "$pending_cancel"; fi
+      if (( status <= 128 )) || [[ $once == once ]]; then return "$status"; fi
+    done
+  }
   ui_key() {
     local suffix=''
     REPLY=''
-    if ! IFS= read -r -s -n 1 REPLY <&3; then
+    if ! ui_read 1 REPLY; then
       if [[ ${1-} == close ]]; then REPLY=escape; return; fi
       cancel 130
     fi
     if [[ $REPLY == $'\033' ]]; then
-      if IFS= read -r -s -n 2 -t 1 suffix <&3; then
+      if ui_read 2 suffix once; then
         case $suffix in
           '[A'|'OA') REPLY=up ;;
           '[B'|'OB') REPLY=down ;;
@@ -497,12 +531,12 @@ fleetint_install() {
     ui_field_draw
     while :; do
       key=''
-      IFS= read -r -s -n 1 key <&3 || fail 'Installation cancelled because terminal input ended.'
+      ui_read 1 key || fail 'Installation cancelled because terminal input ended.'
       if [[ $key == $'\033' ]]; then
         sequence=''
         while (( ${#sequence} < 8 )); do
           part=''
-          IFS= read -r -s -n 1 -t 1 part <&3 || break
+          ui_read 1 part once || break
           sequence+=$part
           [[ $part == [a-zA-Z~] ]] && break
         done

@@ -270,6 +270,7 @@ elif 'logs' in args:
         else:
             settings[3] &= ~termios.ECHO
         termios.tcsetattr(slave, termios.TCSANOW, settings)
+        settings = termios.tcgetattr(slave)
         def terminal_session():
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
@@ -364,7 +365,7 @@ elif 'logs' in args:
                 code = process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 self.fail(f"Installer stopped responding at answer {index}, menu confirm {menu_confirmation}, pending {pending!r}: {output[-4000:]!r}")
-            self.assertEqual(termios.tcgetattr(master)[3], settings[3], "terminal flags must be restored")
+            self.assertEqual(termios.tcgetattr(master), settings, "terminal settings must be restored")
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -721,7 +722,7 @@ elif 'logs' in args:
         self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
 
     def test_termination_during_input_restores_terminal_modes(self):
-        code, output, calls, _ = self.run_script(ui="tui", input_signal=signal.SIGTERM, echo=True)
+        code, output, calls, _ = self.run_script(ui="tui", input_signal=signal.SIGTERM, input_delay=0.1, echo=True)
         self.assertEqual(code, 143, output)
         self.assertIn("\x1b[?1049l", output)
         self.assertEqual(calls, [["helm", "version", "--short"]])
@@ -817,8 +818,8 @@ elif 'logs' in args:
         self.assertFalse(any(call[0] == "kubectl" for call in calls))
 
     def test_tui_ctrl_c_restores_terminal(self):
-        code, output, calls, _ = self.run_script(ui="tui", cancel_at=0)
-        self.assertNotEqual(code, 0)
+        code, output, calls, _ = self.run_script(ui="tui", cancel_at=0, input_delay=0.1)
+        self.assertEqual(code, 130, output)
         self.assertIn("\x1b[?1049l", output)
         self.assertFalse(any(call[0] == "kubectl" for call in calls))
 
