@@ -9,7 +9,7 @@ inventory:
   #   name: node-01
   #   address: 192.0.2.10
   #   mac: "00:11:22:33:44:55"
-  #   credentialsProfile: bmc # Profile name in the credentials file.
+  #   credentialsProfile: compute # Profile name in the credentials file.
   computeZone: "" # Default compute zone for every target.
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.

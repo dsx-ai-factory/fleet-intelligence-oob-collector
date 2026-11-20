@@ -50,20 +50,20 @@ inventory:
       name: node-01
       address: 192.0.2.10
       mac: "00:11:22:33:44:55"
-      credentialsProfile: bmc
+      credentialsProfile: compute
       labels:
         rack: rack-12
     - kind: nvswitch
       name: switch-tray-01
       address: 192.0.2.11
       mac: "02:00:0a:00:00:0b"
-      credentialsProfile: switch
+      credentialsProfile: nvswitch
     - kind: power_shelf
       name: power-shelf-01
       address: 192.0.2.12
       port: 8443
       mac: "02:00:0a:00:00:0c"
-      credentialsProfile: bmc
+      credentialsProfile: power_shelf
 ```
 
 You need at least one target. The chart rejects fields it doesn't recognize, so a typo fails the install instead of being ignored.
@@ -108,11 +108,11 @@ inventory:
     - name: node-01
       address: 192.0.2.10
       mac: "02:00:0a:00:00:0a"
-      credentialsProfile: bmc
+      credentialsProfile: compute
     - name: node-02
       address: 192.0.2.11
       mac: "02:00:0a:00:00:0b"
-      credentialsProfile: bmc
+      credentialsProfile: compute
       computeZone: us-west-dc2
       nodeGroup: gb200-inference
 ```
@@ -139,8 +139,9 @@ The credentials file holds named `profiles` and per-BMC `overrides`, keyed by MA
 ```json
 {
   "profiles": {
-    "bmc": { "username": "admin", "password": "replace-with-bmc-password" },
-    "switch": { "username": "switch-admin", "password": "replace-with-switch-password" }
+    "compute": { "username": "admin", "password": "replace-with-compute-password" },
+    "nvswitch": { "username": "switch-admin", "password": "replace-with-nvswitch-password" },
+    "power_shelf": { "username": "admin", "password": "replace-with-power-shelf-password" }
   },
   "overrides": {
     "02:00:0a:00:00:0b": { "password": "replace-with-target-password" }

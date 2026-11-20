@@ -112,7 +112,7 @@ name = "node-01"
 ip = "192.0.2.10"
 port = 443
 mac = "00:11:22:33:44:55"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 labels = { rack = "rack-12" }
 ```
 
