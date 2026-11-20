@@ -32,7 +32,7 @@ See [Architecture](docs/architecture.md) for collection, authentication, and del
 
 ## Getting started
 
-- For Kubernetes, follow [Installation](docs/installation.md) and [Configuration](docs/configuration.md).
+- For a released Kubernetes chart, start with the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) and select the version that matches your chart. The [Installation](docs/installation.md) and [Configuration](docs/configuration.md) files on `main` follow the development branch.
 - To discover BMC targets from NICo REST, follow [endpoint source configuration](docs/configuration.md#endpoint-source).
 - For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.

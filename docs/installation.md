@@ -14,52 +14,92 @@ For a NICo-managed site, use [endpoint source configuration](configuration.md#en
 - The IP and MAC address of each BMC, and its login credentials
 - A Fleet Intelligence enrollment token
 
-## Choose a namespace
+## Choose a Kubernetes context and namespace
 
-The commands on this page install into the namespace in `$NAMESPACE`. Set it before you start, and set it again if you continue in a new terminal. If it is empty, `kubectl` and `helm` use your current context's default namespace instead.
+List your kubeconfig contexts, then replace `your-cluster-context` with the one for this installation. Set the namespace to the one you want to use, or to the existing release's namespace when updating. Set these variables again if you open a new terminal.
 
 ```bash
+kubectl config get-contexts
+export KUBE_CONTEXT='your-cluster-context'
 export NAMESPACE=fleet-intelligence
+kubectl config get-contexts "$KUBE_CONTEXT"
 ```
+
+The commands below pass the context and namespace explicitly. Check both before installing, updating, or uninstalling.
 
 ## Configure targets and Secrets
 
-You give the chart two things: your target list, in a values file, and two Kubernetes Secrets holding the BMC credentials file and the enrollment token. The chart never stores passwords; it only references the Secrets.
+Put the target list and Secret references in your values file. Store the BMC credentials file and enrollment token in two Kubernetes Secrets.
 
-The steps below create the Secrets by hand. To sync them from Vault or OpenBao instead, follow [Credentials](credentials.md) and then continue at [Save your values file](#save-your-values-file).
+The steps below create or update Secrets you manage by hand. To sync them from Vault or OpenBao, follow [Credentials](credentials.md) using the same cluster and namespace, then continue at [Save your values file](#save-your-values-file).
+
+### Prepare the files
+
+Replace these paths with your local paths. Save the credential files in a private directory and use `umask 077` before creating them so only your user can read them.
+
+```bash
+umask 077
+export BMC_CREDENTIALS_FILE='/secure/path/to/credentials.json'
+export ENROLLMENT_TOKEN_FILE='/secure/path/to/enrollment-token'
+```
+
+For compute BMCs that share a login, save this JSON to `$BMC_CREDENTIALS_FILE` and replace both example values.
+
+```json
+{
+  "profiles": {
+    "bmc": {
+      "username": "replace-with-bmc-username",
+      "password": "replace-with-bmc-password"
+    }
+  }
+}
+```
+
+Each target selects a named profile through `credentialsProfile`. If you add switches that use a separate login, add a profile such as `switch` and reference it on those targets. Omit unused profiles. Use [per-MAC overrides](configuration.md#how-credentials-are-resolved) when an individual BMC needs a different username or password.
+
+Get the enrollment token from your Fleet Intelligence administrator and save it to `$ENROLLMENT_TOKEN_FILE` with no surrounding whitespace or trailing newline. Set both files to mode `0600`.
+
+```bash
+chmod 600 "$BMC_CREDENTIALS_FILE" "$ENROLLMENT_TOKEN_FILE"
+```
 
 ### Create the Secrets
 
-Copy [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json) to a private directory, for example `/secure/path/to/credentials.json`, set its mode to `0600`, and fill in your BMC usernames and passwords. [Configuration](configuration.md#bmc-credentials-file) explains the file format.
-
-Get the enrollment token from your Fleet Intelligence administrator. Save it to `/secure/path/to/enrollment-token` with nothing else in the file, not even a trailing newline, and set its mode to `0600`.
-
-Create the Secrets from those files:
+Use these commands for the two dedicated Secrets in this example. They create missing Secrets and update existing ones in place. Server-side apply avoids storing a second copy of the credentials in the last-applied annotation. The commands take ownership of the supplied fields if another field manager previously wrote them. For Secrets maintained by an operator or deployment automation, make changes at their source.
 
 ```bash
-kubectl create namespace "$NAMESPACE" \
-  --dry-run=client -o yaml | kubectl apply -f -
+kubectl --context "$KUBE_CONTEXT" create namespace "$NAMESPACE" \
+  --dry-run=client -o yaml | kubectl --context "$KUBE_CONTEXT" apply -f -
 
-kubectl create secret generic fleet-intelligence-enrollment-token \
+kubectl --context "$KUBE_CONTEXT" create secret generic fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" \
-  --from-file=enrollment-token=/secure/path/to/enrollment-token
+  --from-file="enrollment-token=$ENROLLMENT_TOKEN_FILE" --dry-run=client -o yaml |
+  kubectl --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" apply \
+    --server-side --field-manager=fleetint-oob-install --force-conflicts -f -
 
-kubectl create secret generic fleet-intelligence-bmc-credentials \
+kubectl --context "$KUBE_CONTEXT" create secret generic fleet-intelligence-bmc-credentials \
   --namespace "$NAMESPACE" \
-  --from-file=credentials.json=/secure/path/to/credentials.json
+  --from-file="credentials.json=$BMC_CREDENTIALS_FILE" --dry-run=client -o yaml |
+  kubectl --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" apply \
+    --server-side --field-manager=fleetint-oob-install --force-conflicts -f -
 ```
 
 ### Save your values file
 
-Save your targets and the Secret names in a values file, for example `/path/to/collector-values.yaml`. List one entry under `targets` for each BMC; [Configuration](configuration.md#targets) describes every field.
+Set `OOB_VALUES_FILE` to where you'll save your values file. Start with this example for one compute BMC and add one entry under `inventory.targets` per BMC.
+
+```bash
+export OOB_VALUES_FILE='/path/to/collector-values.yaml'
+```
 
 ```yaml
 inventory:
-  computeZone: us-west-dc1
-  nodeGroup: gb200-training
+  computeZone: your-compute-zone
+  nodeGroup: your-node-group
   targets:
     - kind: compute
-      name: node-01
+      name: your-node-name
       address: 192.0.2.10
       mac: "00:11:22:33:44:55"
       credentialsProfile: bmc
@@ -72,24 +112,29 @@ backend:
     secretKey: enrollment-token
 ```
 
-`backend.url` defaults to the production endpoint, `https://data.fleet-intelligence.nvidia.com`. Set it in your values file when using a different Fleet Intelligence endpoint.
+- Replace `address` and `mac` with the BMC's IP and MAC. Both are required. Enter the IP without a scheme or port and quote each unique MAC. Set `port` only if Redfish uses a port other than the default `443`.
+- Set `credentialsProfile` to the profile name in your JSON. You can omit it when a per-MAC override supplies the target's credentials.
+- Set `kind` to `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default). If you set a display `name`, include at least one non-whitespace character.
+- Replace `computeZone` and `nodeGroup` with the exact placement names in your Fleet Intelligence account, or omit either field to leave it unset. Targets inherit the values under `inventory` and can override them individually.
+- If you use different Secret names or keys, update the references to match. `backend.url` defaults to `https://data.fleet-intelligence.nvidia.com`. Set it only if you use a different Fleet Intelligence endpoint.
+
+See [Configuration](configuration.md#targets) for the full field reference.
 
 ## Install
 
-Choose a published chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and replace `<chart-version>` below:
+Choose a version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and follow the matching version of the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). For example, `--version 1.0.0` installs chart `1.0.0`, which matches the `v1.0.0` Git tag. On GitHub, read the guides at the matching tag. Set `OOB_CHART_VERSION` to your chosen chart version.
 
 ```bash
 export OOB_CHART_VERSION='<chart-version>'
 
 helm upgrade --install fleet-intelligence-oob-collector \
   fleet-intelligence-oob-collector \
+  --kube-context "$KUBE_CONTEXT" \
   --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
   --version "$OOB_CHART_VERSION" \
-  --values /path/to/collector-values.yaml \
+  --values "$OOB_VALUES_FILE" \
   --namespace "$NAMESPACE" \
-  --create-namespace \
-  --wait \
-  --timeout 10m
+  --create-namespace
 ```
 
 For a deployment using private registry mirrors, configure `imagePullSecrets` and authenticate Helm to the chart registry as required by your organization.
@@ -98,44 +143,112 @@ Collector and NICo image tags default to the chart version. See [workload settin
 
 ## Verify
 
+After Helm returns, watch the release's pods start in the same terminal. Image pulls and pod initialization can take several minutes.
+
+```bash
+kubectl --context "$KUBE_CONTEXT" get pods --namespace "$NAMESPACE" \
+  -l app.kubernetes.io/instance=fleet-intelligence-oob-collector --watch
+```
+
+Wait for each enabled pod to show `Running` with all containers ready, such as `1/1`. Press Ctrl+C to stop watching. If any pod stays unready or keeps restarting, see [Troubleshoot installation](#troubleshoot-installation).
+
+Check the release and workloads. Helm's `STATUS: deployed` indicates that Helm applied the release. Use Kubernetes readiness and the checks below to verify startup and collection. Use your release's Deployment names and skip any component you disabled.
+
 ```bash
 helm status fleet-intelligence-oob-collector \
-  --namespace "$NAMESPACE"
+  --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
 
-kubectl get pods \
+kubectl --context "$KUBE_CONTEXT" get deployments,pods \
   --namespace "$NAMESPACE" \
   -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
+```
 
-kubectl logs \
-  --namespace "$NAMESPACE" \
+With the default workloads and one replica each, expect output like this. Pod suffixes are assigned by Kubernetes.
+
+```text
+NAME                                                          READY   UP-TO-DATE   AVAILABLE
+deployment.apps/fleet-intelligence-oob-collector               1/1     1            1
+deployment.apps/fleet-intelligence-oob-collector-otel-gateway  1/1     1            1
+deployment.apps/nico-hardware-health                          1/1     1            1
+
+NAME                                                    READY   STATUS    RESTARTS
+pod/fleet-intelligence-oob-collector-<suffix>            1/1     Running   0
+pod/fleet-intelligence-oob-collector-otel-gateway-<suffix> 1/1     Running   0
+pod/nico-hardware-health-<suffix>                        1/1     Running   0
+```
+
+Check the collector, NICo init container, and gateway logs.
+
+```bash
+kubectl --context "$KUBE_CONTEXT" logs --namespace "$NAMESPACE" \
   deployment/fleet-intelligence-oob-collector
 
-kubectl logs --namespace "$NAMESPACE" \
+kubectl --context "$KUBE_CONTEXT" logs --namespace "$NAMESPACE" \
   deployment/nico-hardware-health --container generate-nico-config
 
-kubectl logs --namespace "$NAMESPACE" \
+kubectl --context "$KUBE_CONTEXT" logs --namespace "$NAMESPACE" \
   deployment/fleet-intelligence-oob-collector-otel-gateway
 ```
 
-Use your release's Deployment names, and skip any component you disabled.
+At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle` in the collector log. Per-BMC problems appear at `warn` with `bmc_mac`, `bmc_address`, and the failure reason before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
 
-Running pods don't prove everything works. Check that:
+Empty logs can be normal for the `generate-nico-config` init container and the gateway. In `kubectl describe pod` output for NICo, look for `Reason: Completed` and `Exit Code: 0` under that init container. For the gateway, check that the pod is ready and look for enrollment or export errors if the log has entries.
 
-- NICo's `generate-nico-config` init container completed successfully.
-- The collector logs show inventory uploads succeeding.
-- The gateway logs show no enrollment or export errors.
+To verify inventory end to end, look up each configured BMC MAC under Machines in Fleet Intelligence after the first cycle. Open the matching machine and check that its inventory includes the expected hardware details.
 
-At the default `info` level, look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the failure reason, before any retry delay. Set the collector log level to `debug` to see healthy per-BMC results.
+## Troubleshoot installation
 
-If something fails:
+Use the Deployment and pod statuses from [Verify](#verify) to find the affected workload. Describe an unready or restarting pod, then use the affected container name from its description to retrieve logs.
+
+```bash
+POD='your-pod-name'
+kubectl --context "$KUBE_CONTEXT" describe pod "$POD" --namespace "$NAMESPACE"
+
+CONTAINER='collector' # Replace with the affected container name.
+kubectl --context "$KUBE_CONTEXT" logs "$POD" \
+  --namespace "$NAMESPACE" --container "$CONTAINER"
+kubectl --context "$KUBE_CONTEXT" logs "$POD" \
+  --namespace "$NAMESPACE" --container "$CONTAINER" --previous
+```
+
+The pod description includes scheduling, mount, and image pull events. For a pod in `CrashLoopBackOff`, use `--previous` to read the most recent crashed container's logs. For NICo startup failures, inspect `generate-nico-config` first.
+
+If Helm fails before creating pods, render the same chart locally to diagnose chart downloads, values validation, or template errors.
+
+```bash
+helm template fleet-intelligence-oob-collector fleet-intelligence-oob-collector \
+  --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
+  --version "$OOB_CHART_VERSION" --values "$OOB_VALUES_FILE" \
+  --namespace "$NAMESPACE" --debug
+```
 
 | Problem | What to check |
 | --- | --- |
+| The Deployment reports `ProgressDeadlineExceeded` | Find the unready pod and inspect its events and logs for the cause. |
+| `FailedMount` or `CreateContainerConfigError` | Check that each referenced Secret exists in the selected namespace and contains the key specified in your values file. |
 | A BMC rejects the login | The target's `credentialsProfile`, any override for its MAC, and the account on the BMC itself |
 | The collector or gateway can't enroll | That the enrollment token is valid and `backend.url` is correct |
 | The gateway can't export telemetry | That the backend is reachable from the cluster and its TLS certificate is trusted |
 
-To change settings later, edit your values file and run the same `helm upgrade --install` command. See [Rotation and ownership](credentials.md#rotation-and-ownership) for which changes take effect on their own and which need a restart.
+## Update an existing installation
+
+1. Set the [context and namespace](#choose-a-kubernetes-context-and-namespace) for the existing release and confirm its installed chart version.
+
+   ```bash
+   helm list --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE" \
+     --filter '^fleet-intelligence-oob-collector$'
+   ```
+
+2. To rotate credentials, update the password at the BMC or get a new enrollment token from your Fleet Intelligence administrator. For manually managed Secrets, edit the corresponding local file and rerun its pipeline under [Create the Secrets](#create-the-secrets) with the Secret name and key from your existing values file. For operator-managed Secrets, update the secrets manager and wait for the sync. Follow [Rotation and ownership](credentials.md#rotation-and-ownership) for reload timing and the commands to restart the collector and gateway after an enrollment token change.
+3. To add BMCs, append entries to `inventory.targets` in the existing values file and retain the entries for machines you still collect. If a new target needs new credentials, update the BMC credentials Secret first. Run the same [Helm upgrade command](#install) with your updated values. Keep the installed chart version for a values-only change, or select the new version and consult its matching documentation when upgrading the chart. Target changes restart the collector and NICo.
+4. After a Helm upgrade, check that each Deployment has finished its latest rollout before checking inventory. The command below prints rollout progress.
+
+   ```bash
+   kubectl --context "$KUBE_CONTEXT" rollout status deployment --namespace "$NAMESPACE" \
+     -l app.kubernetes.io/instance=fleet-intelligence-oob-collector --timeout=10m
+   ```
+
+   Repeat the [verification checks](#verify) for the affected workloads and targets.
 
 ## Disconnect an individual machine
 
@@ -148,9 +261,9 @@ If your values file is generated by configuration management, make the change th
 3. Wait for both to finish restarting:
 
    ```bash
-   kubectl rollout status deployment/fleet-intelligence-oob-collector \
+   kubectl --context "$KUBE_CONTEXT" rollout status deployment/fleet-intelligence-oob-collector \
      --namespace "$NAMESPACE" --timeout=10m
-   kubectl rollout status deployment/nico-hardware-health \
+   kubectl --context "$KUBE_CONTEXT" rollout status deployment/nico-hardware-health \
      --namespace "$NAMESPACE" --timeout=10m
    ```
 
@@ -166,20 +279,20 @@ Uninstalling stops collection for every target in the release. Data that was alr
 
    ```bash
    helm uninstall fleet-intelligence-oob-collector \
-     --namespace "$NAMESPACE" --wait --timeout 10m
+     --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --wait --timeout 10m
    ```
 
 2. Verify that no pods remain for the release:
 
    ```bash
-   kubectl get pods --namespace "$NAMESPACE" \
+   kubectl --context "$KUBE_CONTEXT" get pods --namespace "$NAMESPACE" \
      -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
 3. Delete unused credential Secrets:
 
    ```bash
-   kubectl delete secret fleet-intelligence-enrollment-token \
+   kubectl --context "$KUBE_CONTEXT" delete secret fleet-intelligence-enrollment-token \
      fleet-intelligence-bmc-credentials --namespace "$NAMESPACE"
    ```
 
