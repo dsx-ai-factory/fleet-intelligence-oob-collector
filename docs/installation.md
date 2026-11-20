@@ -7,7 +7,7 @@ For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`
-- Helm 3
+- Helm 3 or 4
 - Network access from the cluster to your BMCs and to Fleet Intelligence
 - The IP and MAC address of each BMC, and its login credentials
 - A Fleet Intelligence enrollment token
@@ -84,10 +84,10 @@ The chart's defaults already point to the two Secrets you created and to the pro
 
 ## Install
 
-Choose a chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and use the matching version of the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). For example, chart `1.0.0` matches the `v1.0.0` Git tag. Replace `1.0.0` below with the version you chose.
+Choose a chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and use the matching version of the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). For example, chart `1.0.0` matches the `v1.0.0` Git tag. Replace `<chart-version>` below with the version you chose, such as `1.0.0`.
 
 ```bash
-export OOB_CHART_VERSION='1.0.0'
+export OOB_CHART_VERSION='<chart-version>'
 
 helm upgrade --install fleet-intelligence-oob-collector \
   fleet-intelligence-oob-collector \
