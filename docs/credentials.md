@@ -227,4 +227,4 @@ kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway
 
 Use your release's Deployment names, and skip the gateway if it's disabled. You don't need to do anything for the short-lived Fleet Intelligence sessions; the collector and gateway renew those themselves.
 
-On Kubernetes, the operator owns the Secrets it creates, so clean them up through the operator. Uninstalling the collector chart leaves operator resources and Secrets in place. On Linux, package removal/purge retains operator-created credentials and token files. Retire credentials at their source and remove unused local files explicitly.
+For Kubernetes, see [Uninstall the OOB collector](installation.md#uninstall-the-oob-collector) to remove sync resources, source values, and unused Secrets. On Linux, package removal/purge retains operator-created credentials and token files. Retire credentials at their source and remove unused local files explicitly.
