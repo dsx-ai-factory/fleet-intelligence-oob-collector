@@ -7,7 +7,7 @@ The Helm chart doesn't hold any secrets itself. It reads two Kubernetes Secrets 
 | BMC credentials file (JSON) | `credentials.json` | The collector and NICo, mounted at `/run/secrets/bmc/credentials.json` |
 | Fleet Intelligence enrollment token | `enrollment-token` | The collector and bundled gateway (`FLEETINT_ENROLLMENT_TOKEN`) |
 
-You can create these Secrets by hand, as shown in [Installation](installation.md#configure-targets-and-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
+You can create these Secrets by hand, as shown in [Installation](installation.md#create-the-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
 
 Three separate logins are involved, and it helps to keep them apart:
 
@@ -30,11 +30,7 @@ Pick one operator for each Secret. The examples pair Vault with the Vault Secret
 
 You need a server the cluster can reach over trusted TLS, KV version 2 mounts, Kubernetes authentication, and the operator's CRDs installed.
 
-The commands on this page use the namespace in `$NAMESPACE`. Use the same namespace you install the collector into, and set it again if you continue in a new terminal:
-
-```bash
-export NAMESPACE=fleet-intelligence
-```
+The commands on this page run against your current `kubectl` context and the namespace in `$NAMESPACE`. Select the collector's cluster and set the namespace as shown in [Installation](installation.md#set-up-your-shell).
 
 The example manifests can't read shell variables, so they name the namespace `fleet-intelligence` directly. If you use a different namespace, change it in each manifest you apply.
 
@@ -209,7 +205,7 @@ What happens next depends on what changed:
 
 | Change | What you need to do |
 | --- | --- |
-| BMC passwords in the credentials file | Nothing. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
+| BMC passwords in the credentials file | Nothing. On Kubernetes, an updated Secret usually reaches the pods within a minute or two. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
 | Enrollment token | Restart the collector and gateway, because they read the token only at startup. On Kubernetes, the VSO token example does this for you. With ESO, a hand-made Secret, or a Linux token file, restart them yourself (below). |
 | Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 | Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |
@@ -231,4 +227,4 @@ kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway
 
 Use your release's Deployment names, and skip the gateway if it's disabled. You don't need to do anything for the short-lived Fleet Intelligence sessions; the collector and gateway renew those themselves.
 
-On Kubernetes, the operator owns the Secrets it creates, so clean them up through the operator. Uninstalling the collector chart leaves operator resources and Secrets in place. On Linux, package removal/purge retains operator-created credentials and token files. Retire credentials at their source and remove unused local files explicitly.
+For Kubernetes, see [Uninstall the OOB collector](installation.md#uninstall-the-oob-collector) to remove sync resources, source values, and unused Secrets. On Linux, package removal/purge retains operator-created credentials and token files. Retire credentials at their source and remove unused local files explicitly.
