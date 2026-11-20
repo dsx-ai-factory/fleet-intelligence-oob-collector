@@ -35,7 +35,7 @@ Save this as `credentials.json` and replace the example username and password:
 ```json
 {
   "profiles": {
-    "bmc": {
+    "compute": {
       "username": "replace-with-bmc-username",
       "password": "replace-with-bmc-password"
     }
@@ -43,9 +43,9 @@ Save this as `credentials.json` and replace the example username and password:
 }
 ```
 
-This is a complete file for BMCs that share one login. Each target in your values file selects a profile by name, here `bmc`. Add more only if you need them:
+This is a complete file for compute BMCs that share one login. Each target in your values file selects a profile by name, here `compute`. Add more only if you need them:
 
-- **Another profile:** if some BMCs, such as switches, use a different login, add a profile such as `switch` next to `bmc` and select it on those targets. Profiles no target uses are allowed, but leave out ones you don't need.
+- **Another profile:** if other BMCs, such as NVSwitch trays, use a different login, add a profile such as `nvswitch` next to `compute` and select it on those targets. Profiles no target uses are allowed, but leave out ones you don't need.
 - **A per-MAC override:** if a single BMC has its own username or password, add an [override for its MAC](configuration.md#how-credentials-are-resolved).
 
 Create the credentials Secret, then paste the enrollment token from your Fleet Intelligence administrator when prompted. The token isn't echoed or saved to disk.
@@ -75,7 +75,7 @@ inventory:
       name: your-node-name        # Optional. Display name; can't be blank.
       address: 192.0.2.10         # Required. BMC IP address, without a scheme or port.
       mac: "00:11:22:33:44:55"    # Required. BMC MAC address, in quotes; unique per target.
-      credentialsProfile: bmc     # Profile name in credentials.json.
+      credentialsProfile: compute # Profile name in credentials.json.
 ```
 
 Replace every `your-...` value and the example address and MAC. Delete an optional line to leave it unset.

@@ -27,7 +27,7 @@ file = "/etc/fleetint-oob/credentials/credentials.json"
 # At least one real target and the shared JSON credentials file are required.
 # [[targets]]
 # kind = "compute"
-# credentials_profile = "bmc"
+# credentials_profile = "compute"
 # name = "node-01"
 # ip = "192.0.2.10"
 # mac = "02:00:00:00:00:01"

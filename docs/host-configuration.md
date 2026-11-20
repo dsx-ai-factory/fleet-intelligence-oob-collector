@@ -33,7 +33,7 @@ kind = "compute"
 name = "node-01"
 ip = "192.0.2.10"
 mac = "02:00:00:00:00:01"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 labels = { rack = "rack-12" }
 ```
 
@@ -57,12 +57,12 @@ The shared rules for [target identity](configuration.md#target-identity), [place
 
 ## BMC credentials
 
-For a target with `credentials_profile = "bmc"`, the credentials file can contain:
+For a target with `credentials_profile = "compute"`, the credentials file can contain:
 
 ```json
 {
   "profiles": {
-    "bmc": {
+    "compute": {
       "username": "replace-with-bmc-user",
       "password": "replace-with-bmc-password"
     }

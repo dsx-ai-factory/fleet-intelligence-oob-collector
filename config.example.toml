@@ -25,7 +25,7 @@ file = "/run/secrets/bmc/credentials.json"
 
 [[targets]]
 kind = "compute"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 # Optional: inventory `name` and telemetry `machine_name`.
 name = "node-01"
 ip = "192.0.2.10"
@@ -35,7 +35,7 @@ labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "nvswitch"
-credentials_profile = "switch"
+credentials_profile = "nvswitch"
 name = "switch-tray-01"
 ip = "192.0.2.11"
 mac = "02:00:0a:00:00:0b"
@@ -43,7 +43,7 @@ labels = { rack = "rack-12" }
 
 [[targets]]
 kind = "power_shelf"
-credentials_profile = "bmc"
+credentials_profile = "power_shelf"
 name = "power-shelf-01"
 ip = "192.0.2.12"
 mac = "02:00:0a:00:00:0c"

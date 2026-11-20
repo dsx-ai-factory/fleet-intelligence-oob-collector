@@ -12,7 +12,7 @@ inventory:
     - kind: compute
       address: 192.0.2.10
       mac: "00:11:22:33:44:55"
-      credentialsProfile: bmc
+      credentialsProfile: compute
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json

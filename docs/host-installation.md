@@ -46,7 +46,7 @@ sudo install -m 0640 -o root -g fleetint-oob \
 sudoedit /etc/fleetint-oob/credentials/credentials.json
 ```
 
-Fill in the `bmc` credential profile used by the target below. Keep passwords in this JSON file.
+Fill in the `compute` credential profile used by the target below. Keep passwords in this JSON file.
 
 ### Set the target list
 
@@ -70,7 +70,7 @@ kind = "compute"
 name = "node-01"
 ip = "192.0.2.10"
 mac = "02:00:00:00:00:01"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 ```
 
 Add one `[[targets]]` entry per BMC. The collector and NICo use this shared target list and credential file.
