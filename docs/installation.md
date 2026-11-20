@@ -56,12 +56,14 @@ curl --fail --silent --show-error \
 
 Use a terminal at least 80 columns wide and 24 rows high for the Unicode UI. Use arrows and Enter to select an option, or press its number. Enter accepts a displayed default. Esc cancels from menus and Ctrl-C cancels from any prompt. The installer uses plain prompts when the terminal UI is unavailable. Pass `--ascii` for basic borders, `--plain` for text prompts, or `--tui` to require the terminal UI.
 
-1. **Cluster.** Confirm the Kubernetes context. The chart version defaults to the latest stable release in NGC unless you set it in the environment. Press Enter to accept the default or type an exact version. If the lookup fails, enter your version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector). Keep the suggested namespace, release name, and backend unless your deployment requires different values. Use the compute zone and node group from your Fleet Intelligence account if you have them.
-2. **Health.** If these BMCs are new to NICo, press Enter to use the bundled setup. If NICo already monitors them, choose Yes to get the manual Helm path for keeping it.
-3. **Targets.** Choose the hardware type and enter the real BMC IP address and MAC. Keep port `443` for standard Redfish HTTPS. For a first install, start with one target. Match the credentials profile name from your JSON file, for example `bmc` for the sample compute node. Leave it blank only if a per-MAC override supplies both login fields. You can leave optional placement overrides and labels blank. See [Target fields](configuration.md#targets).
-4. **Secrets.** For a new namespace, choose `file` and enter the absolute path to your private credentials JSON. For a provisioned Secret, including a Vault or OpenBao-managed one, choose `existing` and enter its name and key.
-5. **Access.** Choose the source of the enrollment token the same way. Leave the image-pull Secret blank unless your registry requires one.
-6. **Review.** Check the cluster, version, targets, and Secret sources before choosing Yes. Enter advances through review pages. The final confirmation defaults to No.
+Choose **Basic (recommended)** for a first install with one BMC. Basic uses your current Kubernetes context, the latest stable chart release in NGC, and the [recommended deployment settings](#plan-your-installation). It asks for a context or exact chart version if it cannot find one. You can find chart versions in the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector).
+
+1. **Setup.** Press Enter to use the bundled NICo and telemetry gateway for a BMC without NICo coverage. If NICo already monitors the BMC, choose Yes for the manual Helm steps to keep your existing deployment.
+2. **Target.** Enter the BMC IP address and its physical MAC address. Basic uses Redfish port `443`, leaves the hardware type unspecified, and uses the `bmc` profile from the example credentials JSON.
+3. **Access.** Choose a source for the BMC credentials and for the enrollment token. For new Secrets, choose `file` and enter the absolute paths to your private files. For provisioned Secrets, choose `existing`. Basic uses `fleet-intelligence-bmc-credentials` with key `credentials.json` and `fleet-intelligence-oob-collector-agent-token` with key `agent-token`, unless you [export different names or keys](#set-installer-defaults-from-environment-variables).
+4. **Review.** Check the cluster, chart version, target, and Secret sources before choosing Yes. Enter advances through review pages. The final confirmation defaults to No.
+
+Choose **Advanced** to set a hardware type, use a different credentials profile, configure compute zones or node groups, add labels or more BMCs, or customize the deployment and Secrets at the prompts. Match the profile name to your credentials JSON. Leave it blank only if a per-MAC override supplies both login fields. See [Target fields](configuration.md#targets) for the available settings.
 
 The installer uses the exact chart version shown on the review screen for validation and installation. After confirmation, it checks cluster access and renders the chart, waits for the namespace to become active, and checks the Secret references. It creates missing Secrets from the selected files and reuses existing Secrets.
 
@@ -71,11 +73,11 @@ Both the terminal UI and plain mode show progress and recent workload warnings. 
 
 If Helm fails, a Deployment does not finish rolling out, or the installer cannot confirm an inventory upload, it shows completed checks alongside the failure and available diagnostics. Those diagnostics include pod status, Kubernetes warning events, and recent workload logs for the release. Resources remain in the cluster for diagnosis.
 
-To pass an option or run from a reviewed commit, use `bash -s -- --plain` (or another supported option) in place of `bash`, or replace `main` in the URL with the full commit SHA.
+To open a workflow directly, replace `bash` in the install command with `bash -s -- --basic` or `bash -s -- --advanced`. Combine it with a display option such as `bash -s -- --basic --plain`. To run from a reviewed commit, replace `main` in the URL with the full commit SHA.
 
 ### Set installer defaults from environment variables
 
-Export variables in the terminal before running the installer. When a prompt loads a default, it displays the value and identifies its source, for example `From environment: FLEETINT_INSTALL_NAMESPACE`. Press Enter to accept it, or enter or select a different value. The installer still asks you to review and confirm before applying changes.
+Export variables in the terminal before running the installer. Basic uses the supplied settings directly, skips any file path or BMC address and MAC prompts you have filled in, and notes that it loaded environment defaults on the review screen. Advanced displays each loaded default and its source, for example `From environment: FLEETINT_INSTALL_NAMESPACE`. Press Enter to accept it, or enter or select a different value. Both workflows ask you to review and confirm before applying changes.
 
 ```bash
 export FLEETINT_INSTALL_KUBE_CONTEXT="$(kubectl config current-context)"
@@ -93,7 +95,7 @@ curl --fail --silent --show-error \
 
 Replace the sample BMC IP, MAC, profile, and file paths with your own. With `curl | bash`, export the variables before the pipeline so the Bash process receives them.
 
-| Deployment variable | Prompt default it sets |
+| Deployment variable | Setting it supplies |
 | --- | --- |
 | `FLEETINT_INSTALL_KUBE_CONTEXT` | Kubernetes context name |
 | `FLEETINT_INSTALL_NAMESPACE` | Kubernetes namespace |
@@ -103,7 +105,7 @@ Replace the sample BMC IP, MAC, profile, and file paths with your own. With `cur
 | `FLEETINT_INSTALL_COMPUTE_ZONE` | Default compute zone for all targets |
 | `FLEETINT_INSTALL_NODE_GROUP` | Default node group for all targets |
 
-| First BMC variable | Prompt default it sets |
+| First BMC variable | Setting it supplies |
 | --- | --- |
 | `FLEETINT_INSTALL_BMC_KIND` | `compute`, `nvswitch`, `power_shelf`, or `unknown` |
 | `FLEETINT_INSTALL_BMC_IP` | BMC IPv4 or IPv6 address without a scheme or port |
@@ -114,9 +116,9 @@ Replace the sample BMC IP, MAC, profile, and file paths with your own. With `cur
 | `FLEETINT_INSTALL_BMC_COMPUTE_ZONE` | Compute zone override for this BMC |
 | `FLEETINT_INSTALL_BMC_NODE_GROUP` | Node group override for this BMC |
 
-Enter target labels and any additional BMCs at the prompts.
+Use Advanced to enter target labels or add BMCs beyond the first one.
 
-| Secret variable | Prompt default it sets |
+| Secret variable | Setting it supplies |
 | --- | --- |
 | `FLEETINT_INSTALL_BMC_CREDENTIALS_FILE` | Absolute path to the private credentials JSON file. Selects the file source by default. |
 | `FLEETINT_INSTALL_BMC_CREDENTIALS_SECRET_NAME` | BMC credentials Secret name |
@@ -126,7 +128,7 @@ Enter target labels and any additional BMCs at the prompts.
 | `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_KEY` | Key in the enrollment token Secret |
 | `FLEETINT_INSTALL_IMAGE_PULL_SECRET` | Name of an existing image-pull Secret in the chosen namespace |
 
-Keep passwords and enrollment tokens in private files or Kubernetes Secrets. To reuse an existing Secret, leave its file variable unset and set its name and key if they differ from the defaults.
+Keep passwords and enrollment tokens in private files or Kubernetes Secrets. To reuse an existing Secret, leave its file variable unset and set its name and key if they differ from the defaults. In Basic, setting a Secret name or key without a file makes `existing` the default for that Secret.
 
 Unset or empty variables use the normal prompts and defaults. To omit a value supplied by the environment, unset its variable before running the installer. If an environment value fails prompt validation, the installer names the variable to correct or unset before retrying.
 

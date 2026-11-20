@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "install.sh").read_text()
 CHART_LOOKUP = ["helm", "show", "chart", "fleet-intelligence-oob-collector",
                 "--repo", "https://helm.ngc.nvidia.com/nvidia/fleet-intelligence"]
+CURRENT_CONTEXT = ["kubectl", "config", "current-context"]
 
 
 def terminal_screen(text, columns, rows=24):
@@ -130,7 +131,7 @@ class InstallerTests(unittest.TestCase):
                    color_mode="truecolor", echo=False, terminal=None, input_delay=0, input_signal=None,
                    missing_stty=False, glyphs=None, chart_token="enrollmentToken", existing_nico="no",
                    version_answer="1.2.3", chart_metadata="appVersion: 9.9.9\nversion: 1.4.2", install_env=None,
-                   result_keys=("\n",)):
+                   result_keys=("\n",), workflow="advanced", current_context="test-context"):
         mock = self.directory / "mock.py"
         mock.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, signal, subprocess, sys, time
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
@@ -160,6 +161,10 @@ if name == 'helm':
     if failure == 'terminate' and args[0] == 'upgrade':
         os.kill(os.getppid(), signal.SIGTERM)
         time.sleep(5)
+elif args == ['config', 'current-context']:
+    if not os.environ['CURRENT_CONTEXT']:
+        sys.exit(1)
+    print(os.environ['CURRENT_CONTEXT'])
 elif 'secret' in args and 'get' in args:
     if failure == 'secret-read':
         sys.exit(1)
@@ -239,6 +244,8 @@ elif 'logs' in args:
             for _ in range(2):
                 answers += [mode, "", ""] + ([str(private_file)] if mode == "file" else [])
             answers += ["", confirm]
+            if workflow is None:
+                answers.insert(0, "advanced")
         if no_python:
             for name in ("mktemp", "chmod", "rm", "stty"):
                 if name == "stty" and missing_stty:
@@ -247,7 +254,7 @@ elif 'logs' in args:
         env = {key: value for key, value in os.environ.items() if not key.startswith("FLEETINT_INSTALL_")}
         env.update(PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
                    CALL_LOG=str(log), TEST_MODE=mode, FAIL_AT=fail, SAVED_VALUES=str(saved), TEST_HELM_VERSION=helm_version,
-                   CHART_METADATA=chart_metadata,
+                   CHART_METADATA=chart_metadata, CURRENT_CONTEXT=current_context,
                    CHART_DEFAULTS="backend:\n" + "".join("  " + field + ":\n    existingSecret: fixture\n" for field in (["agentToken", "enrollmentToken"] if chart_token == "both" else [chart_token] if chart_token else [])),
                    TMPDIR=str(self.directory), REAL_RENDER="yes" if real_render else "",
                    REAL_HELM=shutil.which("helm") or "", CHART=str(ROOT / "deployments/helm/fleet-intelligence-oob-collector"))
@@ -275,6 +282,8 @@ elif 'logs' in args:
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
         options = [] if ui in ("auto", "fallback") else ["--tui" if ui == "unsupported" else "--" + ui]
+        if workflow is not None:
+            options.append("--" + workflow)
         if glyphs is not None:
             options.append("--" + glyphs)
         process = subprocess.Popen([shutil.which("bash"), "-s", "--", *options], stdin=subprocess.PIPE, stdout=slave, stderr=slave,
@@ -329,9 +338,11 @@ elif 'logs' in args:
                             os.write(master, b"\n")
                             index += 1
                         else:
-                            if b"Kind: compute" in screen or b"Choose the hardware type" in screen:
+                            if b"Choose an installation workflow" in screen:
+                                choices = ["basic", "advanced"]
+                            elif b"Choose the hardware type" in screen:
                                 choices = ["unknown", "compute", "nvswitch", "power_shelf"]
-                            elif b"Source: existing or file" in screen or b"Where are your credentials stored?" in screen:
+                            elif b"Choose a Secret source" in screen:
                                 choices = ["existing", "file"]
                             else:
                                 choices = ["no", "yes"]
@@ -385,6 +396,77 @@ elif 'logs' in args:
         self.assertNotIn("nicoHardwareHealth", values)
         self.assertNotIn("otelGateway", values)
         self.assertIn("first inventory upload accepted in this cycle", output)
+
+    def test_default_basic_workflow_installs_one_bmc_with_recommended_settings(self):
+        private_file = str(self.directory / "private input $(touch SENTINEL)")
+        answers = ["", "", "192.0.2.10", "001122334455", "", private_file, "", private_file, "yes"]
+        code, output, calls, saved = self.run_script(
+            workflow=None, ui="auto", mode="file", answers=answers, real_render=bool(shutil.which("helm")),
+        )
+        self.assertEqual(code, 0, output)
+        for text in ("Basic (recommended)", "Does NICo already monitor these BMCs?", "BMC IP address",
+                     "BMC MAC address", "Chart version: 1.4.2", "Review the installation settings",
+                     "first inventory upload accepted in this cycle"):
+            self.assertIn(text, output)
+        for text in ("List contexts with kubectl config get-contexts", "Kubernetes namespace", "Choose a chart version",
+                     "Choose the hardware type", "Use 443 unless", "Target label key", "Add another BMC?"):
+            self.assertNotIn(text, output)
+        self.assertIn(CURRENT_CONTEXT, calls)
+        self.assertIn(CHART_LOOKUP, calls)
+        upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
+        self.assertEqual(upgrade[3], "fleet-intelligence-oob-collector")
+        for flag, value in (("--kube-context", "test-context"), ("--namespace", "fleet-intelligence"), ("--version", "1.4.2")):
+            self.assertEqual(upgrade[upgrade.index(flag) + 1], value)
+        values = json.loads(saved.read_text())
+        self.assertEqual(values["inventory"], {"computeZone": "", "nodeGroup": "", "targets": [{
+            "address": "192.0.2.10", "mac": "00:11:22:33:44:55", "kind": "unknown", "port": 443,
+            "credentialsProfile": "bmc",
+        }]})
+        self.assertEqual(values["backend"]["url"], "https://data.fleet-intelligence.nvidia.com")
+        self.assertEqual(len([c for c in calls if "create" in c and "secret" in c]), 2)
+
+    def test_basic_workflow_uses_exported_values_and_skips_prefilled_inputs(self):
+        private_file = str(self.directory / "private input $(touch SENTINEL)")
+        defaults = {
+            "KUBE_CONTEXT": "env-context", "NAMESPACE": "env-ns", "CHART_VERSION": "2.3.4",
+            "BMC_KIND": "compute", "BMC_IP": "192.0.2.1", "BMC_MAC": "02:00:00:00:00:01",
+            "BMC_PORT": "8443", "BMC_CREDENTIALS_PROFILE": "custom-profile",
+            "BMC_CREDENTIALS_FILE": private_file, "ENROLLMENT_TOKEN_SECRET_NAME": "env-enrollment",
+            "ENROLLMENT_TOKEN_SECRET_KEY": "token",
+        }
+        exported = {f"FLEETINT_INSTALL_{key}": value for key, value in defaults.items()}
+        code, output, calls, saved = self.run_script(workflow="basic", install_env=exported,
+                                                      answers=["", "", "", "yes"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("Defaults loaded from the terminal environment.", output)
+        self.assertIn("Secret source (existing/file) [file]", output)
+        self.assertIn("Secret source (existing/file) [existing]", output)
+        for text in ("Installation workflow", "BMC IP address", "BMC MAC address", "Absolute path to the private file", "Secret name ["):
+            self.assertNotIn(text, output)
+        self.assertNotIn(CURRENT_CONTEXT, calls)
+        self.assertNotIn(CHART_LOOKUP, calls)
+        upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
+        for flag, value in (("--kube-context", "env-context"), ("--namespace", "env-ns"), ("--version", "2.3.4")):
+            self.assertEqual(upgrade[upgrade.index(flag) + 1], value)
+        values = json.loads(saved.read_text())
+        self.assertEqual(values["inventory"]["targets"], [{
+            "address": "192.0.2.1", "mac": "02:00:00:00:00:01", "kind": "compute", "port": 8443,
+            "credentialsProfile": "custom-profile",
+        }])
+        self.assertEqual(values["backend"]["enrollmentToken"], {"existingSecret": "env-enrollment", "secretKey": "token"})
+
+    def test_basic_recovers_from_unavailable_defaults_and_can_decline_installation(self):
+        answers = ["chosen-context", "1.2.3", "no", "192.0.2.10", "001122334455", "existing", "existing", ""]
+        code, output, calls, saved = self.run_script(workflow="basic", ui="tui", current_context="",
+                                                      fail="chart-lookup", answers=answers)
+        self.assertEqual(code, 0, output)
+        self.assertIn("No current context found", output)
+        self.assertIn("Latest release lookup failed", output)
+        self.assertIn("Context: chosen-context", output)
+        self.assertIn("Chart version: 1.2.3", output)
+        self.assertIn("Installation cancelled; no cluster changes were made.", output)
+        self.assertEqual(calls, [["helm", "version", "--short"], CURRENT_CONTEXT, CHART_LOOKUP])
+        self.assertFalse(saved.exists())
 
     def test_enter_accepts_and_pins_the_latest_chart_in_plain_and_tui_modes(self):
         for ui in ("plain", "tui"):
@@ -503,13 +585,18 @@ elif 'logs' in args:
                 self.assertEqual(calls, [["helm", "version", "--short"]])
 
     def test_existing_nico_routes_to_manual_installation_before_cluster_access(self):
-        for ui in ("plain", "tui"):
-            with self.subTest(ui=ui), tempfile.TemporaryDirectory() as directory:
+        for ui, workflow in (("plain", "basic"), ("plain", "advanced"), ("tui", "basic"), ("tui", "advanced")):
+            with self.subTest(ui=ui, workflow=workflow), tempfile.TemporaryDirectory() as directory:
                 self.directory = Path(directory)
-                code, output, calls, saved = self.run_script(ui=ui, existing_nico="yes")
+                if workflow == "basic":
+                    code, output, calls, saved = self.run_script(ui=ui, workflow=workflow, answers=["yes"])
+                    expected_calls = [["helm", "version", "--short"], CURRENT_CONTEXT, CHART_LOOKUP]
+                else:
+                    code, output, calls, saved = self.run_script(ui=ui, workflow=workflow, existing_nico="yes")
+                    expected_calls = [["helm", "version", "--short"], CHART_LOOKUP]
                 self.assertEqual(code, 0, output)
                 self.assertIn("#keep-an-existing-nico-deployment", output)
-                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+                self.assertEqual(calls, expected_calls)
                 self.assertFalse(saved.exists())
 
     def test_piped_installer_asks_questions_and_uses_pinned_context_and_version(self):
@@ -593,15 +680,18 @@ elif 'logs' in args:
                            kind, "192.0.2.10", "001122334455", "8443", "device-01", "profile",
                            "other-zone", "other-group", "rack", 'rack "12"', "", "no",
                            "existing", "", "", "existing", "", "", "", "yes"]
-                code, output, _, saved = self.run_script(answers=answers, real_render=bool(shutil.which("helm")))
+                code, output, _, saved = self.run_script(workflow=None, answers=["advanced", *answers],
+                                                          real_render=bool(shutil.which("helm")))
                 self.assertEqual(code, 0, output)
                 target = json.loads(saved.read_text())["inventory"]["targets"][0]
                 self.assertEqual(target, {"kind": kind, "address": "192.0.2.10", "mac": "00:11:22:33:44:55",
                                          "port": 8443, "name": "device-01", "credentialsProfile": "profile",
                                          "computeZone": "other-zone", "nodeGroup": "other-group", "labels": {"rack": 'rack "12"'}})
-                self.assertLess(output.index("Kind: compute"), output.index(device + " BMC IP"))
-                for field in ("BMC MAC", "Redfish HTTPS port", "display name", "credentials profile", "compute zone override", "node group override", "label key"):
-                    self.assertIn(device + " " + field, output)
+                self.assertLess(output.index("Kind: compute"), output.index(f"BMC 1 ({device})"))
+                for field in ("BMC IP address", "BMC MAC address", "Redfish HTTPS port", "Display name",
+                              "Credentials profile", "Compute zone for this BMC", "Node group for this BMC", "Label key"):
+                    self.assertIn(field, output)
+                self.assertNotIn("node node", output.lower())
 
     def test_target_label_limit_includes_automatic_labels(self):
         answers = ["test-context", "", "", "1.2.3", "", "zone", "group", "no",
@@ -636,6 +726,10 @@ elif 'logs' in args:
         self.assertEqual(code, 0, output)
         self.assertEqual(json.loads(saved.read_text())["inventory"]["targets"][0]["kind"], "compute")
         self.assertNotIn("Value:", output)
+        self.assertNotIn("node node", output.lower())
+        self.assertIn("BMC 1 (Compute node)", output)
+        self.assertIn("Node group for this BMC", output)
+        self.assertIn("Leave blank to use the deployment node group.", output)
         self.assertIn("Review the installation settings", output)
         self.assertIn("Page 2/", output)
         self.assertIn("\x1b[?1049h", output)
@@ -747,7 +841,7 @@ elif 'logs' in args:
         for c_locale in (True, False):
             with self.subTest(c_locale=c_locale), tempfile.TemporaryDirectory() as directory:
                 self.directory = Path(directory)
-                code, output, calls, _ = self.run_script(ui="auto", ascii_only=c_locale,
+                code, output, calls, _ = self.run_script(ui="auto", workflow=None, ascii_only=c_locale,
                                                        terminal="xterm-256color", confirm="no")
                 self.assertEqual(code, 0, output)
                 self.assertIn("\x1b[?1049h", output)
@@ -1033,9 +1127,14 @@ elif 'logs' in args:
     def test_help_does_not_need_a_terminal(self):
         result = subprocess.run(["bash", "-s", "--", "--help"], input=SCRIPT, text=True, capture_output=True, start_new_session=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--plain", result.stdout)
-        self.assertIn("--unicode", result.stdout)
-        self.assertIn("--ascii", result.stdout)
+        for option in ("--basic", "--advanced", "--plain", "--unicode", "--ascii"):
+            self.assertIn(option, result.stdout)
+
+    def test_conflicting_workflow_options_fail_before_opening_a_terminal(self):
+        result = subprocess.run(["bash", "-s", "--", "--basic", "--advanced"], input=SCRIPT, text=True,
+                                capture_output=True, start_new_session=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Choose either --basic or --advanced.", result.stderr)
 
 
 if __name__ == "__main__":

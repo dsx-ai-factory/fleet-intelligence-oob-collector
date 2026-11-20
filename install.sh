@@ -82,6 +82,7 @@ fleetint_install() {
   valid_key() { [[ ${#1} -le 253 && $1 =~ ^[a-zA-Z0-9._-]+$ ]]; }
   valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; }
   valid_yes_no() { [[ $1 == yes || $1 == no ]]; }
+  valid_workflow() { [[ $1 == basic || $1 == advanced ]]; }
   valid_source() { [[ $1 == existing || $1 == file ]]; }
   valid_kind() { [[ $1 == compute || $1 == nvswitch || $1 == power_shelf || $1 == unknown ]]; }
   valid_target_label() {
@@ -408,10 +409,16 @@ fleetint_install() {
     local title=$1 hint='One step at a time. Your settings stay on this machine.' step index style marker
     local steps=(Cluster Health Targets Secrets Access Review)
     step=${ui_section:0:1}
+    if [[ $workflow == basic ]]; then steps=(Setup Target Access Review); fi
     case $title in
-      'Kubernetes context'*) title='Choose your cluster'; hint='Every cluster operation will use this Kubernetes context.' ;;
-      Namespace) title='Where should we deploy?'; hint='Use a dedicated namespace to keep the collector together.' ;;
-      'Helm release name') title='Name this deployment'; hint='This is the Helm release you will manage and upgrade.' ;;
+      'Installation workflow'*) title='Choose an installation workflow'; hint='Choose how much of the setup you want to customize.' ;;
+      'Kubernetes context'*)
+        title='Kubernetes context'
+        hint='List contexts with kubectl config get-contexts.'
+        if [[ $workflow == basic ]]; then hint='No current context found. List with kubectl config get-contexts.'; fi
+        ;;
+      Namespace) title='Kubernetes namespace'; hint='Use a dedicated namespace to keep the workloads together.' ;;
+      'Helm release name') hint='Use this name to manage and upgrade the Helm release.' ;;
       'Checking for the latest chart release') hint='Looking up the latest stable release in NGC. Ctrl-C cancels.' ;;
       'NGC chart version')
         title='Choose a chart version'
@@ -424,12 +431,19 @@ fleetint_install() {
         fi
         ;;
       'Fleet Intelligence HTTPS'*) title='Connect to Fleet Intelligence'; hint='Use the production endpoint or your own HTTPS backend origin.' ;;
-      *'BMC IP address'*) title='Add a BMC address'; hint='Enter an IPv4 or IPv6 address, without a scheme or port.' ;;
-      *'BMC MAC'*) title='Identify this BMC'; hint='Use the physical BMC MAC, not the host network interface MAC.' ;;
+      'BMC IP address'*) title='BMC IP address'; hint='Use the BMC IPv4 or IPv6 address without a scheme or port.' ;;
+      'BMC MAC address'*) title='BMC MAC address'; hint='Enter the MAC of the management controller itself.' ;;
       'Kind: compute'*) title='Choose the hardware type'; hint='This tells Fleet Intelligence what kind of device you collect.' ;;
+      'Redfish HTTPS port') hint='Use 443 unless this BMC serves Redfish on a different port.' ;;
+      'Display name'*) title='Display name'; hint='Use a name that helps you identify this BMC in Fleet Intelligence.' ;;
+      'Credentials profile'*) title='Credentials profile'; hint='Use a JSON profile, or leave blank for a complete MAC override.' ;;
+      'Compute zone for this BMC'*) title='Compute zone for this BMC'; hint='Leave blank to use the deployment compute zone.' ;;
+      'Node group for this BMC'*) title='Node group for this BMC'; hint='Leave blank to use the deployment node group.' ;;
+      'Label key'*) title='Target label key'; hint='Use a key like rack. Leave blank to finish adding labels.' ;;
+      'Label value for '*) hint='Enter the value of this target label.' ;;
       'Does NICo already monitor'*) title='Does NICo already monitor these BMCs?'; hint='The bundled NICo collects health metrics and events for your BMCs.' ;;
-      'Add another BMC?'*) hint='For a first install, verify one BMC before adding more.' ;;
-      'Source: existing or file') title='Where are your credentials stored?'; hint='For new Secrets, choose a private file. Reuse provisioned Secrets.' ;;
+      'Add another BMC?'*) title='Add another BMC?'; hint='For a first install, verify one BMC before adding more.' ;;
+      'Secret source'*) title='Choose a Secret source'; hint='Use a private file or an existing Kubernetes Secret.' ;;
       'Install with these settings?'*) title='Ready to install?'; hint='Install the collector, NICo hardware health, and telemetry gateway.' ;;
       'Review the installation settings') hint='Check the cluster, hardware, and Secret references before installing.' ;;
     esac
@@ -437,14 +451,16 @@ fleetint_install() {
     ui_emit '%s%s%s%s  %sNVIDIA / FLEET INTELLIGENCE%s\n' "$ui_indent" "$ui_accent" "$ui_logo_top" "$ui_reset" "$ui_bold" "$ui_reset"
     ui_emit '%s%s%s%s  Out-of-band collector\n' "$ui_indent" "$ui_accent" "$ui_logo_middle" "$ui_reset"
     ui_emit '%s%s%s%s  %sHardware visibility, beyond the host.%s\n\n' "$ui_indent" "$ui_accent" "$ui_logo_bottom" "$ui_reset" "$ui_muted" "$ui_reset"
-    ui_emit '%s' "$ui_indent"
-    for ((index=0; index<6; index++)); do
-      style=$ui_muted marker=$ui_pending
-      if (( index + 1 < step )); then style=$ui_accent; marker=$ui_complete; fi
-      if (( index + 1 == step )); then style=$ui_bold; marker=$ui_current; fi
-      ui_emit '%s%s %s%s  ' "$style" "$marker" "${steps[$index]}" "$ui_reset"
-    done
-    ui_emit '\n\n'
+    if [[ $step == [1-9] ]]; then
+      ui_emit '%s' "$ui_indent"
+      for ((index=0; index<${#steps[@]}; index++)); do
+        style=$ui_muted marker=$ui_pending
+        if (( index + 1 < step )); then style=$ui_accent; marker=$ui_complete; fi
+        if (( index + 1 == step )); then style=$ui_bold; marker=$ui_current; fi
+        ui_emit '%s%s %s%s  ' "$style" "$marker" "${steps[$index]}" "$ui_reset"
+      done
+      ui_emit '\n\n'
+    fi
     ui_paragraph "$ui_section" "$ui_muted"
     ui_paragraph "$title" "$ui_bold"
     ui_paragraph "$hint" "$ui_muted"
@@ -586,11 +602,17 @@ fleetint_install() {
     local label=$1 default=$2 validator=$3 from_env=$4 selected=0 index
     local options=() descriptions=() details=()
     case $validator in
+      valid_workflow)
+        options=(basic advanced); descriptions=('Basic (recommended)' 'Advanced')
+        details=('Start with one BMC and recommended deployment settings.' 'Configure custom settings, Secrets, and multiple BMCs.')
+        ;;
       valid_yes_no)
         options=(no yes); descriptions=('No' 'Yes')
         details=('Keep things as they are.' 'Continue with the settings you selected.')
         case $label in
           'Does NICo already monitor'*) details=('Recommended for a first install. Use bundled NICo and gateway.' 'Get the manual steps for keeping your existing NICo deployment.') ;;
+          'Add another BMC?'*) details=('Continue to BMC credentials and enrollment.' 'Enter the settings for one more BMC.') ;;
+          'Install with these settings?'*) details=('Exit without making changes.' 'Apply these settings and verify the deployment.') ;;
         esac
         ;;
       valid_source)
@@ -792,7 +814,7 @@ fleetint_install() {
 
   ask() {
     local _dest=$1 _label=$2 _default=${3-} _optional=${4-no} _validator=${5-} _answer
-    local _env=${6-} _from_env=''
+    local _env=${6-} _from_env='' _basic=${7-prompt}
     if [[ -n $_env && -n ${!_env-} ]]; then
       _default=${!_env}
       [[ $_default != *[[:cntrl:]]* ]] || fail "Invalid value in $_env. Correct or unset it and rerun the installer."
@@ -803,10 +825,15 @@ fleetint_install() {
       fi
       _from_env=$_env
     fi
+    if [[ $workflow == basic && ( $_basic == default || ( $_basic == prefilled && -n $_default ) ) ]]; then
+      if [[ -n $_from_env ]]; then environment_defaults=yes; fi
+      printf -v "$_dest" '%s' "$_default"
+      return
+    fi
     while :; do
       if [[ $ui_active == yes ]]; then
         case $_validator in
-          valid_yes_no|valid_source|valid_kind)
+          valid_yes_no|valid_source|valid_kind|valid_workflow)
             ui_menu "$_label" "$_default" "$_validator" "$_from_env"
             _answer=$REPLY
             ;;
@@ -869,16 +896,18 @@ fleetint_install() {
   }
   secret_questions() {
     local prefix=$4 default_source=existing
-    local file_env="${prefix}_FILE"
-    if [[ -n ${!file_env-} ]]; then default_source=file; fi
+    local file_env="${prefix}_FILE" name_env="${prefix}_SECRET_NAME" key_env="${prefix}_SECRET_KEY"
+    if [[ -n ${!file_env-} || ( $workflow == basic && -z ${!name_env-} && -z ${!key_env-} ) ]]; then
+      default_source=file
+    fi
     printf '\n%s\n' "$1"
     printf '%s\n' 'Choose file to create a Secret in a new namespace. Use existing for a provisioned Secret.'
-    ask source 'Source: existing or file' "$default_source" no valid_source
-    ask secret_name 'Secret name' "$2" no valid_secret "${prefix}_SECRET_NAME"
-    ask secret_key 'Secret key' "$3" no valid_key "${prefix}_SECRET_KEY"
+    ask source 'Secret source (existing/file)' "$default_source" no valid_source
+    ask secret_name 'Secret name' "$2" no valid_secret "$name_env" default
+    ask secret_key 'Secret key' "$3" no valid_key "$key_env" default
     secret_file=''
     if [[ $source == file ]]; then
-      ask secret_file 'Absolute path to the private file on this machine' '' no valid_path "$file_env"
+      ask secret_file 'Absolute path to the private file on this machine' '' no valid_path "$file_env" prefilled
     fi
   }
   ensure_secret() {
@@ -908,14 +937,20 @@ fleetint_install() {
 
   ui_mode=auto
   ui_glyphs=unicode
+  workflow='' environment_defaults=no
   while (( $# )); do
     case $1 in
       --plain) ui_mode=plain ;;
       --tui) ui_mode=tui ;;
       --unicode) ui_glyphs=unicode ;;
       --ascii) ui_glyphs=ascii ;;
+      --basic|--advanced)
+        if [[ -n $workflow && $workflow != "${1#--}" ]]; then fail 'Choose either --basic or --advanced.'; fi
+        workflow=${1#--}
+        ;;
       --help|-h)
-        printf '%s\n' 'Usage: bash install.sh [--tui | --plain] [--unicode | --ascii]' \
+        printf '%s\n' 'Usage: bash install.sh [--basic | --advanced] [--tui | --plain] [--unicode | --ascii]' \
+          'Choose Basic for a single BMC and standard settings, or Advanced to customize the setup.' \
           'Defaults to the Unicode terminal UI; uses plain prompts when the terminal UI is unavailable.' \
           'Use --ascii for basic borders and symbols, or --plain for text prompts.' \
           'Export FLEETINT_INSTALL_ variables to supply prompt defaults. See the installation guide for the list.'
@@ -939,7 +974,7 @@ fleetint_install() {
     *) fail 'This installer requires Helm 3 or 4.' ;;
   esac
 
-  ui_section='1 / 6  Deployment'
+  ui_section='Get started'
   ui_accent='' ui_bold='' ui_muted='' ui_reset='' ui_selected='' ui_input=''
   ui_columns=${COLUMNS:-80} ui_rows=${LINES:-24}
   if [[ -t 1 ]] && command -v stty >/dev/null; then
@@ -1011,9 +1046,31 @@ fleetint_install() {
   guide=https://docs.nvidia.com/fleet-intel/oob-collector/installation
   printf '%s\n' 'Install the Fleet Intelligence OOB collector on Kubernetes.'
   printf '%s\n' 'Have Helm 3 or 4, kubectl, BMC IPs/MACs, credential profiles, and an enrollment token ready.'
-  ask context 'Kubernetes context (kubectl config get-contexts)' '' no '' FLEETINT_INSTALL_KUBE_CONTEXT
-  ask namespace Namespace fleet-intelligence no valid_label FLEETINT_INSTALL_NAMESPACE
-  ask release 'Helm release name' "$chart" no valid_release FLEETINT_INSTALL_RELEASE
+  if [[ -z $workflow ]]; then
+    if [[ $ui_active == no ]]; then
+      printf '%s\n' 'Basic starts with one BMC and recommended settings. Advanced shows all options.'
+    fi
+    ask workflow 'Installation workflow (basic/advanced)' basic no valid_workflow
+  fi
+  current_context=''
+  profile_default=''
+  if [[ $workflow == basic ]]; then
+    ui_section='1 / 4  Setup'
+    profile_default=bmc
+    if [[ -z ${FLEETINT_INSTALL_KUBE_CONTEXT:-} ]] &&
+       run kubectl config current-context > "$work_dir/current-context" 2>/dev/null; then
+      current_context=$(< "$work_dir/current-context")
+      if [[ $current_context == *[[:cntrl:]]* || $current_context != *[![:space:]]* ]]; then current_context=''; fi
+    fi
+    if [[ $ui_active == no && -z $current_context && -z ${FLEETINT_INSTALL_KUBE_CONTEXT:-} ]]; then
+      printf '%s\n' 'No current Kubernetes context found. Choose a context to continue.'
+    fi
+  else
+    ui_section='1 / 6  Deployment'
+  fi
+  ask context 'Kubernetes context (kubectl config get-contexts)' "$current_context" no '' FLEETINT_INSTALL_KUBE_CONTEXT prefilled
+  ask namespace Namespace fleet-intelligence no valid_label FLEETINT_INSTALL_NAMESPACE default
+  ask release 'Helm release name' "$chart" no valid_release FLEETINT_INSTALL_RELEASE default
   latest_version=''
   if [[ -z ${FLEETINT_INSTALL_CHART_VERSION:-} ]]; then
     if [[ $ui_active == yes ]]; then
@@ -1040,11 +1097,12 @@ fleetint_install() {
       printf 'Latest release lookup failed. Enter an exact chart version from the NGC listing in %s\n' "$guide"
     fi
   fi
-  ask version 'NGC chart version' "$latest_version" no valid_version FLEETINT_INSTALL_CHART_VERSION
-  ask backend 'Fleet Intelligence HTTPS backend origin' https://data.fleet-intelligence.nvidia.com no valid_backend FLEETINT_INSTALL_BACKEND_URL
-  ask zone 'Default compute zone (optional)' '' yes valid_text FLEETINT_INSTALL_COMPUTE_ZONE
-  ask group 'Default node group (optional)' '' yes valid_text FLEETINT_INSTALL_NODE_GROUP
-  ui_section='2 / 6  NICo hardware health'
+  ask version 'NGC chart version' "$latest_version" no valid_version FLEETINT_INSTALL_CHART_VERSION prefilled
+  ask backend 'Fleet Intelligence HTTPS backend origin' https://data.fleet-intelligence.nvidia.com no valid_backend FLEETINT_INSTALL_BACKEND_URL default
+  ask zone 'Default compute zone (optional)' '' yes valid_text FLEETINT_INSTALL_COMPUTE_ZONE default
+  ask group 'Default node group (optional)' '' yes valid_text FLEETINT_INSTALL_NODE_GROUP default
+  if [[ $workflow == basic ]]; then ui_section='1 / 4  NICo hardware health'
+  else ui_section='2 / 6  NICo hardware health'; fi
   if [[ $ui_active == no ]]; then
     printf '\n%s\n' 'This install includes NICo hardware health and its telemetry gateway.'
     printf '%s\n' 'For BMCs without NICo coverage, press Enter to use the bundled setup.'
@@ -1057,54 +1115,58 @@ fleetint_install() {
     exit 0
   fi
 
-  if [[ $ui_active == no ]]; then
+  if [[ $ui_active == no && $workflow == advanced ]]; then
     printf '\n%s\n' 'For a first install, verify one BMC before adding more.'
   fi
   targets='' seen_macs='' count=0
   target_review=()
+  if [[ $workflow == basic ]]; then target_step='2 / 4'; else target_step='3 / 6'; fi
   while :; do
     count=$((count + 1))
     target_env=''
     if (( count == 1 )); then target_env=FLEETINT_INSTALL_BMC_; fi
-    ui_section="3 / 6  BMC target $count"
-    ask kind 'Kind: compute, nvswitch, power_shelf, unknown' unknown no valid_kind "${target_env:+${target_env}KIND}"
+    ui_section="$target_step  BMC target $count"
+    ask kind 'Kind: compute, nvswitch, power_shelf, unknown' unknown no valid_kind "${target_env:+${target_env}KIND}" default
     case $kind in
       compute) device='Compute node' ;;
       nvswitch) device='NVSwitch' ;;
       power_shelf) device='Power shelf' ;;
       unknown) device='Device' ;;
     esac
-    ui_section="3 / 6  $device $count"
-    ask address "$device BMC IP address (no scheme or port)" '' no valid_ip "${target_env:+${target_env}IP}"
-    ask mac "$device BMC MAC (unique)" '' no valid_unique_mac "${target_env:+${target_env}MAC}"
+    ui_section="$target_step  BMC $count ($device)"
+    if [[ $ui_active == no ]]; then printf '\nBMC %s (%s)\n' "$count" "$device"; fi
+    ask address 'BMC IP address (no scheme or port)' '' no valid_ip "${target_env:+${target_env}IP}" prefilled
+    ask mac 'BMC MAC address (unique)' '' no valid_unique_mac "${target_env:+${target_env}MAC}" prefilled
     normalize_mac "$mac"; mac=$REPLY
     seen_macs+="|$mac|"
-    ask port "$device Redfish HTTPS port" 443 no valid_port "${target_env:+${target_env}PORT}"
+    ask port 'Redfish HTTPS port' 443 no valid_port "${target_env:+${target_env}PORT}" default
     valid_port "$port"; port=$REPLY
     printf -v target '{"address":"%s","mac":"%s","kind":"%s","port":%s' "$address" "$mac" "$kind" "$port"
-    target_review[${#target_review[@]}]="$device $count: $address:$port | $mac"
-    ask name "$device display name (optional)" '' yes valid_text "${target_env:+${target_env}NAME}"
-    ask profile "$device credentials profile (optional with a per-MAC override)" '' yes valid_text "${target_env:+${target_env}CREDENTIALS_PROFILE}"
-    ask target_zone "$device compute zone override (optional)" '' yes valid_text "${target_env:+${target_env}COMPUTE_ZONE}"
-    ask target_group "$device node group override (optional)" '' yes valid_text "${target_env:+${target_env}NODE_GROUP}"
+    target_review[${#target_review[@]}]="BMC $count ($device): $address"
+    target_review[${#target_review[@]}]="Redfish port: $port | MAC: $mac"
+    ask name 'Display name (optional)' '' yes valid_text "${target_env:+${target_env}NAME}" default
+    ask profile 'Credentials profile (optional with a per-MAC override)' "$profile_default" yes valid_text "${target_env:+${target_env}CREDENTIALS_PROFILE}" default
+    ask target_zone 'Compute zone for this BMC (optional)' '' yes valid_text "${target_env:+${target_env}COMPUTE_ZONE}" default
+    ask target_group 'Node group for this BMC (optional)' '' yes valid_text "${target_env:+${target_env}NODE_GROUP}" default
     fields=("$name" "$profile" "$target_zone" "$target_group")
     field_names=(name credentialsProfile computeZone nodeGroup)
+    field_labels=('Display name' 'Credentials profile' 'Compute zone' 'Node group')
     for ((i=0; i<4; i++)); do
       field=${fields[$i]}
       if [[ -n "$field" ]]; then
         json_quote "$field"
         target+=",\"${field_names[$i]}\":$REPLY"
-        target_review[${#target_review[@]}]="${field_names[$i]}: $field"
+        target_review[${#target_review[@]}]="${field_labels[$i]}: $field"
       fi
     done
     labels='' label_keys='|' label_count=1
     [[ -z "$name" ]] || label_count=$((label_count + 1))
     [[ -z "${target_zone:-$zone}" ]] || label_count=$((label_count + 1))
     [[ -z "${target_group:-$group}" ]] || label_count=$((label_count + 1))
-    while (( label_count < 32 )); do
-      ask label_key "$device label key (e.g. rack; blank to finish)" '' yes valid_target_label
+    while [[ $workflow == advanced ]] && (( label_count < 32 )); do
+      ask label_key 'Label key (e.g. rack, blank to finish)' '' yes valid_target_label
       [[ -n "$label_key" ]] || break
-      ask label_value "$device label value for $label_key (optional)" '' yes valid_text
+      ask label_value "Label value for $label_key (optional)" '' yes valid_text
       json_quote "$label_key"; labels+="${labels:+,}$REPLY:"
       json_quote "$label_value"; labels+=$REPLY
       label_keys+="$label_key|"
@@ -1114,26 +1176,30 @@ fleetint_install() {
     if [[ -n "$labels" ]]; then target+=",\"labels\":{$labels}"; fi
     target+='}'
     targets+="${targets:+,}$target"
+    [[ $workflow != basic ]] || break
     ask more 'Add another BMC? yes/no' no no valid_yes_no
     [[ $more == yes ]] || break
   done
-  ui_section='4 / 6  BMC credentials'
+  if [[ $workflow == basic ]]; then ui_section='3 / 4  BMC credentials'
+  else ui_section='4 / 6  BMC credentials'; fi
   secret_questions 'BMC credentials JSON' fleet-intelligence-bmc-credentials credentials.json FLEETINT_INSTALL_BMC_CREDENTIALS
   credentials_secret=$secret_name credentials_key=$secret_key credentials_file=$secret_file
-  ui_section='5 / 6  Enrollment token'
+  if [[ $workflow == basic ]]; then ui_section='3 / 4  Enrollment token'
+  else ui_section='5 / 6  Enrollment token'; fi
   secret_questions 'Fleet Intelligence enrollment token' "$chart-agent-token" agent-token FLEETINT_INSTALL_ENROLLMENT_TOKEN
   token_secret=$secret_name token_key=$secret_key token_file=$secret_file
   if [[ $credentials_secret == "$token_secret" && ( -n "$credentials_file" || -n "$token_file" ) ]]; then
     fail 'File-backed credentials and token must use different Secret names.'
   fi
-  ask pull_secret 'Existing image pull Secret (optional)' '' yes valid_secret FLEETINT_INSTALL_IMAGE_PULL_SECRET
+  ask pull_secret 'Existing image pull Secret (optional)' '' yes valid_secret FLEETINT_INSTALL_IMAGE_PULL_SECRET default
   for file in "$credentials_file" "$token_file"; do
     [[ -z "$file" || ( -f "$file" && -r "$file" && -s "$file" ) ]] || fail 'A selected private input file is missing, unreadable, or empty.'
   done
 
   token_field=enrollmentToken
   build_values
-  ui_section='6 / 6  Review and install'
+  if [[ $workflow == basic ]]; then ui_section='4 / 4  Review and install'
+  else ui_section='6 / 6  Review and install'; fi
   if [[ $ui_active == yes ]]; then
     review_lines=()
     review_add "Context: $context"
@@ -1150,10 +1216,12 @@ fleetint_install() {
     review_add "Image pull Secret: ${pull_secret:-(chart default)}"
     review_add 'Deploy the collector, NICo health, and gateway with chart defaults.'
     review_add 'Existing Secrets are preserved. New Secrets use your selected files.'
+    if [[ $environment_defaults == yes ]]; then review_add 'Defaults loaded from the terminal environment.'; fi
     ui_review
   else
     printf '\nContext: %s\nNamespace: %s\nRelease: %s\nChart version: %s\n%s\n' "$context" "$namespace" "$release" "$version" "$values"
     printf '%s\n' 'Deploy the collector, NICo health, and gateway with chart defaults.'
+    if [[ $environment_defaults == yes ]]; then printf '%s\n' 'Defaults loaded from the terminal environment.'; fi
     printf '%s\n' 'For proxies, registry mirrors, or additional collection tuning, use the manual installation guide.'
   fi
   ask confirm 'Install with these settings? yes/no' no no valid_yes_no
