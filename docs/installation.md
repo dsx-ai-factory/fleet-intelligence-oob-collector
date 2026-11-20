@@ -287,12 +287,14 @@ Uninstalling stops collection for every target in the release. Data that was alr
    kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/instance=fleet-intelligence-oob-collector
    ```
 
-3. Delete unused credential Secrets and the local folder, which holds BMC passwords:
+3. Remove credentials dedicated to this release. Keep any credentials, Secrets, sync resources, and secret stores shared with other deployments.
+
+   - **Vault Secrets Operator (VSO) or External Secrets Operator (ESO).** Remove the relevant `VaultStaticSecret` or `ExternalSecret` resources first. If deployment automation manages them, remove them from its configuration as well. Then remove the dedicated source values from Vault or OpenBao. As long as the sync resource exists, the operator can recreate its Kubernetes Secret. Check which Secrets remain and delete any unused ones left by the operator. See [Sync the Secrets into Kubernetes](credentials.md#4-sync-the-secrets-into-kubernetes) for the resource names and source paths used in the examples.
+   - **Manually managed Secrets.** Delete each unused Secret directly. Replace the example name with the name of the Secret you want to remove.
 
    ```bash
-   kubectl -n "$NAMESPACE" delete secret fleet-intelligence-enrollment-token \
-     fleet-intelligence-bmc-credentials
-   rm -r ~/fleetint-oob
+   SECRET='fleet-intelligence-enrollment-token'
+   kubectl -n "$NAMESPACE" delete secret "$SECRET"
    ```
 
-Also remove any other unused Secrets dedicated to this deployment. Deleting a Secret does not revoke its credentials; retire them through their issuing system. Keep shared resources and separately managed external telemetry collectors.
+4. Revoke unused credentials through their issuing system and remove the local credential files for this release. Keep any files used by another deployment.
