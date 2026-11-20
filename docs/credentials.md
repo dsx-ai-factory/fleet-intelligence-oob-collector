@@ -7,7 +7,7 @@ The Helm chart doesn't hold any secrets itself. It reads two Kubernetes Secrets 
 | BMC credentials file (JSON) | `credentials.json` | The collector and NICo, mounted at `/run/secrets/bmc/credentials.json` |
 | Fleet Intelligence enrollment token | `enrollment-token` | The collector and bundled gateway (`FLEETINT_ENROLLMENT_TOKEN`) |
 
-You can create these Secrets by hand, as shown in [Installation](installation.md#configure-targets-and-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
+You can create these Secrets by hand, as shown in [Installation](installation.md#create-the-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
 
 Three separate logins are involved, and it helps to keep them apart:
 
@@ -30,7 +30,7 @@ Pick one operator for each Secret. The examples pair Vault with the Vault Secret
 
 You need a server the cluster can reach over trusted TLS, KV version 2 mounts, Kubernetes authentication, and the operator's CRDs installed.
 
-Set `KUBE_CONTEXT` and `NAMESPACE` as shown in [Installation](installation.md#choose-a-kubernetes-context-and-namespace). Use the collector's context and namespace for the commands on this page.
+The commands on this page run against your current `kubectl` context and the namespace in `$NAMESPACE`. Select the collector's cluster and set the namespace as shown in [Installation](installation.md#set-up-your-shell).
 
 The example manifests can't read shell variables, so they name the namespace `fleet-intelligence` directly. If you use a different namespace, change it in each manifest you apply.
 
@@ -99,22 +99,22 @@ Policy paths include `data/` (for example `bmc/data/collector`), because that is
 Create the namespace:
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" create namespace "$NAMESPACE" \
-  --dry-run=client -o yaml | kubectl --context "$KUBE_CONTEXT" apply -f -
+kubectl create namespace "$NAMESPACE" \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 **Vault/VSO:** edit [auth.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/auth.yaml) with your server address and identity settings. If your server uses a private CA, set `caCertSecretRef` on the `VaultConnection` (see the [VSO API reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/api-reference)). Then apply it:
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" apply -f /path/to/auth.yaml
-kubectl --context "$KUBE_CONTEXT" get vaultconnection,vaultauth --namespace "$NAMESPACE"
+kubectl apply -f /path/to/auth.yaml
+kubectl get vaultconnection,vaultauth --namespace "$NAMESPACE"
 ```
 
 **OpenBao/ESO:** edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA, and identity settings. It defines two stores: `openbao-bmc` for the `bmc` mount and `openbao-tokens` for the `credentials` mount. ESO talks to OpenBao through its `vault` provider; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" apply -f /path/to/secret-stores.yaml
-kubectl --context "$KUBE_CONTEXT" get secretstore --namespace "$NAMESPACE"
+kubectl apply -f /path/to/secret-stores.yaml
+kubectl get secretstore --namespace "$NAMESPACE"
 ```
 
 ## 4. Sync the Secrets into Kubernetes
@@ -129,8 +129,8 @@ Edit the sync manifests for your operator. Set the namespace, auth or store refe
 For VSO, also set `rolloutRestartTargets` in the token manifest to your release's collector and gateway Deployments, so they restart when the token changes. If you don't run the gateway, list only the collector.
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" apply -f /path/to/bmc-secrets.yaml
-kubectl --context "$KUBE_CONTEXT" apply -f /path/to/token-secrets.yaml
+kubectl apply -f /path/to/bmc-secrets.yaml
+kubectl apply -f /path/to/token-secrets.yaml
 ```
 
 Either operator produces the same two Secrets:
@@ -148,18 +148,18 @@ Check status and events. None of these commands print secret values.
 
 ```bash
 # Vault/VSO
-kubectl --context "$KUBE_CONTEXT" get vaultstaticsecret --namespace "$NAMESPACE"
-kubectl --context "$KUBE_CONTEXT" describe vaultstaticsecret fleet-intelligence-bmc-credentials \
+kubectl get vaultstaticsecret --namespace "$NAMESPACE"
+kubectl describe vaultstaticsecret fleet-intelligence-bmc-credentials \
   fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE"
 
 # OpenBao/ESO
-kubectl --context "$KUBE_CONTEXT" get externalsecret --namespace "$NAMESPACE"
-kubectl --context "$KUBE_CONTEXT" describe externalsecret fleet-intelligence-bmc-credentials \
+kubectl get externalsecret --namespace "$NAMESPACE"
+kubectl describe externalsecret fleet-intelligence-bmc-credentials \
   fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE"
 
-kubectl --context "$KUBE_CONTEXT" wait --for=condition=Ready \
+kubectl wait --for=condition=Ready \
   externalsecret/fleet-intelligence-bmc-credentials \
   externalsecret/fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" --timeout=120s
@@ -168,7 +168,7 @@ kubectl --context "$KUBE_CONTEXT" wait --for=condition=Ready \
 Then confirm each Secret has the right key:
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" get secret fleet-intelligence-bmc-credentials \
+kubectl get secret fleet-intelligence-bmc-credentials \
   fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" \
   -o go-template='{{range .items}}{{.metadata.name}}:{{range $key, $value := .data}} {{$key}}{{end}}{{"\n"}}{{end}}'
@@ -205,7 +205,7 @@ What happens next depends on what changed:
 
 | Change | What you need to do |
 | --- | --- |
-| BMC passwords in the credentials file | On Kubernetes, allow time for the Secret volume to refresh. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
+| BMC passwords in the credentials file | Nothing. On Kubernetes, an updated Secret usually reaches the pods within a minute or two. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
 | Enrollment token | Restart the collector and gateway, because they read the token only at startup. On Kubernetes, the VSO token example does this for you. With ESO, a hand-made Secret, or a Linux token file, restart them yourself (below). |
 | Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 | Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |
@@ -219,9 +219,9 @@ sudo systemctl restart fleetint-oob-collector.service fleetint-otel-gateway.serv
 On Kubernetes:
 
 ```bash
-kubectl --context "$KUBE_CONTEXT" rollout restart deployment/fleet-intelligence-oob-collector \
+kubectl rollout restart deployment/fleet-intelligence-oob-collector \
   --namespace "$NAMESPACE"
-kubectl --context "$KUBE_CONTEXT" rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway \
+kubectl rollout restart deployment/fleet-intelligence-oob-collector-otel-gateway \
   --namespace "$NAMESPACE"
 ```
 
