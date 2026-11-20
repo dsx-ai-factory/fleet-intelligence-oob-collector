@@ -14,19 +14,40 @@ For a NICo-managed site, use [endpoint source configuration](configuration.md#en
 - The IP and MAC address of each BMC, and its login credentials
 - A Fleet Intelligence enrollment token
 
+## Choose a chart version
+
+Choose a version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and open the matching version of the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) before creating any Secrets. Continue with that version's guide so the Secret names and keys match your chart. For example, for chart `1.0.0`, read `docs/installation.md` at the `v1.0.0` Git tag.
+
+Set the chart version in the shell where you'll run Helm. Replace `<chart-version>` with the version you chose, using the chart's spelling without a leading `v`.
+
+```bash
+export OOB_CHART_VERSION='<chart-version>'
+```
+
 ## Set up your shell
 
-Select the cluster, choose a namespace, and create a private folder for the files you'll write. Replace `your-cluster-context` with a name from the first command's output.
+List your Kubernetes contexts, then replace `your-cluster-context` with the one for this installation.
 
 ```bash
 kubectl config get-contexts
-kubectl config use-context your-cluster-context
-export NAMESPACE=fleet-intelligence
-kubectl create namespace "$NAMESPACE"
-mkdir -m 700 -p ~/fleetint-oob && cd ~/fleetint-oob
+kubectl config use-context 'your-cluster-context' && kubectl config current-context
 ```
 
-The folder is readable only by you, because it will hold BMC passwords. Every later command uses the file names in this folder, so you don't edit any paths. `kubectl` and `helm` run every command below against the current context. Every terminal shares that context, so don't switch it elsewhere until you finish. If the namespace already exists, `kubectl` reports `AlreadyExists`; continue. If you open a new terminal, run the `export` and `cd` lines again.
+Confirm that the last command printed the intended context before creating the namespace or Secrets. `kubectl` and `helm` use the current context, so keep it selected until you finish.
+
+```bash
+export NAMESPACE=fleet-intelligence
+kubectl create namespace "$NAMESPACE"
+```
+
+If the namespace already exists, `kubectl` reports `AlreadyExists`. Then set restrictive permissions for new files and open the working directory. The `chmod` command also protects the directory if it already exists.
+
+```bash
+umask 077
+mkdir -p ~/fleetint-oob && chmod 700 ~/fleetint-oob && cd ~/fleetint-oob
+```
+
+Confirm you are in `~/fleetint-oob` before saving files. The examples use filenames relative to this directory. If you open a new terminal, confirm the context and set `OOB_CHART_VERSION` and `NAMESPACE` again, then run the working directory commands.
 
 ## Create the Secrets
 
@@ -86,11 +107,7 @@ The chart's defaults already point to the two Secrets you created and to the pro
 
 ## Install
 
-Choose a chart version from the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector) and use the matching version of the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). For example, chart `1.0.0` matches the `v1.0.0` Git tag. Replace `<chart-version>` below with the version you chose, such as `1.0.0`.
-
 ```bash
-export OOB_CHART_VERSION='<chart-version>'
-
 helm upgrade --install fleet-intelligence-oob-collector \
   fleet-intelligence-oob-collector \
   --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
@@ -145,15 +162,24 @@ Find the pod's status in the output of the watch command:
 | `CrashLoopBackOff` | The logs of the previous, crashed container (`--previous`). |
 | `Running` but not ready | The container's logs. |
 
-These commands show a pod's events and its logs. Copy the pod name from the watch output; the main container is `collector`, `nico-hardware-health`, or `otel-gateway`.
+These commands show a pod's events and logs. Set `POD` to the name from the watch output. Set `CONTAINER` to `collector`, `nico-hardware-health`, `otel-gateway`, or `generate-nico-config` for the NICo init container.
 
 ```bash
-kubectl -n "$NAMESPACE" describe pod <pod-name>
-kubectl -n "$NAMESPACE" logs <pod-name> --container <container-name>
-kubectl -n "$NAMESPACE" logs <pod-name> --container <container-name> --previous
+POD='your-pod-name'
+CONTAINER='collector'
+kubectl -n "$NAMESPACE" describe pod "$POD"
+kubectl -n "$NAMESPACE" logs "$POD" --container "$CONTAINER"
+kubectl -n "$NAMESPACE" logs "$POD" --container "$CONTAINER" --previous
 ```
 
-If a pod isn't ready after 10 minutes, `kubectl -n "$NAMESPACE" describe deployment <deployment-name>` shows `ProgressDeadlineExceeded`. This means the pod failed to start, not that the install is still in progress; use the table above to find the cause, fix it, and run the [install command](#install) again.
+If startup stalls, use the affected Deployment's name to check its conditions.
+
+```bash
+DEPLOYMENT='your-deployment-name'
+kubectl -n "$NAMESPACE" describe deployment "$DEPLOYMENT"
+```
+
+If the Deployment reports `ProgressDeadlineExceeded`, Kubernetes detected that the rollout stopped making progress. Use the pod events and logs to identify the cause.
 
 If the pods run but collection fails, check the collector log. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the reason. Set the collector log level to `debug` to also see healthy per-BMC results.
 
@@ -205,7 +231,7 @@ The collector picks up new BMC logins without a restart; a new token needs one. 
 
 ### Add BMCs or change settings
 
-Add the new entries under `inventory.targets` in `values.yaml`, keeping the BMCs you still collect. If a new BMC needs a new login, [update the credentials](#update-credentials) first. Then run the [install command](#install) again with the installed chart version, and watch the pods restart as in [Verify](#verify). Target changes restart the collector and NICo.
+Add the new entries under `inventory.targets` in `values.yaml`, keeping the BMCs you still collect. If a new BMC needs a new login, [update the credentials](#update-credentials) first. Run the [install command](#install) again with the [installed chart version](#upgrade-the-chart), then [verify the rollout](#verify-an-update). Target changes restart the collector and NICo.
 
 ### Upgrade the chart
 
@@ -215,7 +241,18 @@ Check the installed version:
 helm list -n "$NAMESPACE" --filter '^fleet-intelligence-oob-collector$'
 ```
 
-Read the [published documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new version, set `OOB_CHART_VERSION` to it, and run the [install command](#install) again. Then repeat [Verify](#verify).
+Read the [published documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new version, set `OOB_CHART_VERSION` to it, and run the [install command](#install) again. Then [verify the rollout](#verify-an-update).
+
+### Verify an update
+
+After Helm returns, follow the latest rollout of each Deployment in the release. This reports progress while Kubernetes starts the updated pods.
+
+```bash
+kubectl -n "$NAMESPACE" rollout status deployment \
+  -l app.kubernetes.io/instance=fleet-intelligence-oob-collector --timeout=10m
+```
+
+When the rollouts complete, repeat [Verify](#verify) for the affected workloads and targets. If a rollout stalls, see [Troubleshoot](#troubleshoot).
 
 ## Disconnect an individual machine
 
