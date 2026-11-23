@@ -28,27 +28,9 @@ OOB collector ──────────────► inventory and attest
 
 The OOB collector enrolls with Fleet Intelligence and uploads inventory from configured BMCs in batches. It preserves successfully collected data when an individual Redfish domain fails. GPU attestation uses backend-issued nonces and configured BMC MACs. Attestation needs the node's inventory to have been uploaded at least once. NICo reads the shared target configuration and BMC credentials to export metrics and logs through the gateway.
 
-See [Architecture](docs/architecture.md) for collection, authentication, and delivery details.
-
 ## Getting started
 
-- For a released Kubernetes chart, start with the [published collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) and select the version that matches your chart. The [Installation](docs/installation.md) and [Configuration](docs/configuration.md) files on `main` follow the development branch.
-- To discover BMC targets from NICo REST, follow [endpoint source configuration](docs/configuration.md#endpoint-source).
-- For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
-- See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
-
-## Documentation
-
-Read the [collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) and the broader [Fleet Intelligence documentation](https://docs.nvidia.com/fleet-intel). The guides are also available in this repository:
-
-- [Installation](docs/installation.md): Kubernetes setup, verification, and removal.
-- [Configuration](docs/configuration.md): Helm values for targets, credentials, telemetry, and collection.
-- [Install on Linux](docs/host-installation.md): release downloads, installation, target setup, service checks, disconnecting targets, and uninstalling.
-- [Configure Linux packages](docs/host-configuration.md): TOML, credentials, service settings, local telemetry, and troubleshooting.
-- [Credentials](docs/credentials.md): shared JSON credentials, secrets managers, and rotation.
-- [Architecture](docs/architecture.md): components, collection lifecycle, and data flow.
-
-Component references cover [inventory collection](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md) and the [Helm chart](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/fleet-intelligence-oob-collector/README.md).
+For installation and configuration, use the [published OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). Select the documentation version for your Helm chart or Linux package release before following the guide.
 
 ## Contributing
 
