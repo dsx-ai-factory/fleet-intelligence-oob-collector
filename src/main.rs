@@ -130,7 +130,7 @@ struct RenderNicoConfigArgs {
     #[arg(long, default_value = "0.0.0.0:9009")]
     metrics_endpoint: String,
 
-    #[arg(long, default_value = "fleetint")]
+    #[arg(long, default_value = "carbide_hardware_health")]
     metrics_prefix: String,
 
     /// Seconds between NICo FirmwareInventory status polls.

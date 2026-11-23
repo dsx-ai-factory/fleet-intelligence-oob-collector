@@ -38,7 +38,7 @@ impl Default for NicoConfigOptions {
         Self {
             otlp_endpoint: "http://localhost:4317".to_string(),
             metrics_endpoint: "0.0.0.0:9009".to_string(),
-            metrics_prefix: "fleetint".to_string(),
+            metrics_prefix: "carbide_hardware_health".to_string(),
             resource_status_collection: true,
             resource_status_firmware_poll_interval_seconds: 1_800,
         }
@@ -727,7 +727,7 @@ mod tests {
             &NicoConfigOptions {
                 otlp_endpoint: "  http://localhost:4317  ".to_string(),
                 metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
-                metrics_prefix: "  fleetint  ".to_string(),
+                metrics_prefix: "  carbide_hardware_health  ".to_string(),
                 ..NicoConfigOptions::default()
             },
         )
@@ -742,7 +742,10 @@ mod tests {
             rendered["metrics"]["endpoint"].as_str(),
             Some("0.0.0.0:9009")
         );
-        assert_eq!(rendered["metrics"]["prefix"].as_str(), Some("fleetint"));
+        assert_eq!(
+            rendered["metrics"]["prefix"].as_str(),
+            Some("carbide_hardware_health")
+        );
     }
 
     #[test]
