@@ -293,6 +293,20 @@ pub async fn load_source_config(path: &str) -> Result<SourceConfig, Box<dyn Erro
     parse_config_parts(&contents, path)?.into_source()
 }
 
+/// Whether the configured source discovers targets from a remote API. Returns
+/// any configuration error first, so callers can retry only discovery failures.
+/// Static configuration is not validated further here, which keeps its
+/// credentials-file-first error precedence in `load_config_async`.
+pub async fn uses_remote_discovery(path: &str) -> Result<bool, Box<dyn Error>> {
+    let contents = tokio::fs::read_to_string(path).await?;
+    let parsed = parse_config_parts(&contents, path)?;
+    if matches!(parsed.source, SourceSelection::Static) {
+        return Ok(false);
+    }
+    parsed.into_source()?;
+    Ok(true)
+}
+
 /// Synchronous static-only loader for configuration tools such as
 /// `render-nico-config`; the runtime uses `load_config_async`.
 pub fn load_config(path: &str) -> Result<CollectorConfig, Box<dyn Error>> {

@@ -200,78 +200,86 @@ impl NicoRestEndpointSource {
                 &[("orderBy", "NAME_ASC".into())],
             )
             .await?;
-        let mut site_ids = HashSet::new();
+        // Sites only supply placement. The site list can include sites the
+        // identity sees through a tenant role but cannot list machines for, so
+        // machines are listed once at org scope, where NICo applies the caller's
+        // own scope, and joined to their site by `siteId`.
+        let mut placements = HashMap::new();
         for site in &sites {
             if site.id.trim().is_empty() {
                 return Err("NICo site has an empty ID".into());
             }
-            if !site_ids.insert(&site.id) {
+            if placements
+                .insert(site.id.as_str(), site.placement())
+                .is_some()
+            {
                 return Err(LISTING_CHANGED.into());
             }
         }
+        let machines: Vec<Machine> = self
+            .list_pages(
+                &self.machines_url,
+                authorization,
+                &[
+                    ("includeMetadata", "true".into()),
+                    ("orderBy", "ID_ASC".into()),
+                ],
+            )
+            .await?;
         let mut endpoints = Vec::new();
         let mut ids = HashSet::new();
         let mut skipped = 0usize;
         let mut macs = HashMap::new();
         let mut addresses = HashMap::new();
-        let site_count = sites.len();
-        for site in sites {
-            let machines: Vec<Machine> = self
-                .list_pages(
-                    &self.machines_url,
-                    authorization,
-                    &[
-                        ("siteId", site.id.clone()),
-                        ("includeMetadata", "true".into()),
-                        ("orderBy", "ID_ASC".into()),
-                    ],
-                )
-                .await?;
-            let (compute_zone, node_group) = site.placement();
-            for machine in machines {
-                let machine_id = super::safe_source_reference(&machine.id);
-                if machine.id.trim().is_empty() {
-                    return Err("NICo machine has an empty ID".into());
-                }
-                if !ids.insert(machine.id.clone()) {
-                    return Err(LISTING_CHANGED.into());
-                }
-                let endpoint = machine
-                    .into_endpoint(self.config.credentials_profile.clone())
-                    .and_then(|mut endpoint| {
-                        // An unusable hostname skips only this machine, before the
-                        // record reaches the shared finalizer.
-                        endpoint.name = super::normalize_value("name", endpoint.name.take())
-                            .map_err(|error| error.to_string())?;
-                        endpoint.compute_zone = compute_zone.clone();
-                        endpoint.node_group = node_group.clone();
-                        Ok(endpoint)
-                    });
-                let endpoint = match endpoint {
-                    Ok(endpoint) => endpoint,
-                    Err(error) => {
-                        skipped += 1;
-                        if skipped <= 20 {
-                            tracing::warn!(%machine_id, reason = %error, "skipping NICo machine");
-                        }
-                        continue;
-                    }
-                };
-                if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
-                    return Err(format!(
-                        "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
-                        endpoint.mac
-                    )
-                    .into());
-                }
-                if let Some(previous) = addresses.insert(endpoint.ip, machine_id.clone()) {
-                    return Err(format!(
-                        "NICo machines {previous} and {machine_id}: duplicate BMC address"
-                    )
-                    .into());
-                }
-                endpoints.push(endpoint);
+        for machine in machines {
+            let machine_id = super::safe_source_reference(&machine.id);
+            if machine.id.trim().is_empty() {
+                return Err("NICo machine has an empty ID".into());
             }
+            if !ids.insert(machine.id.clone()) {
+                return Err(LISTING_CHANGED.into());
+            }
+            // A machine on a site outside the site list keeps no site placement;
+            // configured defaults can still fill it.
+            let (compute_zone, node_group) = placements
+                .get(machine.site_id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let endpoint = machine
+                .into_endpoint(self.config.credentials_profile.clone())
+                .and_then(|mut endpoint| {
+                    // An unusable hostname skips only this machine, before the
+                    // record reaches the shared finalizer.
+                    endpoint.name = super::normalize_value("name", endpoint.name.take())
+                        .map_err(|error| error.to_string())?;
+                    endpoint.compute_zone = compute_zone;
+                    endpoint.node_group = node_group;
+                    Ok(endpoint)
+                });
+            let endpoint = match endpoint {
+                Ok(endpoint) => endpoint,
+                Err(error) => {
+                    skipped += 1;
+                    if skipped <= 20 {
+                        tracing::warn!(%machine_id, reason = %error, "skipping NICo machine");
+                    }
+                    continue;
+                }
+            };
+            if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
+                return Err(format!(
+                    "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
+                    endpoint.mac
+                )
+                .into());
+            }
+            if let Some(previous) = addresses.insert(endpoint.ip, machine_id.clone()) {
+                return Err(format!(
+                    "NICo machines {previous} and {machine_id}: duplicate BMC address"
+                )
+                .into());
+            }
+            endpoints.push(endpoint);
         }
         if skipped > 0 {
             tracing::warn!(
@@ -285,7 +293,7 @@ impl NicoRestEndpointSource {
             return Err("no usable BMC targets found in NICo endpoint source; check sites, metadata and provider permissions".into());
         }
         tracing::info!(
-            sites = site_count,
+            sites = sites.len(),
             machines = ids.len(),
             targets = endpoints.len(),
             skipped_machines = skipped,
@@ -472,6 +480,7 @@ impl Site {
 #[serde(rename_all = "camelCase")]
 struct Machine {
     id: String,
+    site_id: String,
     #[serde(default)]
     hostname: Option<String>,
     #[serde(default)]
@@ -507,6 +516,9 @@ impl Machine {
         let ip = bmc
             .ip
             .and_then(|ip| ip.parse::<IpAddr>().ok())
+            // `::ffff:a.b.c.d` is the IPv4 peer `a.b.c.d`. Canonicalize once so the
+            // duplicate and placeholder checks and the Redfish address agree.
+            .map(|ip| ip.to_canonical())
             // An unspecified address is a placeholder, never a reachable BMC.
             .filter(|ip| !ip.is_unspecified())
             .ok_or("NICo machine has no valid BMC IP")?;
@@ -788,8 +800,9 @@ mod tests {
         assert!(requests[0].contains("orderBy=NAME_ASC"));
         for (index, request) in requests[1..].iter().enumerate() {
             assert!(request.starts_with("GET /v2/org/example/nico/machine?"));
+            // Org scope: NICo applies the caller's own scope, never a listed site.
+            assert!(!request.contains("siteId="));
             for (key, value) in [
-                ("siteId", "site-id"),
                 ("includeMetadata", "true"),
                 ("pageSize", "100"),
                 ("orderBy", "ID_ASC"),
@@ -994,7 +1007,7 @@ mod tests {
             "compute_zone": "zone-a",
             "node_group": "group-a"
         });
-        for index in 1..=8 {
+        for index in 1..=9 {
             let mut row = machine(index);
             match index {
                 1 => row["metadata"] = serde_json::Value::Null,
@@ -1004,13 +1017,17 @@ mod tests {
                 5 => row["metadata"]["bmcInfo"]["ip"] = "invalid".into(),
                 6 => row["metadata"]["bmcInfo"]["ip"] = "0.0.0.0".into(),
                 7 => row["metadata"]["bmcInfo"]["ip"] = "::".into(),
+                8 => row["metadata"]["bmcInfo"]["ip"] = "::ffff:0.0.0.0".into(),
                 _ => row["status"] = "Decommissioned".into(),
             }
             rows.push(row);
         }
+        rows[0]["metadata"]["bmcInfo"]["ip"] = "::ffff:192.0.2.1".into();
         let (source, _token, server) = fixture(vec![page(1, rows.len(), rows)]).await;
         let endpoints = source.discover().await.unwrap();
         assert_eq!(endpoints.len(), 1);
+        // IPv4-mapped addresses are stored, and sent to Redfish, as plain IPv4.
+        assert_eq!(endpoints[0].address(), "192.0.2.1");
         assert!(endpoints[0].labels.is_empty());
         assert_eq!(endpoints[0].compute_zone.as_deref(), Some("usa-az-phoenix"));
         assert_eq!(endpoints[0].node_group.as_deref(), Some("test-cluster"));
@@ -1030,7 +1047,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paginates_sites_and_enriches_machines_from_each_site() {
+    async fn paginates_sites_and_joins_machines_to_their_site() {
         let sites: Vec<_> = (0..101)
             .map(|index| {
                 serde_json::json!({
@@ -1039,15 +1056,19 @@ mod tests {
                 })
             })
             .collect();
-        let mut replies = vec![
+        let machines: Vec<_> = (0..101)
+            .map(|index| {
+                let mut row = machine(index);
+                row["siteId"] = format!("site-{index}").into();
+                row
+            })
+            .collect();
+        let replies = vec![
             page(1, 101, sites[..100].to_vec()),
             page(2, 101, sites[100..].to_vec()),
+            page(1, 101, machines[..100].to_vec()),
+            page(2, 101, machines[100..].to_vec()),
         ];
-        for index in 0..101 {
-            let mut row = machine(index);
-            row["siteId"] = format!("site-{index}").into();
-            replies.push(page(1, 1, vec![row]));
-        }
         let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
         let endpoints = source.discover().await.unwrap();
         assert_eq!(endpoints.len(), 101);
@@ -1059,52 +1080,62 @@ mod tests {
             assert_eq!(endpoint.compute_zone.as_deref(), Some("usa-az-phoenix"));
         }
         let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 4);
         assert!(requests[1].contains("/site?orderBy=NAME_ASC&pageNumber=2"));
-        for (index, request) in requests[2..].iter().enumerate() {
-            assert!(request.contains(&format!("siteId=site-{index}&")));
-        }
+        assert_eq!(query_value(&requests[3], "pageNumber"), "2");
     }
 
     #[tokio::test]
-    async fn empty_sites_are_allowed_but_later_site_failure_aborts_the_snapshot() {
+    async fn sites_without_machine_access_do_not_block_discovery() {
+        // A dual-role identity's site list can include a tenant-visible site owned
+        // by another provider; NICo returns 403 for machines filtered by that
+        // site. Listing machines at org scope never asks for it. A machine whose
+        // site is missing from the list keeps no site placement.
         let sites = page(
             1,
             3,
             vec![
+                serde_json::json!({"id":"foreign-site", "name":"tenant-visible"}),
+                serde_json::json!({"id":"site-id", "name":"own-cluster"}),
                 serde_json::json!({"id":"empty", "name":"empty-cluster"}),
-                serde_json::json!({"id":"site-id", "name":"first-cluster"}),
-                serde_json::json!({"id":"other", "name":"second-cluster"}),
             ],
         );
+        let mut unlisted = machine(1);
+        unlisted["siteId"] = "unlisted-site".into();
+        let (source, _files, server) = fixture_with_sites(
+            vec![sites, page(1, 2, vec![machine(0), unlisted])],
+            None,
+            vec![],
+            false,
+        )
+        .await;
+        let endpoints = source.discover().await.unwrap();
+        let groups: Vec<_> = endpoints.iter().map(|e| e.node_group.as_deref()).collect();
+        assert_eq!(groups, [Some("own-cluster"), None]);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[1].contains("siteId="));
+    }
+
+    #[tokio::test]
+    async fn machine_listing_failure_aborts_the_snapshot() {
         let failure = Reply {
             status: 403,
             pagination: None,
             body: "sensitive-site-response".into(),
             extra_header: String::new(),
         };
-        let (source, _files, server) = fixture_with_sites(
-            vec![
-                sites,
-                page(1, 0, vec![]),
-                page(1, 1, vec![machine(0)]),
-                failure,
-            ],
-            None,
-            vec![],
-            false,
-        )
-        .await;
+        let (source, _files, server) = fixture(vec![failure]).await;
         let error = source.discover().await.unwrap_err().to_string();
         assert!(error.contains("HTTP 403"));
         assert!(!error.contains("sensitive"));
-        assert_eq!(server.await.unwrap().len(), 4);
+        assert_eq!(server.await.unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn rejects_invalid_empty_and_duplicate_site_listings() {
+    async fn rejects_invalid_and_duplicate_site_listings() {
         // Each case fails on the first site page with no retry and no machine query.
         for (rows, expected_error) in [
-            (vec![], "no usable BMC targets"),
             (
                 vec![serde_json::json!({"id":"", "name":"cluster"})],
                 "empty ID",
@@ -1158,11 +1189,15 @@ mod tests {
 
     #[tokio::test]
     async fn identity_conflicts_name_both_machines_and_never_return_a_partial_list() {
-        for duplicate_mac in [true, false] {
+        // The second machine repeats the first's MAC, IP, or IPv4-mapped IP.
+        for (key, value) in [
+            ("mac", "02:00:00:00:00:00"),
+            ("ip", "192.0.2.1"),
+            ("ip", "::ffff:192.0.2.1"),
+        ] {
             let first = machine(0);
             let mut second = machine(1);
-            let key = if duplicate_mac { "mac" } else { "ip" };
-            second["metadata"]["bmcInfo"][key] = first["metadata"]["bmcInfo"][key].clone();
+            second["metadata"]["bmcInfo"][key] = value.into();
             let (source, _token, server) = fixture(vec![page(1, 2, vec![first, second])]).await;
             let error = source.discover().await.unwrap_err().to_string();
             assert!(error.contains("machine-0") && error.contains("machine-1"));
@@ -1231,9 +1266,11 @@ mod tests {
         blank_site_host["siteId"] = "blank-site".into();
         let replies = vec![
             sites,
-            page(1, 2, vec![machine(0), long_host]),
-            page(1, 1, vec![long_site_host]),
-            page(1, 1, vec![blank_site_host]),
+            page(
+                1,
+                4,
+                vec![machine(0), long_host, long_site_host, blank_site_host],
+            ),
         ];
         let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
         let endpoints = source.discover().await.unwrap();

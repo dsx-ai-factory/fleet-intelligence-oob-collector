@@ -55,6 +55,9 @@ pub const DEFAULT_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 const WORKFLOW_QUEUE_CAPACITY: usize = 256;
 const MAX_LOGGED_BMC_MACS: usize = 8;
 const INVENTORY_EXPORT_FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+const STARTUP_DISCOVERY_RETRY_INITIAL: Duration = Duration::from_secs(5);
+// Matches Kubernetes' maximum container restart backoff.
+const STARTUP_DISCOVERY_RETRY_MAX: Duration = Duration::from_secs(300);
 /// How long to wait before collecting targets that failed as a whole once more
 /// in the same cycle. Long enough for a rebooting BMC to come back and for a
 /// short account lockout to expire, so a transient outage does not cost a
@@ -236,6 +239,39 @@ pub async fn run_runtime(options: RuntimeOptions) -> Result<(), Box<dyn Error>> 
     }
 }
 
+/// Load the first target snapshot. Remote discovery depends on services that can
+/// be briefly unavailable, so its failures retry with backoff instead of exiting;
+/// configuration errors and static targets still fail fast. Returns `None` when
+/// shutdown is requested while waiting.
+async fn load_initial_config(
+    path: &str,
+    shutdown: &mut Shutdown,
+) -> Result<Option<config::CollectorConfig>, Box<dyn Error>> {
+    if !config::uses_remote_discovery(path).await? {
+        return config::load_config_async(path).await.map(Some);
+    }
+    let mut delay = STARTUP_DISCOVERY_RETRY_INITIAL;
+    loop {
+        match config::load_config_async(path).await {
+            Ok(config) => return Ok(Some(config)),
+            Err(error) => {
+                tracing::warn!(
+                    phase = "startup", operation = "discovery", outcome = "failed",
+                    next_attempt_seconds = delay.as_secs(),
+                    error = %error,
+                    "initial endpoint discovery failed; retrying"
+                );
+            }
+        }
+        tokio::select! {
+            biased;
+            () = shutdown.wait() => return Ok(None),
+            () = tokio::time::sleep(delay) => {}
+        }
+        delay = (delay * 2).min(STARTUP_DISCOVERY_RETRY_MAX);
+    }
+}
+
 async fn run_runtime_until_shutdown(
     mut options: RuntimeOptions,
     mut shutdown: Shutdown,
@@ -245,7 +281,10 @@ async fn run_runtime_until_shutdown(
         "starting OOB collector"
     );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let target_config = config::load_config_async(&options.inventory.config).await?;
+    let Some(target_config) = load_initial_config(&options.inventory.config, &mut shutdown).await?
+    else {
+        return Ok(());
+    };
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
