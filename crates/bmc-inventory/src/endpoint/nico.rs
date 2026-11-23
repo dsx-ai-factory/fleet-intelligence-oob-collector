@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use mac_address::MacAddress;
@@ -81,14 +81,6 @@ impl NicoRestEndpointSource {
         {
             return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; a nonblank shared credentials_profile is required".into());
         }
-        if config.scopes.iter().any(|scope| {
-            scope.is_empty()
-                || scope
-                    .bytes()
-                    .any(|byte| !matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
-        }) {
-            return Err("OAuth2 scopes must be nonempty scope names without whitespace, quotes, or backslashes".into());
-        }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
             .pop_if_empty()
@@ -110,6 +102,7 @@ impl NicoRestEndpointSource {
     }
 
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
+        let started = Instant::now();
         // Read mounted Secret files for every exchange. A new discovery never
         // reuses credentials or a bearer token across a Vault/VSO rotation.
         let client_id = read_client_credential(&self.config.client_id_file).await?;
@@ -137,15 +130,9 @@ impl NicoRestEndpointSource {
         let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
             .map_err(|_| "invalid OAuth2 access token header")?;
         authorization.set_sensitive(true);
-        match self.discover_pages(&authorization).await {
-            Err(error) if error.is::<ListingChanged>() => {
-                tracing::warn!(
-                    "NICo listing changed; retrying discovery once within the original deadline"
-                );
-                self.discover_pages(&authorization).await
-            }
-            result => result,
-        }
+        // A failed listing is not retried here: every collection cycle
+        // rediscovers, so the next cycle is the retry.
+        self.discover_pages(&authorization, started).await
     }
 
     async fn list_pages<T: DeserializeOwned>(
@@ -156,14 +143,13 @@ impl NicoRestEndpointSource {
     ) -> Result<Vec<T>> {
         let mut rows = Vec::new();
         let mut total = None;
-        let mut page_size = PAGE_SIZE;
         for page in 1..=MAX_PAGES {
             let response = self
                 .client
                 .get(url.clone())
                 .header(AUTHORIZATION, authorization.clone())
                 .query(query)
-                .query(&[("pageNumber", page), ("pageSize", page_size)])
+                .query(&[("pageNumber", page), ("pageSize", PAGE_SIZE)])
                 .send()
                 .await
                 .map_err(|_| "NICo request failed; check connectivity and CA trust")?;
@@ -180,23 +166,19 @@ impl NicoRestEndpointSource {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| serde_json::from_str(value).ok())
                 .ok_or("NICo response has no valid X-Pagination header")?;
+            // NICo echoes the requested page and size; a different size, a
+            // changed total, or a short page means the listing moved underneath us.
             if pagination.page_number != page
-                || (page > 1 && pagination.page_size != page_size)
+                || pagination.page_size != PAGE_SIZE
                 || total.is_some_and(|previous| previous != pagination.total)
             {
-                return Err(Box::new(ListingChanged));
+                return Err(LISTING_CHANGED.into());
             }
-            if pagination.page_size == 0 || pagination.page_size > page_size {
-                return Err(
-                    "NICo pagination pageSize must be positive and no larger than requested".into(),
-                );
-            }
-            page_size = pagination.page_size;
             total = Some(pagination.total);
             let batch: Vec<T> = read_json(response).await?;
-            let expected = pagination.total.saturating_sub(rows.len()).min(page_size);
+            let expected = pagination.total.saturating_sub(rows.len()).min(PAGE_SIZE);
             if batch.len() != expected {
-                return Err(Box::new(ListingChanged));
+                return Err(LISTING_CHANGED.into());
             }
             rows.extend(batch);
             if rows.len() == pagination.total {
@@ -206,7 +188,11 @@ impl NicoRestEndpointSource {
         Err("NICo discovery exceeded the page limit".into())
     }
 
-    async fn discover_pages(&self, authorization: &HeaderValue) -> Result<EndpointSnapshot> {
+    async fn discover_pages(
+        &self,
+        authorization: &HeaderValue,
+        started: Instant,
+    ) -> Result<EndpointSnapshot> {
         let sites: Vec<Site> = self
             .list_pages(
                 &self.sites_url,
@@ -220,7 +206,7 @@ impl NicoRestEndpointSource {
                 return Err("NICo site has an empty ID".into());
             }
             if !site_ids.insert(&site.id) {
-                return Err(Box::new(ListingChanged));
+                return Err(LISTING_CHANGED.into());
             }
         }
         let mut endpoints = Vec::new();
@@ -228,6 +214,7 @@ impl NicoRestEndpointSource {
         let mut skipped = 0usize;
         let mut macs = HashMap::new();
         let mut addresses = HashMap::new();
+        let site_count = sites.len();
         for site in sites {
             let machines: Vec<Machine> = self
                 .list_pages(
@@ -243,13 +230,11 @@ impl NicoRestEndpointSource {
             let (compute_zone, node_group) = site.placement();
             for machine in machines {
                 let machine_id = super::safe_source_reference(&machine.id);
-                if machine.site_id != site.id || machine.id.trim().is_empty() {
-                    return Err(
-                        format!("NICo machine {machine_id}: different site or empty ID").into(),
-                    );
+                if machine.id.trim().is_empty() {
+                    return Err("NICo machine has an empty ID".into());
                 }
                 if !ids.insert(machine.id.clone()) {
-                    return Err(Box::new(ListingChanged));
+                    return Err(LISTING_CHANGED.into());
                 }
                 let endpoint = machine
                     .into_endpoint(self.config.credentials_profile.clone())
@@ -299,6 +284,14 @@ impl NicoRestEndpointSource {
         if endpoints.is_empty() {
             return Err("no usable BMC targets found in NICo endpoint source; check sites, metadata and provider permissions".into());
         }
+        tracing::info!(
+            sites = site_count,
+            machines = ids.len(),
+            targets = endpoints.len(),
+            skipped_machines = skipped,
+            elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "NICo discovery completed"
+        );
         Ok(endpoints.into())
     }
 }
@@ -355,14 +348,8 @@ async fn read_client_credential(path: &std::path::Path) -> Result<String> {
     Ok(value.into())
 }
 
-#[derive(Debug)]
-struct ListingChanged;
-impl std::fmt::Display for ListingChanged {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("NICo pagination changed or is inconsistent after retry; rerun discovery")
-    }
-}
-impl std::error::Error for ListingChanged {}
+const LISTING_CHANGED: &str =
+    "NICo listing changed during discovery or paginated inconsistently; the next cycle retries";
 
 // Parse an endpoint URL that may receive credentials or bearer tokens. Errors
 // name only the setting, never the configured value.
@@ -485,7 +472,6 @@ impl Site {
 #[serde(rename_all = "camelCase")]
 struct Machine {
     id: String,
-    site_id: String,
     #[serde(default)]
     hostname: Option<String>,
     #[serde(default)]
@@ -802,15 +788,15 @@ mod tests {
         assert!(requests[0].contains("orderBy=NAME_ASC"));
         for (index, request) in requests[1..].iter().enumerate() {
             assert!(request.starts_with("GET /v2/org/example/nico/machine?"));
-            for value in [
-                "siteId=site-id",
-                "includeMetadata=true",
-                "pageSize=100",
-                "orderBy=ID_ASC",
+            for (key, value) in [
+                ("siteId", "site-id"),
+                ("includeMetadata", "true"),
+                ("pageSize", "100"),
+                ("orderBy", "ID_ASC"),
             ] {
-                assert!(request.contains(value));
+                assert_eq!(query_value(request, key), value);
             }
-            assert!(request.contains(&format!("pageNumber={}", index + 1)));
+            assert_eq!(query_value(request, "pageNumber"), (index + 1).to_string());
             assert!(!request.contains("isMissingOnSite="));
             assert!(!request.contains("status="));
             assert!(
@@ -933,7 +919,6 @@ mod tests {
             "short-page",
             "changed-total",
             "duplicate-id",
-            "wrong-site",
             "missing-pagination",
             "bad-json",
             "empty",
@@ -954,7 +939,7 @@ mod tests {
                 }
                 "short-page" => {
                     reply.body = "[]".into();
-                    "pagination changed".into()
+                    "listing changed".into()
                 }
                 "changed-total" | "duplicate-id" => {
                     prefix.push(page(1, 101, (0..100).map(machine).collect()));
@@ -967,13 +952,7 @@ mod tests {
                         },
                         vec![machine(0)],
                     );
-                    "pagination changed".into()
-                }
-                "wrong-site" => {
-                    let mut row = machine(0);
-                    row["siteId"] = "other-site".into();
-                    reply = page(1, 1, vec![row]);
-                    "different site".into()
+                    "listing changed".into()
                 }
                 "missing-pagination" => {
                     reply.pagination = None;
@@ -993,9 +972,6 @@ mod tests {
                 }
             };
             prefix.push(reply);
-            if matches!(scenario, "short-page" | "changed-total" | "duplicate-id") {
-                prefix.extend(prefix.clone());
-            }
             let (source, _token, server) = fixture(prefix).await;
             let error = source.discover().await.unwrap_err();
             let error = error.to_string();
@@ -1051,20 +1027,6 @@ mod tests {
                 .contains("no usable BMC targets")
         );
         server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn retries_one_complete_listing_after_pagination_changes() {
-        let (source, _token, server) =
-            fixture(vec![page(1, 1, vec![]), page(1, 1, vec![machine(0)])]).await;
-        assert_eq!(source.discover().await.unwrap().len(), 1);
-        let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 4);
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.contains("pageNumber=1"))
-        );
     }
 
     #[tokio::test]
@@ -1140,25 +1102,22 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_empty_and_duplicate_site_listings() {
-        // Duplicate site IDs retry the complete listing once; the other cases fail
-        // on the first site page.
-        for (rows, expected_error, expected_requests) in [
-            (vec![], "no usable BMC targets", 1),
+        // Each case fails on the first site page with no retry and no machine query.
+        for (rows, expected_error) in [
+            (vec![], "no usable BMC targets"),
             (
                 vec![serde_json::json!({"id":"", "name":"cluster"})],
                 "empty ID",
-                1,
             ),
             (
                 vec![
                     serde_json::json!({"id":"site-id", "name":"one"}),
                     serde_json::json!({"id":"site-id", "name":"two"}),
                 ],
-                "pagination changed",
-                2,
+                "listing changed",
             ),
         ] {
-            let replies = vec![page(1, rows.len(), rows); expected_requests];
+            let replies = vec![page(1, rows.len(), rows)];
             let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
             let error = source.discover().await.unwrap_err().to_string();
             assert!(error.contains(expected_error), "{error}");
@@ -1166,21 +1125,8 @@ mod tests {
                 .await
                 .expect("fixture expected another site request")
                 .unwrap();
-            assert_eq!(requests.len(), expected_requests);
+            assert_eq!(requests.len(), 1);
         }
-    }
-
-    #[tokio::test]
-    async fn retry_reloads_sites_before_rebuilding_all_machine_targets() {
-        let (source, _files, server) = fixture_with_sites(vec![
-            site_page(), page(1, 1, vec![]),
-            page(1, 1, vec![serde_json::json!({"id":"site-id", "name":"renamed-cluster", "location":null})]),
-            page(1, 1, vec![machine(0)]),
-        ], None, vec![], false).await;
-        let endpoints = source.discover().await.unwrap();
-        assert_eq!(endpoints[0].node_group.as_deref(), Some("renamed-cluster"));
-        assert!(endpoints[0].compute_zone.is_none());
-        assert_eq!(server.await.unwrap().len(), 4);
     }
 
     #[test]
@@ -1248,11 +1194,6 @@ mod tests {
                 .to_string();
             assert!(!error.contains("secret"));
         }
-        for invalid_scope in ["", "two scopes", "quote\"", "backslash\\", "non-ascii-ü"] {
-            cfg = config(token.0.clone());
-            cfg.scopes = vec![invalid_scope.into()];
-            assert!(NicoRestEndpointSource::new(cfg).is_err());
-        }
         cfg = config(token.0.clone());
         cfg.timeout_seconds = 0;
         assert!(NicoRestEndpointSource::new(cfg).is_err());
@@ -1306,58 +1247,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn follows_smaller_advertised_page_sizes_for_sites_and_machines() {
-        let capped = |number, size, total, rows| {
-            let mut reply = page(number, total, rows);
-            reply.pagination = Some(
-                serde_json::json!({"pageNumber":number,"pageSize":size,"total":total}).to_string(),
-            );
-            reply
-        };
-        let (source, _files, server) = fixture_with_sites(
-            vec![
-                capped(
-                    1,
-                    1,
-                    2,
-                    vec![serde_json::json!({"id":"site-id", "name":"cluster"})],
-                ),
-                capped(
-                    2,
-                    1,
-                    2,
-                    vec![serde_json::json!({"id":"empty-site", "name":"empty"})],
-                ),
-                capped(1, 2, 3, vec![machine(0), machine(1)]),
-                capped(2, 2, 3, vec![machine(2)]),
-                page(1, 0, vec![]),
-            ],
-            None,
-            vec![],
-            false,
-        )
-        .await;
-        assert_eq!(source.discover().await.unwrap().len(), 3);
-        let requests = server.await.unwrap();
-        let sizes: Vec<_> = requests
-            .iter()
-            .map(|request| query_value(request, "pageSize"))
-            .collect();
-        assert_eq!(sizes, ["100", "1", "100", "2", "100"].map(String::from));
-    }
-
-    #[tokio::test]
-    async fn rejects_invalid_advertised_page_sizes_without_misreporting_listing_changes() {
-        for size in [0, 101] {
+    async fn rejects_a_page_size_other_than_requested() {
+        // NICo echoes the requested pageSize, so any other value is inconsistent.
+        for size in [0, 1, 101] {
             let mut reply = site_page();
             reply.pagination =
                 Some(serde_json::json!({"pageNumber":1,"pageSize":size,"total":1}).to_string());
             let (source, _files, server) =
                 fixture_with_sites(vec![reply], None, vec![], false).await;
             let error = source.discover().await.unwrap_err().to_string();
-            assert!(error.contains("pageSize must be positive"), "{error}");
-            assert!(!error.contains("pagination changed"));
-            server.await.unwrap();
+            assert!(error.contains("listing changed"), "{size}: {error}");
+            assert_eq!(server.await.unwrap().len(), 1);
         }
     }
 

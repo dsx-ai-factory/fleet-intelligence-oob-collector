@@ -110,21 +110,12 @@ impl SourceConfig {
 }
 
 /// Static endpoint definitions paired with provider-independent settings.
-#[derive(Clone, Debug)]
-pub struct StaticConfig {
-    pub source: StaticEndpointSource,
-    pub settings: EndpointConfig,
-}
-
-impl StaticConfig {
-    /// Discover and resolve one static target snapshot for both workflows.
-    pub async fn resolve(self) -> Result<CollectorConfig, Box<dyn Error>> {
-        self.settings.resolve_from(&self.source).await
-    }
+struct StaticConfig {
+    source: StaticEndpointSource,
+    settings: EndpointConfig,
 }
 
 /// Shared collection settings, independent of static targets or provider type.
-/// Load this with `load_endpoint_config` for API-only endpoint discovery.
 #[derive(Clone, Debug)]
 pub struct EndpointConfig {
     // Absolute and rooted at the config directory. Private so a relative path
@@ -279,31 +270,11 @@ pub async fn load_source_config(path: &str) -> Result<SourceConfig, Box<dyn Erro
     parse_config_parts(&contents, path)?.into_source()
 }
 
-/// Read shared settings without requiring or constructing static targets.
-pub fn load_endpoint_config(path: &str) -> Result<EndpointConfig, Box<dyn Error>> {
-    let contents = std::fs::read_to_string(path)?;
-    Ok(parse_config_parts(&contents, path)?.settings)
-}
-
-/// Asynchronously load shared settings for an API-only deployment.
-pub async fn load_endpoint_config_async(path: &str) -> Result<EndpointConfig, Box<dyn Error>> {
-    let contents = tokio::fs::read_to_string(path).await?;
-    Ok(parse_config_parts(&contents, path)?.settings)
-}
-
-/// Read static endpoint definitions without loading BMC credential values.
-pub fn load_static_config(path: &str) -> Result<StaticConfig, Box<dyn Error>> {
-    let contents = std::fs::read_to_string(path)?;
-    parse_static_config(&contents, path)
-}
-
+/// Synchronous static-only loader for configuration tools such as
+/// `render-nico-config`; the runtime uses `load_config_async`.
 pub fn load_config(path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let contents = std::fs::read_to_string(path)?;
     parse_config(&contents, path)
-}
-
-pub fn load_targets(path: &str) -> Result<Vec<Target>, Box<dyn Error>> {
-    Ok(load_config(path)?.targets)
 }
 
 /// Reload credentials for an existing target without changing its configuration.
@@ -348,10 +319,6 @@ pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig
     config
         .settings
         .resolve_endpoints(config.source.endpoints(), &credentials)
-}
-
-fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<dyn Error>> {
-    parse_static_parts(contents, path)?.into_static()
 }
 
 struct ParsedConfig {
@@ -683,6 +650,10 @@ struct ResolvedCredentials {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_static_config(contents: &str, path: &str) -> Result<StaticConfig, Box<dyn Error>> {
+        parse_static_parts(contents, path)?.into_static()
+    }
 
     #[test]
     fn parses_target_kinds() {
@@ -1384,7 +1355,7 @@ mod tests {
         );
         let expected = parse_config(&contents, "config.toml").unwrap();
         let config = parse_static_config(&contents, "config.toml").unwrap();
-        let actual = config.resolve().await.unwrap();
+        let actual = config.settings.resolve_from(&config.source).await.unwrap();
         assert_eq!(actual.credentials_file, expected.credentials_file);
         assert_eq!(actual.targets.len(), expected.targets.len());
         for (actual, expected) in actual.targets.iter().zip(&expected.targets) {
@@ -1432,7 +1403,8 @@ mod tests {
         assert_eq!(error.to_string(), "discovery unavailable");
         assert!(
             config
-                .resolve()
+                .settings
+                .resolve_from(&config.source)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1598,12 +1570,11 @@ mod tests {
         let path = write_config("provider-only", &contents);
         let _cleanup = TestFileCleanup(path.clone());
         let path = path.to_str().unwrap();
-        // Both public shared-settings loaders work with no [[targets]] at all.
-        let config = load_endpoint_config_async(path).await.unwrap();
-        let sync_config = load_endpoint_config(path).unwrap();
-        assert_eq!(config.credentials_file, sync_config.credentials_file);
+        // Shared settings load with no [[targets]]; the static tools still need them.
+        let config = parse_config_parts(&contents, path).unwrap().settings;
+        assert!(config.credentials_file.is_absolute());
         assert!(
-            load_static_config(path)
+            load_config(path)
                 .unwrap_err()
                 .to_string()
                 .contains("no BMC targets")
@@ -1752,7 +1723,7 @@ mod tests {
         let path = directory.join("config.toml");
         std::fs::write(&path, "[credentials]\nfile='credentials.json'\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'").unwrap();
         let path = path.to_str().unwrap();
-        let parsed = load_static_config(path).unwrap();
+        let parsed = parse_static_config(&std::fs::read_to_string(path).unwrap(), path).unwrap();
         assert!(parsed.settings.credentials_file.is_absolute());
         let provider = ProviderSource(parsed.source.discover().await.unwrap());
         for config in [

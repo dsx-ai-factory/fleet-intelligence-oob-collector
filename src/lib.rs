@@ -1642,8 +1642,9 @@ mod tests {
             ),
         )
         .expect("write config");
-        let snapshot = config::load_targets(config_path.to_str().expect("UTF-8 config path"))
-            .expect("target snapshot");
+        let snapshot = config::load_config(config_path.to_str().expect("UTF-8 config path"))
+            .expect("target snapshot")
+            .targets;
         // The phase conversion must not read files that may have rotated.
         std::fs::remove_file(&config_path).expect("remove config before conversion");
         let targets = build_attestation_targets(&snapshot);
