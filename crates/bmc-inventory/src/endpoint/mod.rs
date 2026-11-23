@@ -35,6 +35,43 @@ pub struct Endpoint {
     pub credentials_profile: Option<String>,
     /// Provider/user labels only. Derived labels are built during finalization.
     pub labels: BTreeMap<String, String>,
+    /// Who set `compute_zone` and `node_group`; decides precedence over
+    /// configured defaults during finalization.
+    pub placement_origin: PlacementOrigin,
+}
+
+/// Precedence of an endpoint's own placement relative to configured defaults.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlacementOrigin {
+    /// Set per target by the operator; it overrides configured defaults.
+    #[default]
+    Configured,
+    /// Derived from provider metadata; configured defaults override it.
+    Discovered,
+}
+
+/// Longest name, placement, or label value accepted for a target.
+pub(crate) const MAX_LABEL_VALUE_BYTES: usize = 1024;
+
+/// Trim a name or placement value and enforce the shared value limits.
+pub(crate) fn normalize_value(
+    context: &str,
+    value: Option<String>,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let value = match value {
+        Some(value) if value.trim().is_empty() => {
+            return Err(format!("{context} cannot be blank").into());
+        }
+        Some(value) => Some(value.trim().to_string()),
+        None => None,
+    };
+    if value
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_LABEL_VALUE_BYTES)
+    {
+        return Err(format!("{context} exceeds {MAX_LABEL_VALUE_BYTES} bytes").into());
+    }
+    Ok(value)
 }
 
 impl Endpoint {
@@ -91,8 +128,9 @@ impl EndpointSource for StaticEndpointSource {
     }
 }
 
-/// Write the credential-free source listing for discovery diagnostics.
-/// Shared labels/defaults and BMC credential resolution have not run yet.
+/// Write the credential-free source listing for discovery diagnostics. Pass
+/// endpoints with effective placement applied (`SourceConfig::discover`); shared
+/// labels and BMC credential resolution have not run yet.
 pub fn write_discovery_json(
     endpoints: &[Endpoint],
     mut output: impl std::io::Write,

@@ -24,11 +24,12 @@ use mac_address::MacAddress;
 use serde::Deserialize;
 
 use super::{NicoHealthSettings, TargetKind};
+use crate::endpoint::MAX_LABEL_VALUE_BYTES as MAX_NICO_LABEL_VALUE_BYTES;
 use crate::endpoint::nico::{NicoRestConfig, NicoRestEndpointSource};
-use crate::endpoint::{Endpoint, EndpointSource, StaticEndpointSource};
+use crate::endpoint::normalize_value as normalize_config_value;
+use crate::endpoint::{Endpoint, EndpointSource, PlacementOrigin, StaticEndpointSource};
 
 const MAX_NICO_LABELS: usize = 32;
-const MAX_NICO_LABEL_VALUE_BYTES: usize = 1024;
 const OOB_LABEL_NAME: &str = "oob";
 const OOB_LABEL_VALUE: &str = "true";
 const MACHINE_NAME_LABEL_NAME: &str = "machine_name";
@@ -84,6 +85,30 @@ pub struct SourceConfig {
     pub settings: EndpointConfig,
 }
 
+impl SourceConfig {
+    /// Discover endpoints with effective placement applied, without reading BMC
+    /// credentials. Use this for diagnostics such as the `discover` command.
+    pub async fn discover(&self) -> Result<Vec<Endpoint>, Box<dyn Error>> {
+        let endpoints = self
+            .source
+            .discover()
+            .await
+            .map_err(|error| error as Box<dyn Error>)?;
+        Ok(endpoints
+            .iter()
+            .map(|endpoint| {
+                let (compute_zone, node_group) = self.settings.defaults.placement(endpoint);
+                Endpoint {
+                    compute_zone,
+                    node_group,
+                    placement_origin: PlacementOrigin::Configured,
+                    ..endpoint.clone()
+                }
+            })
+            .collect())
+    }
+}
+
 /// Static endpoint definitions paired with provider-independent settings.
 #[derive(Clone, Debug)]
 pub struct StaticConfig {
@@ -114,6 +139,22 @@ struct EndpointDefaults {
     compute_zone: Option<String>,
     node_group: Option<String>,
     labels: BTreeMap<String, String>,
+}
+
+impl EndpointDefaults {
+    /// Effective compute zone and node group, chosen independently: per-target
+    /// configuration beats configured defaults, which beat discovered values.
+    fn placement(&self, endpoint: &Endpoint) -> (Option<String>, Option<String>) {
+        let pick = |own: &Option<String>, default: &Option<String>| match endpoint.placement_origin
+        {
+            PlacementOrigin::Configured => own.clone().or_else(|| default.clone()),
+            PlacementOrigin::Discovered => default.clone().or_else(|| own.clone()),
+        };
+        (
+            pick(&endpoint.compute_zone, &self.compute_zone),
+            pick(&endpoint.node_group, &self.node_group),
+        )
+    }
 }
 
 impl EndpointConfig {
@@ -340,12 +381,7 @@ impl ParsedConfig {
         match self.source {
             SourceSelection::Nico(config) => Ok(SourceConfig {
                 source: Box::new(
-                    NicoRestEndpointSource::new(config)
-                        .map_err(|error| error as Box<dyn Error>)?
-                        .with_placement_overrides(
-                            self.settings.defaults.compute_zone.clone(),
-                            self.settings.defaults.node_group.clone(),
-                        ),
+                    NicoRestEndpointSource::new(config).map_err(|error| error as Box<dyn Error>)?,
                 ),
                 settings: self.settings,
             }),
@@ -445,20 +481,10 @@ fn resolve_endpoints(
             .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
             .map_err(|error| format!("{identity}: {error}"))?;
         let name = normalize_config_value(&format!("{context}.name"), endpoint.name.clone())?;
-        let compute_zone = normalize_config_value(
-            &format!("{context}.compute_zone"),
-            endpoint
-                .compute_zone
-                .clone()
-                .or_else(|| defaults.compute_zone.clone()),
-        )?;
-        let node_group = normalize_config_value(
-            &format!("{context}.node_group"),
-            endpoint
-                .node_group
-                .clone()
-                .or_else(|| defaults.node_group.clone()),
-        )?;
+        let (compute_zone, node_group) = defaults.placement(endpoint);
+        let compute_zone =
+            normalize_config_value(&format!("{context}.compute_zone"), compute_zone)?;
+        let node_group = normalize_config_value(&format!("{context}.node_group"), node_group)?;
         let mut labels = defaults.labels.clone();
         labels.extend(endpoint.labels.clone());
         validate_nico_labels(&format!("{context}.labels"), &labels)?;
@@ -530,26 +556,6 @@ fn validate_nico_labels(
     Ok(())
 }
 
-pub(crate) fn normalize_config_value(
-    context: &str,
-    value: Option<String>,
-) -> Result<Option<String>, Box<dyn Error>> {
-    let value = match value {
-        Some(value) if value.trim().is_empty() => {
-            return Err(format!("{context} cannot be blank").into());
-        }
-        Some(value) => Some(value.trim().to_string()),
-        None => None,
-    };
-    if value
-        .as_ref()
-        .is_some_and(|value| value.len() > MAX_NICO_LABEL_VALUE_BYTES)
-    {
-        return Err(format!("{context} exceeds {MAX_NICO_LABEL_VALUE_BYTES} bytes").into());
-    }
-    Ok(value)
-}
-
 impl RawTargetConfig {
     fn into_endpoint(self, context: &str) -> Result<Endpoint, Box<dyn Error>> {
         let mac = self
@@ -573,6 +579,7 @@ impl RawTargetConfig {
             mac,
             credentials_profile: self.credentials_profile,
             labels: self.labels,
+            placement_origin: PlacementOrigin::Configured,
         })
     }
 }
@@ -1491,6 +1498,58 @@ mod tests {
             mac: "00:11:22:33:44:55".parse().unwrap(),
             credentials_profile: Some("bmc".into()),
             labels: BTreeMap::from([("rack".into(), "rack-1".into())]),
+            placement_origin: PlacementOrigin::Configured,
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_defaults_override_discovered_placement_independently() {
+        for (zone, group) in [
+            (None, None),
+            (Some("configured-zone"), None),
+            (None, Some("configured-group")),
+            (Some("configured-zone"), Some("configured-group")),
+        ] {
+            let mut contents = String::new();
+            for (key, value) in [("compute_zone", zone), ("node_group", group)] {
+                if let Some(value) = value {
+                    contents.push_str(&format!("{key} = {value:?}\n"));
+                }
+            }
+            let settings = parse_config_parts(&with_test_credentials(&contents), "config.toml")
+                .unwrap()
+                .settings;
+            let mut endpoint = provider_endpoint();
+            endpoint.compute_zone = Some("site-zone".into());
+            endpoint.node_group = Some("site-group".into());
+            endpoint.placement_origin = PlacementOrigin::Discovered;
+            let expected = (
+                Some(zone.unwrap_or("site-zone")),
+                Some(group.unwrap_or("site-group")),
+            );
+            // Collection and the discover command agree on effective placement.
+            let selected = SourceConfig {
+                source: Box::new(ProviderSource(vec![endpoint].into())),
+                settings,
+            };
+            let resolved = selected
+                .settings
+                .resolve_from(selected.source.as_ref())
+                .await
+                .unwrap();
+            let target = &resolved.targets[0];
+            assert_eq!(
+                (target.compute_zone.as_deref(), target.node_group.as_deref()),
+                expected
+            );
+            let discovered = selected.discover().await.unwrap();
+            assert_eq!(
+                (
+                    discovered[0].compute_zone.as_deref(),
+                    discovered[0].node_group.as_deref()
+                ),
+                expected
+            );
         }
     }
 

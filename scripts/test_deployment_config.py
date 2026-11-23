@@ -101,6 +101,14 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         config = tomllib.loads(textwrap.dedent(contents))
         self.assertEqual(config["endpoint_source"]["scopes"], [])
 
+    def test_missing_timeout_renders_the_default(self):
+        # --reuse-values upgrades omit defaults added after the original install.
+        result = self.render(**{"endpointSource.nico.timeoutSeconds": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["timeout_seconds"], 30)
+
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
         cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "credentialsProfile")]
         cases.extend([

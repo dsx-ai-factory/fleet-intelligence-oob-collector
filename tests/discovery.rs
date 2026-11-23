@@ -33,7 +33,7 @@ impl Drop for ConfigDirectory {
 async fn discover_needs_neither_passwords_nor_hardware_access() {
     let directory = ConfigDirectory::new();
     let config = directory.0.join("config.toml");
-    std::fs::write(&config, "[credentials]\nfile='missing-credentials.json'\n[[targets]]\nip='192.0.2.10'\nmac='02:00:00:00:00:01'\nname='fixture-host'\ncredentials_profile='bmc'\n").unwrap();
+    std::fs::write(&config, "node_group='configured-group'\n[credentials]\nfile='missing-credentials.json'\n[[targets]]\nip='192.0.2.10'\nmac='02:00:00:00:00:01'\nname='fixture-host'\ncredentials_profile='bmc'\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
         .arg("discover")
         .arg("--config")
@@ -49,6 +49,8 @@ async fn discover_needs_neither_passwords_nor_hardware_access() {
     let output = String::from_utf8(output.stdout).unwrap();
     assert!(output.contains("192.0.2.10") && output.contains("02:00:00:00:00:01"));
     assert!(output.contains("fixture-host"));
+    // Discover output shows the effective placement that collection will use.
+    assert!(output.contains("\"node_group\": \"configured-group\""));
     assert!(!output.contains("password"));
 }
 

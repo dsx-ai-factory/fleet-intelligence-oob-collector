@@ -202,11 +202,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Discover(args) => {
             let selected = config::load_source_config(&args.config).await?;
-            let endpoints = selected
-                .source
-                .discover()
-                .await
-                .map_err(|error| error as Box<dyn Error>)?;
+            let endpoints = selected.discover().await?;
             bmc_inventory::endpoint::write_discovery_json(&endpoints, std::io::stdout().lock())?;
         }
         Command::Inventory(args) => {

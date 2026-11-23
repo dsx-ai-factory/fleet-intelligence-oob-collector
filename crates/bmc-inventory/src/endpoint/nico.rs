@@ -19,7 +19,7 @@ use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, de::DeserializeOwned};
 use url::Url;
 
-use super::{Endpoint, EndpointSnapshot, EndpointSource, EndpointSourceError};
+use super::{Endpoint, EndpointSnapshot, EndpointSource, EndpointSourceError, PlacementOrigin};
 use crate::models::TargetKind;
 
 type Result<T> = std::result::Result<T, EndpointSourceError>;
@@ -60,38 +60,14 @@ pub struct NicoRestEndpointSource {
     token_url: Url,
     client: reqwest::Client,
     timeout: Duration,
-    compute_zone_override: Option<String>,
-    node_group_override: Option<String>,
 }
 
 impl NicoRestEndpointSource {
     /// Construct an HTTPS-only source. Relative credential paths must be rooted at
     /// the config directory by the caller before constructing this source.
     pub fn new(config: NicoRestConfig) -> Result<Self> {
-        let mut url = Url::parse(&config.api_url).map_err(|_| "invalid NICo REST API URL")?;
-        if url.scheme() != "https"
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(
-                "NICo api_url must be HTTPS without credentials, query, or fragment".into(),
-            );
-        }
-        let token_url = Url::parse(&config.token_url).map_err(|_| "invalid OAuth2 token URL")?;
-        if token_url.scheme() != "https"
-            || token_url.host_str().is_none()
-            || !token_url.username().is_empty()
-            || token_url.password().is_some()
-            || token_url.query().is_some()
-            || token_url.fragment().is_some()
-        {
-            return Err(
-                "OAuth2 token_url must be HTTPS without credentials, query, or fragment".into(),
-            );
-        }
+        let mut url = https_url("NICo api_url", &config.api_url)?;
+        let token_url = https_url("OAuth2 token_url", &config.token_url)?;
         if config.org.trim().is_empty()
             || config.org == "."
             || config.org == ".."
@@ -130,20 +106,7 @@ impl NicoRestEndpointSource {
             token_url,
             client,
             timeout,
-            compute_zone_override: None,
-            node_group_override: None,
         })
-    }
-
-    // Shared configuration validates and normalizes these values before use.
-    pub(crate) fn with_placement_overrides(
-        mut self,
-        compute_zone: Option<String>,
-        node_group: Option<String>,
-    ) -> Self {
-        self.compute_zone_override = compute_zone;
-        self.node_group_override = node_group;
-        self
     }
 
     async fn discover_inner(&self) -> Result<EndpointSnapshot> {
@@ -174,17 +137,15 @@ impl NicoRestEndpointSource {
         let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
             .map_err(|_| "invalid OAuth2 access token header")?;
         authorization.set_sensitive(true);
-        for attempt in 0..2 {
-            match self.discover_pages(&authorization).await {
-                Err(error) if attempt == 0 && error.is::<ListingChanged>() => {
-                    tracing::warn!(
-                        "NICo listing changed; retrying discovery once within the original deadline"
-                    );
-                }
-                result => return result,
+        match self.discover_pages(&authorization).await {
+            Err(error) if error.is::<ListingChanged>() => {
+                tracing::warn!(
+                    "NICo listing changed; retrying discovery once within the original deadline"
+                );
+                self.discover_pages(&authorization).await
             }
+            result => result,
         }
-        unreachable!("both discovery attempts return or retry")
     }
 
     async fn list_pages<T: DeserializeOwned>(
@@ -279,14 +240,7 @@ impl NicoRestEndpointSource {
                     ],
                 )
                 .await?;
-            let compute_zone = self
-                .compute_zone_override
-                .clone()
-                .or_else(|| site.compute_zone());
-            let node_group = self
-                .node_group_override
-                .clone()
-                .unwrap_or_else(|| site.name.trim().to_string());
+            let (compute_zone, node_group) = site.placement();
             for machine in machines {
                 let machine_id = super::safe_source_reference(&machine.id);
                 if machine.site_id != site.id || machine.id.trim().is_empty() {
@@ -300,24 +254,12 @@ impl NicoRestEndpointSource {
                 let endpoint = machine
                     .into_endpoint(self.config.credentials_profile.clone())
                     .and_then(|mut endpoint| {
-                        // External names must obey the same limits as configured
-                        // placement, before this record enters the shared finalizer.
-                        for (field, value, target) in [
-                            ("name", endpoint.name.take(), &mut endpoint.name),
-                            (
-                                "node_group",
-                                Some(node_group.clone()),
-                                &mut endpoint.node_group,
-                            ),
-                            (
-                                "compute_zone",
-                                compute_zone.clone(),
-                                &mut endpoint.compute_zone,
-                            ),
-                        ] {
-                            *target = crate::config::normalize_config_value(field, value)
-                                .map_err(|error| error.to_string())?;
-                        }
+                        // An unusable hostname skips only this machine, before the
+                        // record reaches the shared finalizer.
+                        endpoint.name = super::normalize_value("name", endpoint.name.take())
+                            .map_err(|error| error.to_string())?;
+                        endpoint.compute_zone = compute_zone.clone();
+                        endpoint.node_group = node_group.clone();
                         Ok(endpoint)
                     });
                 let endpoint = match endpoint {
@@ -422,6 +364,24 @@ impl std::fmt::Display for ListingChanged {
 }
 impl std::error::Error for ListingChanged {}
 
+// Parse an endpoint URL that may receive credentials or bearer tokens. Errors
+// name only the setting, never the configured value.
+fn https_url(setting: &str, value: &str) -> Result<Url> {
+    let url = Url::parse(value).map_err(|_| format!("invalid {setting}"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            format!("{setting} must be HTTPS without credentials, query, or fragment").into(),
+        );
+    }
+    Ok(url)
+}
+
 fn client_builder(timeout: Duration) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -482,6 +442,25 @@ struct SiteLocation {
 }
 
 impl Site {
+    /// Site-derived compute zone and node group. Configured defaults override
+    /// these during finalization. An unusable value is dropped with one warning,
+    /// so it never removes this site's machines from the snapshot.
+    fn placement(&self) -> (Option<String>, Option<String>) {
+        let site_id = super::safe_source_reference(&self.id);
+        let usable = |field, value| {
+            super::normalize_value(field, value)
+                .inspect_err(|error| {
+                    tracing::warn!(%site_id, reason = %error, "ignoring NICo site placement");
+                })
+                .ok()
+                .flatten()
+        };
+        (
+            usable("compute_zone", self.compute_zone()),
+            usable("node_group", Some(self.name.clone())),
+        )
+    }
+
     fn compute_zone(&self) -> Option<String> {
         let location = self.location.as_ref()?;
         let raw = [&location.country, &location.state, &location.city]
@@ -542,6 +521,8 @@ impl Machine {
         let ip = bmc
             .ip
             .and_then(|ip| ip.parse::<IpAddr>().ok())
+            // An unspecified address is a placeholder, never a reachable BMC.
+            .filter(|ip| !ip.is_unspecified())
             .ok_or("NICo machine has no valid BMC IP")?;
         let mac = bmc
             .mac
@@ -557,6 +538,7 @@ impl Machine {
             compute_zone: None,
             node_group: None,
             labels: BTreeMap::new(),
+            placement_origin: PlacementOrigin::Discovered,
         })
     }
 }
@@ -606,6 +588,17 @@ mod tests {
             "id":format!("machine-{index}"),"siteId":"site-id","hostname":format!("host-{index}"),
             "metadata":{"bmcInfo":{"ip":format!("192.0.2.{}",index + 1),"mac":format!("02:00:00:00:00:{index:02x}")}}
         })
+    }
+
+    // The exact decoded value of one query parameter in a recorded request line.
+    fn query_value(request: &str, key: &str) -> String {
+        let target = request.split(' ').nth(1).unwrap();
+        let query = target.split_once('?').map_or("", |(_, query)| query);
+        url::form_urlencoded::parse(query.as_bytes())
+            .find(|(name, _)| name == key)
+            .unwrap_or_else(|| panic!("{key} missing from {target}"))
+            .1
+            .into_owned()
     }
 
     fn site_page() -> Reply {
@@ -690,8 +683,19 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
             let mut replies = replies.into_iter().peekable();
-            while replies.peek().is_some() {
-                let (mut socket, _) = listener.accept().await.unwrap();
+            // After an OAuth2 redirect, keep listening briefly so a followed
+            // redirect would be recorded instead of failing on a closed port.
+            let mut watch_for_redirect = false;
+            while watch_for_redirect || replies.peek().is_some() {
+                let (mut socket, _) = if watch_for_redirect {
+                    match tokio::time::timeout(Duration::from_millis(300), listener.accept()).await
+                    {
+                        Ok(accepted) => accepted.unwrap(),
+                        Err(_) => break,
+                    }
+                } else {
+                    listener.accept().await.unwrap()
+                };
                 let mut bytes = Vec::new();
                 loop {
                     let mut buffer = [0; 4096];
@@ -762,8 +766,14 @@ mod tests {
                 );
                 // A bounded-body reader may stop before an oversized reply ends.
                 let _ = socket.write_all(response.as_bytes()).await;
-                if token_request && token_reply.is_some() {
+                if watch_for_redirect {
                     break;
+                }
+                if token_request && token_reply.is_some() {
+                    if !(300..400).contains(&reply.status) {
+                        break;
+                    }
+                    watch_for_redirect = true;
                 }
             }
             requests
@@ -812,24 +822,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_placement_overrides_site_fields_independently_in_discovery_output() {
-        for (zone, group) in [
-            (None, None),
-            (Some("configured-zone"), None),
-            (None, Some("configured-group")),
-            (Some("configured-zone"), Some("configured-group")),
-        ] {
-            let (source, _files, server) = fixture(vec![page(1, 1, vec![machine(0)])]).await;
-            let source = source
-                .with_placement_overrides(zone.map(str::to_string), group.map(str::to_string));
-            let endpoints = source.discover().await.unwrap();
-            let mut output = Vec::new();
-            super::super::write_discovery_json(&endpoints, &mut output).unwrap();
-            let rows: serde_json::Value = serde_json::from_slice(&output).unwrap();
-            assert_eq!(rows[0]["compute_zone"], zone.unwrap_or("usa-az-phoenix"));
-            assert_eq!(rows[0]["node_group"], group.unwrap_or("test-cluster"));
-            server.await.unwrap();
-        }
+    async fn site_placement_is_marked_as_discovered_so_configured_defaults_win() {
+        // Precedence itself is applied by the shared finalizer; see
+        // config::targets tests for configured-over-discovered placement.
+        let (source, _files, server) = fixture(vec![page(1, 1, vec![machine(0)])]).await;
+        let endpoints = source.discover().await.unwrap();
+        assert_eq!(endpoints[0].compute_zone.as_deref(), Some("usa-az-phoenix"));
+        assert_eq!(endpoints[0].node_group.as_deref(), Some("test-cluster"));
+        assert_eq!(endpoints[0].placement_origin, PlacementOrigin::Discovered);
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -1017,7 +1018,7 @@ mod tests {
             "compute_zone": "zone-a",
             "node_group": "group-a"
         });
-        for index in 1..=6 {
+        for index in 1..=8 {
             let mut row = machine(index);
             match index {
                 1 => row["metadata"] = serde_json::Value::Null,
@@ -1025,6 +1026,8 @@ mod tests {
                 3 => row["metadata"]["bmcInfo"]["ip"] = serde_json::Value::Null,
                 4 => row["metadata"]["bmcInfo"]["mac"] = "invalid".into(),
                 5 => row["metadata"]["bmcInfo"]["ip"] = "invalid".into(),
+                6 => row["metadata"]["bmcInfo"]["ip"] = "0.0.0.0".into(),
+                7 => row["metadata"]["bmcInfo"]["ip"] = "::".into(),
                 _ => row["status"] = "Decommissioned".into(),
             }
             rows.push(row);
@@ -1137,21 +1140,33 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_empty_and_duplicate_site_listings() {
-        for rows in [
-            vec![],
-            vec![serde_json::json!({"id":"", "name":"cluster"})],
-            vec![
-                serde_json::json!({"id":"site-id", "name":"one"}),
-                serde_json::json!({"id":"site-id", "name":"two"}),
-            ],
+        // Duplicate site IDs retry the complete listing once; the other cases fail
+        // on the first site page.
+        for (rows, expected_error, expected_requests) in [
+            (vec![], "no usable BMC targets", 1),
+            (
+                vec![serde_json::json!({"id":"", "name":"cluster"})],
+                "empty ID",
+                1,
+            ),
+            (
+                vec![
+                    serde_json::json!({"id":"site-id", "name":"one"}),
+                    serde_json::json!({"id":"site-id", "name":"two"}),
+                ],
+                "pagination changed",
+                2,
+            ),
         ] {
-            let mut replies = vec![page(1, rows.len(), rows.clone())];
-            if rows.len() == 2 {
-                replies.extend(replies.clone());
-            }
+            let replies = vec![page(1, rows.len(), rows); expected_requests];
             let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
-            assert!(source.discover().await.is_err());
-            server.await.unwrap();
+            let error = source.discover().await.unwrap_err().to_string();
+            assert!(error.contains(expected_error), "{error}");
+            let requests = tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .expect("fixture expected another site request")
+                .unwrap();
+            assert_eq!(requests.len(), expected_requests);
         }
     }
 
@@ -1257,7 +1272,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bad_external_names_skip_only_affected_machines_and_allow_configured_overrides() {
+    async fn bad_hostnames_skip_machines_and_bad_site_placement_is_dropped() {
         let sites = page(
             1,
             3,
@@ -1279,18 +1294,15 @@ mod tests {
             page(1, 1, vec![long_site_host]),
             page(1, 1, vec![blank_site_host]),
         ];
-        for override_group in [None, Some("configured-cluster".to_string())] {
-            let (source, _files, server) =
-                fixture_with_sites(replies.clone(), None, vec![], false).await;
-            let source = source.with_placement_overrides(None, override_group.clone());
-            let endpoints = source.discover().await.unwrap();
-            assert_eq!(
-                endpoints.len(),
-                if override_group.is_some() { 3 } else { 1 }
-            );
-            assert_eq!(endpoints[0].name.as_deref(), Some("host-0"));
-            server.await.unwrap();
-        }
+        let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
+        let endpoints = source.discover().await.unwrap();
+        // The long hostname skips only machine 1. Unusable site names leave the
+        // node group unset, which configured defaults can still fill.
+        let names: Vec<_> = endpoints.iter().map(|e| e.name.as_deref()).collect();
+        assert_eq!(names, [Some("host-0"), Some("host-2"), Some("host-3")]);
+        let groups: Vec<_> = endpoints.iter().map(|e| e.node_group.as_deref()).collect();
+        assert_eq!(groups, [Some("good-cluster"), None, None]);
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -1327,9 +1339,11 @@ mod tests {
         .await;
         assert_eq!(source.discover().await.unwrap().len(), 3);
         let requests = server.await.unwrap();
-        for (request, size) in requests.iter().zip([100, 1, 100, 2, 100]) {
-            assert!(request.contains(&format!("pageSize={size}")), "{request}");
-        }
+        let sizes: Vec<_> = requests
+            .iter()
+            .map(|request| query_value(request, "pageSize"))
+            .collect();
+        assert_eq!(sizes, ["100", "1", "100", "2", "100"].map(String::from));
     }
 
     #[tokio::test]
