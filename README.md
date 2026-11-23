@@ -30,7 +30,8 @@ The OOB collector enrolls with Fleet Intelligence and uploads inventory from con
 
 ## Getting started
 
-For installation and configuration, use the [published OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). Select the documentation version for your Helm chart or Linux package release before following the guide.
+- For installation and configuration, see the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). Choose the documentation version that matches your Helm chart or Linux package release.
+- For service setup and the dashboard, see the [Fleet Intelligence service documentation](https://docs.nvidia.com/fleet-intel).
 
 ## Contributing
 
