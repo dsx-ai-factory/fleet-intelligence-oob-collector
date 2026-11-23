@@ -94,18 +94,23 @@ impl SourceConfig {
             .discover()
             .await
             .map_err(|error| error as Box<dyn Error>)?;
-        Ok(endpoints
+        endpoints
             .iter()
-            .map(|endpoint| {
-                let (compute_zone, node_group) = self.settings.defaults.placement(endpoint);
-                Endpoint {
+            .enumerate()
+            .map(|(index, endpoint)| {
+                let (name, compute_zone, node_group) = self
+                    .settings
+                    .defaults
+                    .effective(endpoint, &format!("targets[{index}]"))?;
+                Ok(Endpoint {
+                    name,
                     compute_zone,
                     node_group,
                     placement_origin: PlacementOrigin::Configured,
                     ..endpoint.clone()
-                }
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -124,6 +129,9 @@ pub struct EndpointConfig {
     pub nico_health: NicoHealthSettings,
     defaults: EndpointDefaults,
 }
+
+/// Normalized `(name, compute_zone, node_group)` for one target.
+type EffectivePlacement = (Option<String>, Option<String>, Option<String>);
 
 #[derive(Clone, Debug)]
 struct EndpointDefaults {
@@ -145,6 +153,21 @@ impl EndpointDefaults {
             pick(&endpoint.compute_zone, &self.compute_zone),
             pick(&endpoint.node_group, &self.node_group),
         )
+    }
+
+    /// Normalized name, compute zone, and node group that collection uses.
+    /// The `discover` command shares this so its output matches collection.
+    fn effective(
+        &self,
+        endpoint: &Endpoint,
+        context: &str,
+    ) -> Result<EffectivePlacement, Box<dyn Error>> {
+        let (compute_zone, node_group) = self.placement(endpoint);
+        Ok((
+            normalize_config_value(&format!("{context}.name"), endpoint.name.clone())?,
+            normalize_config_value(&format!("{context}.compute_zone"), compute_zone)?,
+            normalize_config_value(&format!("{context}.node_group"), node_group)?,
+        ))
     }
 }
 
@@ -447,11 +470,7 @@ fn resolve_endpoints(
         let resolved = credentials
             .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
             .map_err(|error| format!("{identity}: {error}"))?;
-        let name = normalize_config_value(&format!("{context}.name"), endpoint.name.clone())?;
-        let (compute_zone, node_group) = defaults.placement(endpoint);
-        let compute_zone =
-            normalize_config_value(&format!("{context}.compute_zone"), compute_zone)?;
-        let node_group = normalize_config_value(&format!("{context}.node_group"), node_group)?;
+        let (name, compute_zone, node_group) = defaults.effective(endpoint, &context)?;
         let mut labels = defaults.labels.clone();
         labels.extend(endpoint.labels.clone());
         validate_nico_labels(&format!("{context}.labels"), &labels)?;
@@ -1472,6 +1491,44 @@ mod tests {
             labels: BTreeMap::from([("rack".into(), "rack-1".into())]),
             placement_origin: PlacementOrigin::Configured,
         }
+    }
+
+    #[tokio::test]
+    async fn discover_output_normalizes_like_collection() {
+        let target = "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'\nname=' host-a '\n";
+        let contents = with_test_credentials(&format!("{target}compute_zone=' zone-a '\n"));
+        let selected = parse_config_parts(&contents, "config.toml")
+            .unwrap()
+            .into_source()
+            .unwrap();
+        let discovered = selected.discover().await.unwrap();
+        let resolved = selected
+            .settings
+            .resolve_from(selected.source.as_ref())
+            .await
+            .unwrap();
+        let target = &resolved.targets[0];
+        assert_eq!(discovered[0].name.as_deref(), Some("host-a"));
+        assert_eq!(discovered[0].compute_zone.as_deref(), Some("zone-a"));
+        assert_eq!(discovered[0].name, target.name);
+        assert_eq!(discovered[0].compute_zone, target.compute_zone);
+        // A blank value fails both paths the same way instead of only collection.
+        let blank = with_test_credentials(
+            "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'\nnode_group='  '\n",
+        );
+        let selected = parse_config_parts(&blank, "config.toml")
+            .unwrap()
+            .into_source()
+            .unwrap();
+        let discover_error = selected.discover().await.unwrap_err().to_string();
+        let collection_error = selected
+            .settings
+            .resolve_from(selected.source.as_ref())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(discover_error, "targets[0].node_group cannot be blank");
+        assert_eq!(collection_error, discover_error);
     }
 
     #[tokio::test]
