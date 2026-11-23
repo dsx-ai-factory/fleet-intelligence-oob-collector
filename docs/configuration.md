@@ -190,7 +190,7 @@ backend:
 
 `backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
 
-`backend.enrollmentToken` points to the Secret that holds the enrollment token. The collector and the bundled gateway both use it.
+`backend.enrollmentToken` points to the Secret that holds the NGC service key. The collector and the bundled gateway both use it.
 
 ## Components and telemetry
 

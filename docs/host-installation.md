@@ -1,6 +1,6 @@
 # Install on Linux (DEB/RPM)
 
-Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and a Fleet Intelligence enrollment token. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
+Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and an [NGC service key](credentials.md#get-an-ngc-service-key) for Fleet Intelligence with the **Enroll Machines** scope. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
 
 ## Download the package
 
@@ -75,9 +75,9 @@ credentials_profile = "compute"
 
 Add one `[[targets]]` entry per BMC. The collector and NICo use this shared target list and credential file.
 
-### Set the enrollment token
+### Set the service key
 
-Create a protected file containing only your enrollment token:
+Create a protected file containing only your NGC service key:
 
 ```bash
 sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/enrollment-token
@@ -91,7 +91,7 @@ Set this line in `service.conf`:
 FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/enrollment-token
 ```
 
-The collector and gateway use the same token. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).
+The collector and gateway use the same service key. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).
 
 ## Start and verify collection
 
@@ -157,4 +157,4 @@ For RPM systems:
 sudo dnf remove fleetint-oob
 ```
 
-Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential/token files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
+Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
