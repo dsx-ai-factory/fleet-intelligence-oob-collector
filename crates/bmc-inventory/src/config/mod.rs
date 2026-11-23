@@ -24,5 +24,5 @@ pub use nico::{NicoConfigOptions, render_nico_config};
 pub use services::{NicoHealthSettings, NicoLogMode, NicoReachabilityLogMode};
 pub use targets::{
     CollectorConfig, EndpointConfig, SourceConfig, Target, load_config, load_config_async,
-    load_source_config, load_target_credentials, uses_remote_discovery,
+    load_source_config, load_target_credentials,
 };

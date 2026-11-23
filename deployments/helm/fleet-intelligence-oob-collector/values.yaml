@@ -24,7 +24,7 @@ endpointSource:
     tokenUrl: "" # OAuth2 token endpoint.
     oauth2CredentialsSecretName: "" # Keys: client_id and client_secret.
     scopes: [] # Scopes required by the configured identity provider.
-    timeoutSeconds: 30
+    timeoutSeconds: 30 # Whole-discovery budget (1-3600); raise for large organizations.
 
 # Shared BMC JSON file; credential values belong in the Secret.
 credentials:
