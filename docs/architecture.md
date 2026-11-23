@@ -30,7 +30,7 @@ Each machine is identified by its BMC MAC address, from configuration through in
 
 ## A collection cycle
 
-When the collector starts, it exchanges its NGC service key for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
+When the collector starts, it exchanges its service key for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
 
 1. **Reload configuration.** The collector re-reads the target list and credentials file, so edits take effect at the next cycle. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
 2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `bmcCollector.targetConcurrency`, after 30 seconds, or when inventory collection ends.

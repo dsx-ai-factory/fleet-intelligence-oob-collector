@@ -1,6 +1,6 @@
 # Install on Linux (DEB/RPM)
 
-Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and an [NGC service key](credentials.md#get-an-ngc-service-key) for Fleet Intelligence with the **Enroll Machines** scope. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
+Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the telemetry gateway as systemd services. You need administrator access, network connectivity to your BMCs and Fleet Intelligence, BMC addresses and real MAC addresses, BMC credentials, and a [service key](credentials.md#get-a-service-key) for Fleet Intelligence with the **Enroll Machines** scope. Use a DEB or RPM Linux host with systemd and an `amd64` (x86-64) or `arm64` (AArch64) processor. For Kubernetes, follow [Install on Kubernetes](installation.md).
 
 ## Download the package
 
@@ -77,7 +77,7 @@ Add one `[[targets]]` entry per BMC. The collector and NICo use this shared targ
 
 ### Set the service key
 
-Create a protected file containing only your NGC service key:
+Create a protected file containing only your service key:
 
 ```bash
 sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/enrollment-token

@@ -12,7 +12,7 @@ For a NICo-managed site, use [endpoint source configuration](configuration.md#en
 - Helm 3 or 4
 - Network access from the cluster to your BMCs and to Fleet Intelligence
 - The IP and MAC address of each BMC, and its login credentials
-- An [NGC service key](credentials.md#get-an-ngc-service-key) for Fleet Intelligence with the **Enroll Machines** scope
+- A [service key](credentials.md#get-a-service-key) for Fleet Intelligence with the **Enroll Machines** scope
 
 ## Choose a chart version
 
@@ -51,7 +51,7 @@ Confirm you are in `~/fleetint-oob` before saving files. The examples use filena
 
 ## Create the Secrets
 
-The collector reads BMC logins from a credentials file and authenticates with the NGC service key. Both go into Kubernetes Secrets; the chart only references them. To sync the Secrets from Vault or OpenBao instead, follow [Credentials](credentials.md) and continue at [Save your values file](#save-your-values-file).
+The collector reads BMC logins from a credentials file and authenticates with the service key. Both go into Kubernetes Secrets; the chart only references them. To sync the Secrets from Vault or OpenBao instead, follow [Credentials](credentials.md) and continue at [Save your values file](#save-your-values-file).
 
 Save this as `credentials.json` and replace the example username and password:
 
@@ -71,13 +71,13 @@ This is a complete file for compute BMCs that share one login. Each target in yo
 - **Another profile:** if other BMCs, such as NVSwitch trays, use a different login, add a profile such as `nvswitch` next to `compute` and select it on those targets. Profiles no target uses are allowed, but leave out ones you don't need.
 - **A per-MAC override:** if a single BMC has its own username or password, add an [override for its MAC](configuration.md#how-credentials-are-resolved).
 
-Create the credentials Secret, then paste the NGC service key when prompted. The key isn't echoed or saved to disk.
+Create the credentials Secret, then paste the service key when prompted. The key isn't echoed or saved to disk.
 
 ```bash
 kubectl -n "$NAMESPACE" create secret generic fleet-intelligence-bmc-credentials \
   --from-file=credentials.json
 
-printf 'NGC service key: '; read -rs TOKEN; echo
+printf 'Service key: '; read -rs TOKEN; echo
 printf '%s' "$TOKEN" | kubectl -n "$NAMESPACE" create secret generic \
   fleet-intelligence-enrollment-token --from-file=enrollment-token=/dev/stdin
 unset TOKEN
@@ -186,7 +186,7 @@ If the pods run but collection fails, check the collector log. Per-BMC problems 
 | Problem | What to check |
 | --- | --- |
 | A BMC rejects the login | The target's `credentialsProfile`, any override for its MAC, and the account on the BMC itself |
-| The collector or gateway can't enroll | That the NGC service key is valid, has the **Enroll Machines** scope, and belongs to the intended organization. Check `backend.url` as well. |
+| The collector or gateway can't enroll | That the service key is valid, has the **Enroll Machines** scope, and belongs to the intended organization. Check `backend.url` as well. |
 | The gateway can't export telemetry | That the backend is reachable from the cluster and its TLS certificate is trusted |
 
 If `helm upgrade --install` itself fails, render the chart locally to see download, values validation, or template errors:
@@ -218,7 +218,7 @@ kubectl -n "$NAMESPACE" create secret generic fleet-intelligence-bmc-credentials
 To replace the service key:
 
 ```bash
-printf 'NGC service key: '; read -rs TOKEN; echo
+printf 'Service key: '; read -rs TOKEN; echo
 printf '%s' "$TOKEN" | kubectl -n "$NAMESPACE" create secret generic \
   fleet-intelligence-enrollment-token --from-file=enrollment-token=/dev/stdin \
   --dry-run=client -o yaml |

@@ -152,7 +152,7 @@ System and Chassis status follow discovery cadence; Manager status follows manag
 
 The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, OTLP HTTP at `127.0.0.1:4318`, and gateway health at `127.0.0.1:13133`. NICo's Prometheus endpoint is `http://127.0.0.1:9009/metrics`. Keep these local listeners private to the host.
 
-Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same NGC service key as the collector but enrolls separately.
+Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same service key as the collector but enrolls separately.
 
 Keep the gateway's `sak_token` binding when editing its configuration so it reads the service key from the service environment:
 

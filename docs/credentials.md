@@ -5,7 +5,7 @@ The Helm chart doesn't hold any secrets itself. It reads two Kubernetes Secrets 
 | Secret contents | Key | Used by |
 | --- | --- | --- |
 | BMC credentials file (JSON) | `credentials.json` | The collector and NICo, mounted at `/run/secrets/bmc/credentials.json` |
-| NGC service key for Fleet Intelligence | `enrollment-token` | The collector and bundled gateway (`FLEETINT_ENROLLMENT_TOKEN`) |
+| Service key for Fleet Intelligence | `enrollment-token` | The collector and bundled gateway (`FLEETINT_ENROLLMENT_TOKEN`) |
 
 You can create these Secrets by hand, as shown in [Installation](installation.md#create-the-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
 
@@ -13,11 +13,11 @@ Three separate logins are involved, and it helps to keep them apart:
 
 - **The secrets operator** signs in to Vault or OpenBao with its Kubernetes ServiceAccount. The collector and NICo never talk to Vault or OpenBao.
 - **The collector and NICo** sign in to BMCs with the usernames and passwords in the credentials file.
-- **The collector and gateway** each exchange the NGC service key for their own Fleet Intelligence session JWT, which authenticates subsequent backend requests. They reuse the service key when they need to enroll again.
+- **The collector and gateway** each exchange the service key for their own Fleet Intelligence session JWT, which authenticates subsequent backend requests. They reuse the service key when they need to enroll again.
 
-## Get an NGC service key
+## Get a service key
 
-In the NGC portal for your organization, go to **Organization > Service Keys > Create Service Key**. Select **Fleet Intelligence** as the service and **Enroll Machines** as the scope. Ask your NGC organization administrator for a key if you need one.
+In the NGC portal for your organization, go to **Organization > Service Keys > Create Service Key**. Select **Fleet Intelligence** as the service and **Enroll Machines** as the scope. Ask your organization administrator for a key if you need one.
 
 For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
 
@@ -47,7 +47,7 @@ Store two entries:
 | What | KV mount | Entry | Field |
 | --- | --- | --- | --- |
 | The whole credentials file, as one string | `bmc` | `collector` | `credentials` |
-| The NGC service key | `credentials` | `backend` | `token` |
+| The service key | `credentials` | `backend` | `token` |
 
 With the provider CLI signed in and both mounts enabled, load them straight from files:
 
@@ -125,7 +125,7 @@ kubectl get secretstore --namespace "$NAMESPACE"
 
 Edit the sync manifests for your operator. Set the namespace, auth or store reference, source paths, Secret names, and refresh interval.
 
-| Operator | Credentials file | NGC service key | Resource type |
+| Operator | Credentials file | Service key | Resource type |
 | --- | --- | --- | --- |
 | VSO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/token-secrets.yaml) | `VaultStaticSecret` |
 | ESO | [bmc-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/bmc-secrets.yaml) | [token-secrets.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/token-secrets.yaml) | `ExternalSecret` (`external-secrets.io/v1`) |
@@ -203,14 +203,14 @@ Install with these values and your targets, following [Installation](installatio
 
 ## Rotation and ownership
 
-To rotate a BMC password or the service key, update it at the BMC or in NGC, then update the credentials used by your deployment. On Linux hosts, update the protected files described in [host configuration](host-configuration.md#configuration-files-and-permissions) and retain their ownership and permissions. In Kubernetes, update the secrets manager or Secret; an operator syncs the new value on its next refresh (`refreshAfter` for VSO, `refreshInterval` for ESO).
+To rotate a BMC password or service key, replace it where it was issued, then update the credentials used by your deployment. On Linux hosts, update the protected files described in [host configuration](host-configuration.md#configuration-files-and-permissions) and retain their ownership and permissions. In Kubernetes, update the secrets manager or Secret; an operator syncs the new value on its next refresh (`refreshAfter` for VSO, `refreshInterval` for ESO).
 
 What happens next depends on what changed:
 
 | Change | What you need to do |
 | --- | --- |
 | BMC passwords in the credentials file | Nothing. On Kubernetes, an updated Secret usually reaches the pods within a minute or two. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
-| NGC service key | Restart the collector and gateway, because they read the service key at startup. On Kubernetes, the VSO service key example does this for you. With ESO, a manually managed Secret, or a Linux service key file, restart them yourself (below). |
+| Service key | Restart the collector and gateway, because they read the service key at startup. On Kubernetes, the VSO service key example does this for you. With ESO, a manually managed Secret, or a Linux service key file, restart them yourself (below). |
 | Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 | Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |
 
