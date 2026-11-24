@@ -190,7 +190,7 @@ backend:
 
 `backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
 
-`backend.serviceKey` points to the Secret that holds the service key. The collector and the bundled gateway both use it.
+The collector and bundled gateway use the same service key Secret. An explicit `backend.serviceKey` takes precedence over `backend.agentToken`, which is supported for existing deployments. If you set neither reference, the chart uses `fleet-intelligence-oob-collector-agent-token` with the data key `agent-token`.
 
 ## Components and telemetry
 

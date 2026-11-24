@@ -90,8 +90,7 @@ spec:
             - name: FLEETINT_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "backend.serviceKey.existingSecret is required" .Values.backend.serviceKey.existingSecret | quote }}
-                  key: {{ .Values.backend.serviceKey.secretKey | quote }}
+                  {{- include "fleet-intelligence-oob-collector.serviceKeySecretRef" . | nindent 18 }}
             {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.bmcCollector.resources | nindent 12 }}

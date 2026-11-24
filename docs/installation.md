@@ -104,11 +104,15 @@ inventory:
       address: 192.0.2.10         # Required. BMC IP address, without a scheme or port.
       mac: "00:11:22:33:44:55"    # Required. BMC MAC address, in quotes; unique per target.
       credentialsProfile: compute # Profile name in credentials.json.
+backend:
+  serviceKey:
+    existingSecret: fleet-intelligence-service-key
+    secretKey: service-key
 ```
 
 Replace every `your-...` value and the example address and MAC. Delete an optional line to leave it unset.
 
-The chart's defaults already point to the two Secrets you created and to the production Fleet Intelligence endpoint. Add `port` to a target only if its Redfish port isn't `443`. [Configuration](configuration.md#targets) lists every field, including per-target placement and labels.
+The `backend.serviceKey` reference points to the service key Secret created in this guide. The chart uses the default BMC credentials Secret and production Fleet Intelligence endpoint. Add `port` to a target only if its Redfish port isn't `443`. [Configuration](configuration.md#targets) lists every field, including per-target placement and labels.
 
 ## Install
 
@@ -172,7 +176,7 @@ Find the pod's status in the output of the watch command:
 | --- | --- |
 | `Pending` | The pod's events, for insufficient resources or scheduling settings that match no node. See [workload settings](configuration.md#workload-settings). |
 | `ErrImagePull` or `ImagePullBackOff` | That the nodes can reach `nvcr.io` or your registry mirror, and that `imagePullSecrets` is set for a mirror. |
-| `CreateContainerConfigError`, or a `FailedMount` event | That the Secrets referenced by the chart exist in `$NAMESPACE` and contain the configured keys. The defaults are `credentials.json` and `service-key`. |
+| `CreateContainerConfigError`, or a `FailedMount` event | That the Secrets referenced by the chart exist in `$NAMESPACE` and contain the configured keys. See [Fleet Intelligence connection](configuration.md#fleet-intelligence-connection) for the service key reference. |
 | `Init:Error` or `Init:CrashLoopBackOff` on `nico-hardware-health` | The logs of its `generate-nico-config` init container. |
 | `CrashLoopBackOff` | The logs of the previous, crashed container (`--previous`). |
 | `Running` but not ready | The container's logs. |
@@ -232,12 +236,14 @@ kubectl -n "$NAMESPACE" create secret generic fleet-intelligence-bmc-credentials
     --field-manager=fleetint-oob-install -f -
 ```
 
-To replace the service key:
+To replace the service key, use the Secret name and data key your release already uses. The example below matches the values file in this guide. See [Fleet Intelligence connection](configuration.md#fleet-intelligence-connection) for the chart defaults.
 
 ```bash
+SECRET='fleet-intelligence-service-key'
+SECRET_KEY='service-key'
 printf 'Service key: '; read -rs SERVICE_KEY; echo
 printf '%s' "$SERVICE_KEY" | kubectl -n "$NAMESPACE" create secret generic \
-  fleet-intelligence-service-key --from-file=service-key=/dev/stdin \
+  "$SECRET" --from-file="$SECRET_KEY=/dev/stdin" \
   --dry-run=client -o yaml |
   kubectl -n "$NAMESPACE" apply --server-side --force-conflicts \
     --field-manager=fleetint-oob-install -f -

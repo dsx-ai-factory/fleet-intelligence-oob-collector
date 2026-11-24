@@ -73,8 +73,7 @@ spec:
             - name: FLEETINT_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.backend.serviceKey.existingSecret | quote }}
-                  key: {{ .Values.backend.serviceKey.secretKey | quote }}
+                  {{- include "fleet-intelligence-oob-collector.serviceKeySecretRef" . | nindent 18 }}
             {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           ports:
             - name: otlp-grpc

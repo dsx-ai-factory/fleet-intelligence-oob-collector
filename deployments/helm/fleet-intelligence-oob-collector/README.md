@@ -27,6 +27,8 @@ Each target needs a unique BMC MAC and an IP address in `address`. Set `port` se
 
 The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the service key for Fleet Intelligence with the **Enroll Machines** scope. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
 
+See [Fleet Intelligence connection](../../../docs/configuration.md#fleet-intelligence-connection) for how the chart selects the service key Secret, including compatibility with existing deployments.
+
 ## Choosing components
 
 | To run | Set |

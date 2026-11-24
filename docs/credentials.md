@@ -5,7 +5,7 @@ The Helm chart doesn't hold any secrets itself. It reads two Kubernetes Secrets 
 | Secret contents | Key | Used by |
 | --- | --- | --- |
 | BMC credentials file (JSON) | `credentials.json` | The collector and NICo, mounted at `/run/secrets/bmc/credentials.json` |
-| Service key for Fleet Intelligence | `service-key` | The collector and bundled gateway (`FLEETINT_SERVICE_KEY`) |
+| Service key for Fleet Intelligence | `service-key` in these examples | The collector and bundled gateway (`FLEETINT_SERVICE_KEY`) |
 
 You can create these Secrets by hand, as shown in [Installation](installation.md#create-the-secrets). This page covers the alternative: keeping the values in Vault or OpenBao and letting a secrets operator copy them into Kubernetes. [Rotation and ownership](#rotation-and-ownership) applies either way.
 
@@ -189,7 +189,7 @@ You should see `credentials.json` in `fleet-intelligence-bmc-credentials` and `s
 
 ## 6. Install the collector
 
-Follow [Save your values file](installation.md#save-your-values-file) to create `values.yaml` with your BMC targets. The chart defaults below match the synced Secrets in these examples. If you changed the Secret names or keys, set the corresponding fields in `values.yaml`. The [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [service-key-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/service-key-values.yaml) examples work with either operator.
+Follow [Save your values file](installation.md#save-your-values-file) to create `values.yaml` with your BMC targets and a `backend.serviceKey` reference. Use the names and keys from your synced Secrets. The values below match the [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [service-key-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/service-key-values.yaml) examples and work with either operator.
 
 ```yaml
 credentials:

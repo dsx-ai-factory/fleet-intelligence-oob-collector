@@ -386,20 +386,26 @@ printf 'service_key=%s\\n' "${FLEETINT_SERVICE_KEY-}"
         })
 
     def test_service_key_secret_is_shared_by_both_workloads(self):
-        for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
-            with self.subTest(default_secret=template):
-                rendered = self.helm(template=template)
-                self.assertRegex(rendered, r'- name: FLEETINT_SERVICE_KEY\s+valueFrom:\s+secretKeyRef:\s+'
-                                 r'name: "fleet-intelligence-service-key"\s+'
-                                 r'key: "service-key"')
-        settings = {"backend.serviceKey.existingSecret": "custom-service-key",
-                    "backend.serviceKey.secretKey": "credential"}
-        for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
-            with self.subTest(template=template):
-                rendered = self.helm(settings, template)
-                self.assertRegex(rendered, r'- name: FLEETINT_SERVICE_KEY\s+valueFrom:\s+'
-                                 r'secretKeyRef:\s+name: "custom-service-key"\s+key: "credential"')
-        config = self.helm(settings, "otel-gateway-configmap.yaml")
+        legacy = {"backend.agentToken.existingSecret": "custom-agent-token",
+                  "backend.agentToken.secretKey": "legacy-key"}
+        service_key = {"backend.serviceKey.existingSecret": "custom-service-key",
+                       "backend.serviceKey.secretKey": "credential"}
+        cases = (
+            ("1.0.0 defaults", {}, "fleet-intelligence-oob-collector-agent-token", "agent-token"),
+            ("1.0.0 partial override", {"backend.agentToken.existingSecret": "custom-agent-token"},
+             "custom-agent-token", "agent-token"),
+            ("1.0.0 explicit reference", legacy, "custom-agent-token", "legacy-key"),
+            ("service key reference", service_key, "custom-service-key", "credential"),
+            ("service key takes precedence", legacy | service_key, "custom-service-key", "credential"),
+        )
+        for case, settings, secret, key in cases:
+            for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
+                with self.subTest(case=case, template=template):
+                    rendered = self.helm(settings, template)
+                    self.assertRegex(rendered,
+                                     r'- name: FLEETINT_SERVICE_KEY\s+valueFrom:\s+secretKeyRef:\s+'
+                                     rf'name: "{re.escape(secret)}"\s+key: "{re.escape(key)}"')
+        config = self.helm(service_key, "otel-gateway-configmap.yaml")
         self.assertIn("sak_token: ${env:FLEETINT_SERVICE_KEY}", config)
 
     def test_empty_collector_settings_use_defaults(self):

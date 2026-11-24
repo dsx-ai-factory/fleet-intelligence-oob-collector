@@ -94,10 +94,11 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "serviceKey"],
+      "required": ["url"],
       "properties": {
         "url": {"$ref": "#/definitions/httpUrl"},
-        "serviceKey": {"$ref": "#/definitions/secretRef"}
+        "serviceKey": {"$ref": "#/definitions/secretRef"},
+        "agentToken": {"$ref": "#/definitions/secretRef"}
       }
     },
     "telemetry": {
