@@ -260,12 +260,9 @@ Check the installed version:
 helm list -n "$NAMESPACE" --filter '^fleet-intelligence-oob-collector$'
 ```
 
-Read the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new chart version. Before upgrading to a chart that uses `backend.enrollmentToken`, check the service key reference in `values.yaml`:
+Read the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new chart version and confirm that the chart points to the Secret containing your service key. See [Fleet Intelligence connection](configuration.md#fleet-intelligence-connection) for the default Secret name and key.
 
-- If your values file has `backend.agentToken`, replace that field with `backend.enrollmentToken`. Set its `existingSecret` and `secretKey` to the Secret and key that hold your service key. You can keep your existing Secret name and key. The new chart rejects the old values field. See [Fleet Intelligence connection](configuration.md#fleet-intelligence-connection) for the values format.
-- If you omit the Secret reference, the chart expects `fleet-intelligence-enrollment-token` with key `enrollment-token`. [Create it](#create-the-secrets) before upgrading if you plan to use those defaults.
-
-Set `OOB_CHART_VERSION` to the new chart version and run the [install command](#install) again. Then [verify the rollout](#verify-an-update). If the referenced Secret or key is missing, the pods can report `CreateContainerConfigError`.
+Set `OOB_CHART_VERSION` to the new chart version and run the [install command](#install) again. Then [verify the rollout](#verify-an-update).
 
 ### Verify an update
 
