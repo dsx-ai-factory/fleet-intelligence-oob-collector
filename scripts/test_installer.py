@@ -406,10 +406,12 @@ elif 'logs' in args:
         self.assertEqual(code, 0, output)
         for text in ("Basic (recommended)", "Does NICo already monitor these BMCs?", "BMC IP address",
                      "BMC MAC address", "Chart version: 1.4.2", "Review the installation settings",
+                     "3 / 4  Service key", "The collector and gateway use this key to enroll.",
+                     "Service key Secret:", "Service key input:",
                      "first inventory upload accepted in this cycle"):
             self.assertIn(text, output)
         for text in ("List contexts with kubectl config get-contexts", "Kubernetes namespace", "Choose a chart version",
-                     "Choose the hardware type", "Use 443 unless", "Target label key", "Add another BMC?"):
+                     "Choose the hardware type", "Use 443 unless", "Target label key", "Add another BMC?", "Enrollment token"):
             self.assertNotIn(text, output)
         self.assertIn(CURRENT_CONTEXT, calls)
         self.assertIn(CHART_LOOKUP, calls)
@@ -432,7 +434,7 @@ elif 'logs' in args:
             "BMC_KIND": "compute", "BMC_IP": "192.0.2.1", "BMC_MAC": "02:00:00:00:00:01",
             "BMC_PORT": "8443", "BMC_CREDENTIALS_PROFILE": "custom-profile",
             "BMC_CREDENTIALS_FILE": private_file, "ENROLLMENT_TOKEN_SECRET_NAME": "env-enrollment",
-            "ENROLLMENT_TOKEN_SECRET_KEY": "token",
+            "ENROLLMENT_TOKEN_SECRET_KEY": "token", "SERVICE_KEY_SECRET_NAME": "",
         }
         exported = {f"FLEETINT_INSTALL_{key}": value for key, value in defaults.items()}
         code, output, calls, saved = self.run_script(workflow="basic", install_env=exported,
@@ -501,8 +503,8 @@ elif 'logs' in args:
             with self.subTest(ui=ui), tempfile.TemporaryDirectory() as directory:
                 self.directory = Path(directory)
                 credentials = self.directory / "BMC credentials.json"
-                enrollment = self.directory / "enrollment-token"
-                for path in (credentials, enrollment):
+                service_key = self.directory / "service-key"
+                for path in (credentials, service_key):
                     path.write_text("fixture-secret-never-print")
                 defaults = {
                     "KUBE_CONTEXT": "env-context", "NAMESPACE": "env-ns", "RELEASE": "env-release",
@@ -512,19 +514,24 @@ elif 'logs' in args:
                     "BMC_PORT": "08443", "BMC_NAME": "env-device", "BMC_CREDENTIALS_PROFILE": "switch",
                     "BMC_COMPUTE_ZONE": "target-zone", "BMC_NODE_GROUP": "target-group",
                     "BMC_CREDENTIALS_FILE": str(credentials), "BMC_CREDENTIALS_SECRET_NAME": "env-bmc",
-                    "BMC_CREDENTIALS_SECRET_KEY": "bmc.json", "ENROLLMENT_TOKEN_FILE": str(enrollment),
-                    "ENROLLMENT_TOKEN_SECRET_NAME": "env-enrollment", "ENROLLMENT_TOKEN_SECRET_KEY": "token",
+                    "BMC_CREDENTIALS_SECRET_KEY": "bmc.json", "SERVICE_KEY_FILE": str(service_key),
+                    "SERVICE_KEY_SECRET_NAME": "env-service-key", "SERVICE_KEY_SECRET_KEY": "key",
                     "IMAGE_PULL_SECRET": "env-registry",
                 }
                 exported = {f"FLEETINT_INSTALL_{key}": value for key, value in defaults.items()}
+                legacy = {"FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE": "/unused/legacy-key",
+                          "FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_NAME": "legacy-secret",
+                          "FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_KEY": "legacy-key"}
                 # Accept the environment defaults but still answer the final confirmation.
                 answers = [""] * 7 + ["no"] + [""] * 9 + ["no"] + [""] * 9 + ["yes"]
                 code, output, calls, saved = self.run_script(
-                    ui=ui, mode="file", answers=answers, install_env=exported,
+                    ui=ui, mode="file", answers=answers, install_env={**legacy, **exported},
                 )
                 self.assertEqual(code, 0, output)
                 for key in exported:
                     self.assertIn(f"From environment: {key}", output)
+                for key in legacy:
+                    self.assertNotIn(f"From environment: {key}", output)
                 self.assertNotIn(CHART_LOOKUP, calls)
                 upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
                 self.assertEqual(upgrade[3], "env-release")
@@ -540,13 +547,29 @@ elif 'logs' in args:
                 })
                 self.assertEqual(values["credentials"], {"existingSecret": "env-bmc", "secretKey": "bmc.json"})
                 self.assertEqual(values["backend"], {"url": "https://backend.example", "enrollmentToken": {
-                    "existingSecret": "env-enrollment", "secretKey": "token",
+                    "existingSecret": "env-service-key", "secretKey": "key",
                 }})
                 self.assertEqual(values["imagePullSecrets"], [{"name": "env-registry"}])
                 secret_creates = [c for c in calls if c[0] == "kubectl" and "create" in c and "secret" in c]
                 self.assertEqual(len(secret_creates), 2)
                 self.assertIn(f"--from-file=bmc.json={credentials}", secret_creates[0])
-                self.assertIn(f"--from-file=token={enrollment}", secret_creates[1])
+                self.assertIn(f"--from-file=key={service_key}", secret_creates[1])
+
+    def test_legacy_service_key_file_variable_still_creates_a_secret(self):
+        service_key = self.directory / "private input $(touch SENTINEL)"
+        defaults = {"FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE": str(service_key),
+                    "FLEETINT_INSTALL_SERVICE_KEY_SECRET_NAME": "custom-service-key"}
+        answers = ["", "192.0.2.10", "001122334455", "", str(service_key), "", "yes"]
+        code, output, calls, saved = self.run_script(workflow="basic", mode="file", answers=answers,
+                                                      install_env=defaults)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Fleet Intelligence service key", output)
+        self.assertEqual(json.loads(saved.read_text())["backend"]["enrollmentToken"], {
+            "existingSecret": "custom-service-key", "secretKey": "agent-token",
+        })
+        secret_creates = [c for c in calls if c[0] == "kubectl" and "create" in c and "secret" in c]
+        self.assertEqual(len(secret_creates), 2)
+        self.assertIn(f"--from-file=agent-token={service_key}", secret_creates[1])
 
     def test_answers_override_defaults_and_bmc_environment_only_applies_to_first_target(self):
         exported = {

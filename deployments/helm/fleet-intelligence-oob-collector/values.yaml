@@ -19,7 +19,7 @@ credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 
-# Fleet Intelligence destination and shared enrollment token.
+# Fleet Intelligence destination and shared service key.
 backend:
   url: https://data.fleet-intelligence.nvidia.com
   enrollmentToken:

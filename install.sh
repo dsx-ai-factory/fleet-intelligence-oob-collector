@@ -443,7 +443,10 @@ fleetint_install() {
       'Label value for '*) hint='Enter the value of this target label.' ;;
       'Does NICo already monitor'*) title='Does NICo already monitor these BMCs?'; hint='The bundled NICo collects health metrics and events for your BMCs.' ;;
       'Add another BMC?'*) title='Add another BMC?'; hint='For a first install, verify one BMC before adding more.' ;;
-      'Secret source'*) title='Choose a Secret source'; hint='Use a private file or an existing Kubernetes Secret.' ;;
+      'Secret source'*)
+        title='Choose a Secret source'; hint='Use a private file or an existing Kubernetes Secret.'
+        if [[ $ui_section == *'Service key' ]]; then hint='The collector and gateway use this key to enroll.'; fi
+        ;;
       'Install with these settings?'*) title='Ready to install?'; hint='Install the collector, NICo hardware health, and telemetry gateway.' ;;
       'Review the installation settings') hint='Check the cluster, hardware, and Secret references before installing.' ;;
     esac
@@ -895,8 +898,13 @@ fleetint_install() {
     printf -v REPLY '"%s"' "$escaped"
   }
   secret_questions() {
-    local prefix=$4 default_source=existing
+    local prefix=$4 legacy_prefix=${5-} default_source=existing
     local file_env="${prefix}_FILE" name_env="${prefix}_SECRET_NAME" key_env="${prefix}_SECRET_KEY"
+    if [[ -n $legacy_prefix ]]; then
+      if [[ -z ${!file_env-} ]]; then file_env="${legacy_prefix}_FILE"; fi
+      if [[ -z ${!name_env-} ]]; then name_env="${legacy_prefix}_SECRET_NAME"; fi
+      if [[ -z ${!key_env-} ]]; then key_env="${legacy_prefix}_SECRET_KEY"; fi
+    fi
     if [[ -n ${!file_env-} || ( $workflow == basic && -z ${!name_env-} && -z ${!key_env-} ) ]]; then
       default_source=file
     fi
@@ -1045,7 +1053,7 @@ fleetint_install() {
   repo=https://helm.ngc.nvidia.com/nvidia/fleet-intelligence
   guide=https://docs.nvidia.com/fleet-intel/oob-collector/installation
   printf '%s\n' 'Install the Fleet Intelligence OOB collector on Kubernetes.'
-  printf '%s\n' 'Have Helm 3 or 4, kubectl, BMC IPs/MACs, credential profiles, and an enrollment token ready.'
+  printf '%s\n' 'Have Helm 3 or 4, kubectl, BMC IPs/MACs, credential profiles, and a Fleet Intelligence service key ready.'
   if [[ -z $workflow ]]; then
     if [[ $ui_active == no ]]; then
       printf '%s\n' 'Basic starts with one BMC and recommended settings. Advanced shows all options.'
@@ -1184,12 +1192,13 @@ fleetint_install() {
   else ui_section='4 / 6  BMC credentials'; fi
   secret_questions 'BMC credentials JSON' fleet-intelligence-bmc-credentials credentials.json FLEETINT_INSTALL_BMC_CREDENTIALS
   credentials_secret=$secret_name credentials_key=$secret_key credentials_file=$secret_file
-  if [[ $workflow == basic ]]; then ui_section='3 / 4  Enrollment token'
-  else ui_section='5 / 6  Enrollment token'; fi
-  secret_questions 'Fleet Intelligence enrollment token' "$chart-agent-token" agent-token FLEETINT_INSTALL_ENROLLMENT_TOKEN
+  if [[ $workflow == basic ]]; then ui_section='3 / 4  Service key'
+  else ui_section='5 / 6  Service key'; fi
+  secret_questions 'Fleet Intelligence service key' "$chart-agent-token" agent-token \
+    FLEETINT_INSTALL_SERVICE_KEY FLEETINT_INSTALL_ENROLLMENT_TOKEN
   token_secret=$secret_name token_key=$secret_key token_file=$secret_file
   if [[ $credentials_secret == "$token_secret" && ( -n "$credentials_file" || -n "$token_file" ) ]]; then
-    fail 'File-backed credentials and token must use different Secret names.'
+    fail 'File-backed BMC credentials and service key must use different Secret names.'
   fi
   ask pull_secret 'Existing image pull Secret (optional)' '' yes valid_secret FLEETINT_INSTALL_IMAGE_PULL_SECRET default
   for file in "$credentials_file" "$token_file"; do
@@ -1211,8 +1220,8 @@ fleetint_install() {
     for line in "${target_review[@]}"; do review_add "$line"; done
     review_add "BMC Secret: $credentials_secret / $credentials_key"
     review_add "BMC input: ${credentials_file:-(existing Secret)}"
-    review_add "Token Secret: $token_secret / $token_key"
-    review_add "Token input: ${token_file:-(existing Secret)}"
+    review_add "Service key Secret: $token_secret / $token_key"
+    review_add "Service key input: ${token_file:-(existing Secret)}"
     review_add "Image pull Secret: ${pull_secret:-(chart default)}"
     review_add 'Deploy the collector, NICo health, and gateway with chart defaults.'
     review_add 'Existing Secrets are preserved. New Secrets use your selected files.'
@@ -1250,7 +1259,7 @@ fleetint_install() {
       '  agentToken:'*) token_field=agentToken ;;
     esac
   done < "$work_dir/chart-values.yaml"
-  [[ -n "$token_field" ]] || fail 'The selected chart has no supported enrollment token configuration.'
+  [[ -n "$token_field" ]] || fail 'The selected chart has no supported service key configuration.'
   build_values
   # The private directory prevents path replacement; set permissions through the open handle.
   (set -C; exec 4> "$work_dir/values.json"; chmod 600 /dev/fd/4; printf '%s\n' "$values" >&4)

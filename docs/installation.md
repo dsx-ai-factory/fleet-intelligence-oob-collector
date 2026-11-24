@@ -10,7 +10,7 @@ For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 - Helm 3 or 4 and `kubectl`. The interactive installer also needs Bash 3.2 or later, `curl`, and an interactive terminal.
 - Network access from the pods to each BMC's Redfish HTTPS port and to Fleet Intelligence over HTTPS. Your install machine needs access to the NGC chart repository, and the cluster needs access to the workload image registry.
 - One BMC to verify first. Have its hardware type, IP address, physical BMC MAC address, Redfish port, and login ready. Add the rest once inventory and health telemetry are visible.
-- A private BMC credentials JSON file and a Fleet Intelligence enrollment token from your administrator, or provisioned Kubernetes Secrets containing those values. See [Prepare credentials and Secrets](#create-the-secrets).
+- A private BMC credentials JSON file and a Fleet Intelligence service key from your administrator, or provisioned Kubernetes Secrets containing those values. See [Prepare credentials and Secrets](#create-the-secrets).
 
 ## Plan your installation
 
@@ -20,7 +20,7 @@ Use the [interactive installer](#interactive-installation) to set up inventory a
 
 ## Configure NICo hardware health
 
-For your first installation, use the bundled NICo and telemetry gateway with the chart defaults. The OOB collector uploads inventory and attestation. NICo uses the same BMC targets and credentials to collect sensor readings and BMC events. The gateway forwards health metrics and logs to Fleet Intelligence. You supply one target list, credentials file, and enrollment token for the deployment.
+For your first installation, use the bundled NICo and telemetry gateway with the chart defaults. The OOB collector uploads inventory and attestation. NICo uses the same BMC targets and credentials to collect sensor readings and BMC events. The gateway forwards health metrics and logs to Fleet Intelligence. You supply one target list, credentials file, and service key for the deployment.
 
 The defaults give you sensor readings, leak detection where supported, automatic BMC event streaming with polling fallback, and reachability and resource status. NICo and the OOB collector each make their own BMC requests. After verifying the first BMC, tune collection if your hardware or operational requirements call for it. Set overrides under `nicoHardwareHealth.config` in your Helm values. NICo generates its configuration when its pod starts. See [NICo collection controls](configuration.md#nico-collection-controls).
 
@@ -60,7 +60,7 @@ Choose **Basic (recommended)** for a first install with one BMC. Basic uses your
 
 1. **Setup.** Press Enter to use the bundled NICo and telemetry gateway for a BMC without NICo coverage. If NICo already monitors the BMC, choose Yes for the manual Helm steps to keep your existing deployment.
 2. **Target.** Enter the BMC IP address and its physical MAC address. Basic uses Redfish port `443`, leaves the hardware type unspecified, and uses the `bmc` profile from the example credentials JSON.
-3. **Access.** Choose a source for the BMC credentials and for the enrollment token. For new Secrets, choose `file` and enter the absolute paths to your private files. For provisioned Secrets, choose `existing`. Basic uses `fleet-intelligence-bmc-credentials` with key `credentials.json` and `fleet-intelligence-oob-collector-agent-token` with key `agent-token`, unless you [export different names or keys](#set-installer-defaults-from-environment-variables).
+3. **Access.** Choose a source for the BMC credentials and the Fleet Intelligence service key. For new Secrets, choose `file` and enter the absolute paths to your private files. For provisioned Secrets, choose `existing`. Basic uses `fleet-intelligence-bmc-credentials` with key `credentials.json` and `fleet-intelligence-oob-collector-agent-token` with key `agent-token`, unless you [export different names or keys](#set-installer-defaults-from-environment-variables).
 4. **Review.** Check the cluster, chart version, target, and Secret sources before choosing Yes. Enter advances through review pages. The final confirmation defaults to No.
 
 Choose **Advanced** to set a hardware type, use a different credentials profile, configure compute zones or node groups, add labels or more BMCs, or customize the deployment and Secrets at the prompts. Match the profile name to your credentials JSON. Leave it blank only if a per-MAC override supplies both login fields. See [Target fields](configuration.md#targets) for the available settings.
@@ -87,7 +87,7 @@ export FLEETINT_INSTALL_BMC_IP=192.0.2.10
 export FLEETINT_INSTALL_BMC_MAC=02:00:00:00:00:01
 export FLEETINT_INSTALL_BMC_CREDENTIALS_PROFILE=bmc
 export FLEETINT_INSTALL_BMC_CREDENTIALS_FILE=/secure/path/to/credentials.json
-export FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE=/secure/path/to/enrollment-token
+export FLEETINT_INSTALL_SERVICE_KEY_FILE=/secure/path/to/service-key
 
 curl --fail --silent --show-error \
   https://raw.githubusercontent.com/dsx-ai-factory/fleet-intelligence-oob-collector/main/install.sh | bash
@@ -123,12 +123,14 @@ Use Advanced to enter target labels or add BMCs beyond the first one.
 | `FLEETINT_INSTALL_BMC_CREDENTIALS_FILE` | Absolute path to the private credentials JSON file. Selects the file source by default. |
 | `FLEETINT_INSTALL_BMC_CREDENTIALS_SECRET_NAME` | BMC credentials Secret name |
 | `FLEETINT_INSTALL_BMC_CREDENTIALS_SECRET_KEY` | Key in the BMC credentials Secret |
-| `FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE` | Absolute path to the private enrollment token file. Selects the file source by default. |
-| `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_NAME` | Enrollment token Secret name |
-| `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_KEY` | Key in the enrollment token Secret |
+| `FLEETINT_INSTALL_SERVICE_KEY_FILE` | Absolute path to the private service key file. Selects the file source by default. |
+| `FLEETINT_INSTALL_SERVICE_KEY_SECRET_NAME` | Name of the Kubernetes Secret that holds the service key |
+| `FLEETINT_INSTALL_SERVICE_KEY_SECRET_KEY` | Key within that Kubernetes Secret |
 | `FLEETINT_INSTALL_IMAGE_PULL_SECRET` | Name of an existing image-pull Secret in the chosen namespace |
 
-Keep passwords and enrollment tokens in private files or Kubernetes Secrets. To reuse an existing Secret, leave its file variable unset and set its name and key if they differ from the defaults. In Basic, setting a Secret name or key without a file makes `existing` the default for that Secret.
+Keep passwords and service keys in private files or Kubernetes Secrets. To reuse an existing Secret, leave its file variable unset and set its name and key if they differ from the defaults. In Basic, setting a Secret name or key without a file makes `existing` the default for that Secret.
+
+The installer also accepts `FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE`, `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_NAME`, and `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_KEY`. Each nonempty `FLEETINT_INSTALL_SERVICE_KEY_*` variable takes precedence over its corresponding alias.
 
 Unset or empty variables use the normal prompts and defaults. To omit a value supplied by the environment, unset its variable before running the installer. If an environment value fails prompt validation, the installer names the variable to correct or unset before retrying.
 
@@ -145,7 +147,7 @@ printf '%s\n' "$KUBE_CONTEXT"
 
 ## Configure targets and Secrets
 
-You give the chart two things: your target list, in a values file, and two Kubernetes Secrets holding the BMC credentials file and the enrollment token. The chart never stores passwords; it only references the Secrets.
+You give the chart your target list in a values file and references to two Kubernetes Secrets holding the BMC credentials and the Fleet Intelligence service key.
 
 For the interactive installer, prepare the private local files below and let the installer create the Secrets. For manual Helm installation, run the Kubernetes commands after preparing the files. If the Secrets already exist in the selected namespace, use their names and keys in your values. To provision them from Vault or OpenBao, follow [Credentials](credentials.md).
 
@@ -153,7 +155,7 @@ For the interactive installer, prepare the private local files below and let the
 
 Copy [credentials.example.json](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/credentials.example.json) to a private directory, for example `/secure/path/to/credentials.json`, set its mode to `0600`, and fill in your BMC usernames and passwords. [Configuration](configuration.md#bmc-credentials-file) explains the file format.
 
-Get the enrollment token from your Fleet Intelligence administrator. Save it to `/secure/path/to/enrollment-token` with nothing else in the file, not even a trailing newline, and set its mode to `0600`.
+Get the service key from your Fleet Intelligence administrator. Save only the key to `/secure/path/to/service-key` without a trailing newline and set the file mode to `0600`.
 
 For a manual install with local files, create the namespace if needed, then create the Secrets:
 
@@ -163,7 +165,7 @@ kubectl --context "$KUBE_CONTEXT" create namespace "$NAMESPACE" \
 
 kubectl --context "$KUBE_CONTEXT" create secret generic fleet-intelligence-enrollment-token \
   --namespace "$NAMESPACE" \
-  --from-file=enrollment-token=/secure/path/to/enrollment-token
+  --from-file=enrollment-token=/secure/path/to/service-key
 
 kubectl --context "$KUBE_CONTEXT" create secret generic fleet-intelligence-bmc-credentials \
   --namespace "$NAMESPACE" \
@@ -253,7 +255,7 @@ Collector and NICo image tags default to the chart version. See [workload settin
 | Pod fails to pull an image | Registry access, the image tag, and any required image-pull Secret |
 | NICo cannot start | Logs from `generate-nico-config`, the target fields, and the mounted credentials Secret |
 | A BMC rejects the login | Its credential profile, any per-MAC override, and the account on the BMC. Collector warnings include `bmc_mac` and `bmc_address`. |
-| The collector or gateway cannot enroll | Enrollment token Secret and key, backend URL, and network access |
+| The collector or gateway cannot enroll | Service key Secret and its data key, backend URL, and network access |
 | Inventory arrives but health readings are missing | NICo application logs, access to the BMC, and gateway export logs. For an existing NICo deployment, check its configured export destination. |
 
 ## Change settings after installation
@@ -268,7 +270,7 @@ helm get values "$RELEASE" \
 
 Edit that file and repeat the [Install](#install) command with the same release, namespace, chart version, and Kubernetes context. Before adjusting NICo settings, [save the working values for rollback](#roll-back-bundled-nico-health-settings).
 
-Changes to the shared targets or `nicoHardwareHealth.config` restart the collector and bundled NICo. Helm waits for the workloads to become ready, and NICo's init container generates its configuration before it starts. Repeat [verification](#verify) to confirm the updated configuration delivers fresh data. For credential and token changes, follow [Rotation and ownership](credentials.md#rotation-and-ownership).
+Changes to the shared targets or `nicoHardwareHealth.config` restart the collector and bundled NICo. Helm waits for the workloads to become ready, and NICo's init container generates its configuration before it starts. Repeat [verification](#verify) to confirm the updated configuration delivers fresh data. For BMC credentials or service key changes, follow [Rotation and ownership](credentials.md#rotation-and-ownership).
 
 ### Roll back bundled NICo health settings
 
@@ -286,7 +288,7 @@ Changes to the shared targets or `nicoHardwareHealth.config` restart the collect
 
 2. If the change causes problems, restore the previous `nicoHardwareHealth` settings in your deployment's values file. Remove any NICo keys you added that were absent in the backup. If you changed only NICo and made no other edits, you can use the backup as the entire `--values` file.
 3. Repeat the [Install](#install) command with the restored values and the same chart version, release, namespace, and context. NICo generates its runtime configuration when its pod starts. If you manage Helm values in source control, restore those settings there as well so a later deployment keeps the rollback.
-4. Follow [Verify](#verify) to check NICo startup and confirm that fresh health telemetry reaches Fleet Intelligence. Keep the existing BMC credentials and enrollment token Secrets in place.
+4. Follow [Verify](#verify) to check NICo startup and confirm that fresh health telemetry reaches Fleet Intelligence. Keep the existing BMC credentials and service key Secrets in place.
 
 ## Disconnect an individual machine
 

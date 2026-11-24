@@ -4,7 +4,7 @@ Install `fleetint-oob` to run the OOB collector, NICo hardware health, and the t
 
 ## Plan your installation
 
-Start with one BMC, using its real IP and MAC, its login, and Redfish port `443` unless your hardware uses a different port. Confirm that the Linux host can reach both the BMC and Fleet Intelligence. Have your enrollment token ready before starting the services.
+Start with one BMC, using its real IP and MAC, its login, and Redfish port `443` unless your hardware uses a different port. Confirm that the Linux host can reach both the BMC and Fleet Intelligence. Have your service key ready before starting the services.
 
 For a new setup, use the bundled NICo health service and gateway with their defaults. If NICo already monitors the same BMCs, keep its existing telemetry path and use the [collector-only startup steps](#keep-an-existing-nico-deployment). If you already installed this package, use [Apply changes](host-configuration.md#apply-changes) to update its configuration.
 
@@ -89,9 +89,11 @@ The package uses the shared targets and BMC credentials to configure NICo, which
 
 To change collection later, save the working file first, then add `[nico_health]` before the first `[[targets]]` in `/etc/fleetint-oob/config.toml` and restart NICo. The service generates a new configuration on startup. See [NICo health collection controls](host-configuration.md#nico-health-collection) and [backup and rollback](host-configuration.md#roll-back-nico-health-settings).
 
-### Set the enrollment token
+<a id="set-the-enrollment-token"></a>
 
-Create a protected file containing only your enrollment token:
+### Set the service key
+
+Create a protected file containing only your service key:
 
 ```bash
 sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/enrollment-token
@@ -105,7 +107,7 @@ Set this line in `service.conf`:
 FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/enrollment-token
 ```
 
-The collector and gateway use the same token. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).
+The collector and gateway use the same Fleet Intelligence service key. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).
 
 ## Start and verify collection
 
@@ -133,7 +135,7 @@ For troubleshooting and collection settings, use [Configure Linux packages](host
 
 ## Keep an existing NICo deployment
 
-Use this path for a new package installation when your existing NICo already monitors the same BMCs and sends health data to Fleet Intelligence. Install the package, configure targets and credentials, and set the enrollment token as above. In `/etc/fleetint-oob/service.conf`, set the following so the inventory report reflects the package services you are using:
+Use this path for a new package installation when your existing NICo already monitors the same BMCs and sends health data to Fleet Intelligence. Install the package, configure targets and credentials, and set the service key as above. In `/etc/fleetint-oob/service.conf`, set the following so the inventory report reflects the package services you are using:
 
 ```ini
 FLEETINT_NICO_ENABLED=false
@@ -193,4 +195,4 @@ For RPM systems:
 sudo dnf remove fleetint-oob
 ```
 
-Debian removal retains package configuration; `sudo apt purge fleetint-oob` removes package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created credential/token files and the service account remain. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
+Debian removal retains package configuration. Use `sudo apt purge fleetint-oob` to remove package-owned configuration. RPM removal saves modified package configuration as `.rpmsave` files. Operator-created BMC credentials and service key files remain, along with the service account. Retire credentials through their issuing systems, then delete unused local copies explicitly. Removing the package does not delete Fleet Intelligence data.
