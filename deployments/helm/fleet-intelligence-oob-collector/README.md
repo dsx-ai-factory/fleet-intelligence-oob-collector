@@ -18,9 +18,9 @@ credentials:
   secretKey: credentials.json
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  enrollmentToken:
-    existingSecret: fleet-intelligence-enrollment-token
-    secretKey: enrollment-token
+  serviceKey:
+    existingSecret: fleet-intelligence-service-key
+    secretKey: service-key
 ```
 
 Each target needs a unique BMC MAC and an IP address in `address`. Set `port` separately if the BMC doesn't use the HTTPS default. `kind` is `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default).

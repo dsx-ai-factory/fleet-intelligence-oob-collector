@@ -80,15 +80,15 @@ Add one `[[targets]]` entry per BMC. The collector and NICo use this shared targ
 Create a protected file containing only your service key:
 
 ```bash
-sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/enrollment-token
-sudoedit /etc/fleetint-oob/enrollment-token
+sudo install -m 0640 -o root -g fleetint-oob /dev/null /etc/fleetint-oob/service-key
+sudoedit /etc/fleetint-oob/service-key
 sudoedit /etc/fleetint-oob/service.conf
 ```
 
 Set this line in `service.conf`:
 
 ```ini
-FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/enrollment-token
+FLEETINT_SERVICE_KEY_FILE=/etc/fleetint-oob/service-key
 ```
 
 The collector and gateway use the same service key. The packaged backend addresses point to Fleet Intelligence. To use another endpoint or change collection settings, see [Configure Linux packages](host-configuration.md).

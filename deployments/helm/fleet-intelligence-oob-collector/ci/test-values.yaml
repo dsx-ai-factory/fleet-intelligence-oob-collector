@@ -26,9 +26,9 @@ credentials:
   secretKey: shared.json
 backend:
   url: https://fleet.test.example
-  enrollmentToken:
-    existingSecret: fleet-intelligence-enrollment-token-test
-    secretKey: enrollment-token
+  serviceKey:
+    existingSecret: fleet-intelligence-service-key-test
+    secretKey: service-key
 imagePullSecrets:
 - name: ghcr-pull-secret-test
 proxy:

@@ -65,7 +65,7 @@ chmod 750 "$conf"
 chmod 640 "$conf/config.toml" "$conf/credentials/credentials.json"
 install -d -m700 -o fleetint-oob -g fleetint-oob /run/fleetint-nico-health
 # The runtime fixture starts all three actual installed daemons and verifies
-# token precedence, authenticated gateway export and inventory flush on exit.
+# service key file precedence, authenticated gateway export and inventory flush on exit.
 bash /runtime.sh
 printf '\n# local operator setting\n' >> "$conf/service.conf"
 sha256sum "$conf/service.conf" "$conf/config.toml" > "$work/config.sha256"

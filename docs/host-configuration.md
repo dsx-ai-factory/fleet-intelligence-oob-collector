@@ -9,7 +9,7 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 | `/etc/fleetint-oob/config.toml` | Shared targets, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/service.conf` | Backend and service key settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
 | `/etc/fleetint-oob/credentials/credentials.json` | Operator-created BMC credentials | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/enrollment-token` | Optional operator-created service key file | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/service-key` | Optional operator-created service key file | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/gateway.yaml` | OTLP receivers, backend export, and gateway processing | Installed root-owned, `0644` |
 
 Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Installation grants service access to standard configuration and credential paths. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
@@ -81,12 +81,12 @@ Set these variables in `service.conf`:
 | `FLEETINT_BACKEND_URL` | `https://data.fleet-intelligence.nvidia.com` | Collector API origin, without an API path. |
 | `BACKEND_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health` | Gateway telemetry base; exports use `/metrics` and `/logs` beneath it. |
 | `ENROLL_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health/enroll` | Gateway enrollment URL. |
-| `FLEETINT_ENROLLMENT_TOKEN_FILE` | Empty | Protected service key file used by the collector and gateway. |
-| `FLEETINT_ENROLLMENT_TOKEN` | Empty | Alternative setting for the service key in the environment file. Prefer the dedicated key file. |
+| `FLEETINT_SERVICE_KEY_FILE` | Empty | Protected service key file used by the collector and gateway. |
+| `FLEETINT_SERVICE_KEY` | Empty | Alternative setting for the service key in the environment file. Prefer the dedicated key file. |
 
 When using another backend, set all three URL variables explicitly. Systemd environment files do not expand variable references, so `BACKEND_ENDPOINT=${FLEETINT_BACKEND_URL}/api/v1/health` does not construct a URL.
 
-The service key file takes precedence over `FLEETINT_ENROLLMENT_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline service key. The launchers load the service key into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
+The service key file takes precedence over `FLEETINT_SERVICE_KEY`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline service key. The launchers load the service key into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
 
 ## Collection settings
 
@@ -159,7 +159,7 @@ Keep the gateway's `sak_token` binding when editing its configuration so it read
 ```yaml
 extensions:
   sakauth:
-    sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}
+    sak_token: ${env:FLEETINT_SERVICE_KEY}
 ```
 
 ### Component reporting

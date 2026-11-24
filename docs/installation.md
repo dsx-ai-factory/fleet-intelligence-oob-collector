@@ -77,10 +77,10 @@ Create the credentials Secret, then paste the service key when prompted. The key
 kubectl -n "$NAMESPACE" create secret generic fleet-intelligence-bmc-credentials \
   --from-file=credentials.json
 
-printf 'Service key: '; read -rs TOKEN; echo
-printf '%s' "$TOKEN" | kubectl -n "$NAMESPACE" create secret generic \
-  fleet-intelligence-enrollment-token --from-file=enrollment-token=/dev/stdin
-unset TOKEN
+printf 'Service key: '; read -rs SERVICE_KEY; echo
+printf '%s' "$SERVICE_KEY" | kubectl -n "$NAMESPACE" create secret generic \
+  fleet-intelligence-service-key --from-file=service-key=/dev/stdin
+unset SERVICE_KEY
 ```
 
 If a Secret already exists, `kubectl` reports `AlreadyExists`. To replace its contents, follow [Update credentials](#update-credentials).
@@ -167,7 +167,7 @@ Find the pod's status in the output of the watch command:
 | --- | --- |
 | `Pending` | The pod's events, for insufficient resources or scheduling settings that match no node. See [workload settings](configuration.md#workload-settings). |
 | `ErrImagePull` or `ImagePullBackOff` | That the nodes can reach `nvcr.io` or your registry mirror, and that `imagePullSecrets` is set for a mirror. |
-| `CreateContainerConfigError`, or a `FailedMount` event | That the Secrets referenced by the chart exist in `$NAMESPACE` and contain the configured keys. The defaults are `credentials.json` and `enrollment-token`. |
+| `CreateContainerConfigError`, or a `FailedMount` event | That the Secrets referenced by the chart exist in `$NAMESPACE` and contain the configured keys. The defaults are `credentials.json` and `service-key`. |
 | `Init:Error` or `Init:CrashLoopBackOff` on `nico-hardware-health` | The logs of its `generate-nico-config` init container. |
 | `CrashLoopBackOff` | The logs of the previous, crashed container (`--previous`). |
 | `Running` but not ready | The container's logs. |
@@ -230,19 +230,19 @@ kubectl -n "$NAMESPACE" create secret generic fleet-intelligence-bmc-credentials
 To replace the service key:
 
 ```bash
-printf 'Service key: '; read -rs TOKEN; echo
-printf '%s' "$TOKEN" | kubectl -n "$NAMESPACE" create secret generic \
-  fleet-intelligence-enrollment-token --from-file=enrollment-token=/dev/stdin \
+printf 'Service key: '; read -rs SERVICE_KEY; echo
+printf '%s' "$SERVICE_KEY" | kubectl -n "$NAMESPACE" create secret generic \
+  fleet-intelligence-service-key --from-file=service-key=/dev/stdin \
   --dry-run=client -o yaml |
   kubectl -n "$NAMESPACE" apply --server-side --force-conflicts \
     --field-manager=fleetint-oob-install -f -
-unset TOKEN
+unset SERVICE_KEY
 ```
 
 If you previously managed either Secret using client-side `kubectl apply`, its `last-applied-configuration` annotation can still contain credential data. After a successful update, remove that annotation from each affected manually managed Secret. Set `SECRET` to its name. This command reports the Secret name without displaying the annotation.
 
 ```bash
-SECRET='fleet-intelligence-enrollment-token'
+SECRET='fleet-intelligence-service-key'
 kubectl -n "$NAMESPACE" annotate secret "$SECRET" kubectl.kubernetes.io/last-applied-configuration-
 ```
 
@@ -316,7 +316,7 @@ Uninstalling stops collection for every target in the release. Data that was alr
    - **Manually managed Secrets.** Delete each unused Secret directly. Replace the example name with the name of the Secret you want to remove.
 
    ```bash
-   SECRET='fleet-intelligence-enrollment-token'
+   SECRET='fleet-intelligence-service-key'
    kubectl -n "$NAMESPACE" delete secret "$SECRET"
    ```
 

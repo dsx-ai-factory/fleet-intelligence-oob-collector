@@ -94,10 +94,10 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "enrollmentToken"],
+      "required": ["url", "serviceKey"],
       "properties": {
         "url": {"$ref": "#/definitions/httpUrl"},
-        "enrollmentToken": {"$ref": "#/definitions/secretRef"}
+        "serviceKey": {"$ref": "#/definitions/secretRef"}
       }
     },
     "telemetry": {
