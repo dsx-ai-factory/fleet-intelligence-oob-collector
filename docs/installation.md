@@ -4,6 +4,8 @@ Install the collector on Kubernetes with its Helm chart. By default, the chart r
 
 For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 
+For a NICo-managed site, use [endpoint source configuration](configuration.md#endpoint-source) to configure the target source and mount its OAuth2 client credential files.
+
 ## Prerequisites
 
 - A Kubernetes cluster you can reach with `kubectl`
