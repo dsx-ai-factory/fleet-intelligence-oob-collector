@@ -65,8 +65,6 @@ spec:
             {{- end }}
             - --metrics-endpoint
             - "0.0.0.0:9009"
-            - --metrics-prefix
-            - fleetint
             - --resource-status-firmware-poll-interval-seconds
             - {{ .Values.nicoHardwareHealth.resourceStatus.firmwarePollIntervalSeconds | quote }}
             {{- if not .Values.nicoHardwareHealth.resourceStatus.enabled }}
