@@ -15,15 +15,17 @@ Three separate logins are involved, and it helps to keep them apart:
 - **The collector and NICo** sign in to BMCs with the usernames and passwords in the credentials file.
 - **The collector and gateway** each exchange the service key for their own Fleet Intelligence session JWT, which authenticates subsequent backend requests. They reuse the service key when they need to enroll again.
 
-## Get a service key
+For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
+
+## Before you start
+
+### Get a service key
 
 In the NGC portal for your organization, go to **Organization > Service Keys > Create Service Key**. Select **Fleet Intelligence** as the service and **Enroll Machines** as the scope. Ask your organization administrator for a key if you need one.
 
-For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
+Keep the key free of surrounding whitespace so the gateway can use it as stored. The collector trims surrounding whitespace and rejects an empty result.
 
-The collector trims leading and trailing whitespace from the service key before enrollment and rejects an empty result. Keep the service key free of surrounding whitespace for the gateway because the configured gateway build reads them directly.
-
-## Before you start
+### Set up a secrets operator
 
 Pick one operator for each Secret. The examples pair Vault with the Vault Secrets Operator (VSO) and OpenBao with the External Secrets Operator (ESO):
 

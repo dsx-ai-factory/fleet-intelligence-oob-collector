@@ -138,16 +138,26 @@ Helm returns once it has applied the release; the pods start in the next step. I
 
    Pod name suffixes differ in your cluster. If you disabled a component, its pod doesn't appear. If a pod shows any other status or keeps restarting, see [Troubleshoot](#troubleshoot).
 
-2. Check that the collector enrolled and uploaded inventory:
+2. Follow the collector log to check enrollment and the first inventory upload. Skip this check if you disabled the collector.
 
    ```bash
-   kubectl -n "$NAMESPACE" logs deployment/fleet-intelligence-oob-collector |
-     grep -E 'backend enrollment succeeded|first inventory upload accepted'
+   kubectl -n "$NAMESPACE" logs --follow deployment/fleet-intelligence-oob-collector
    ```
 
-   Both messages should appear. The first upload follows the first collection cycle, so if only the enrollment message appears, wait a minute and run the command again. The collector is the only component you need to check here: the gateway and NICo's `generate-nico-config` init container often log nothing when they work.
+   Look for `backend enrollment succeeded` and `first inventory upload accepted in this cycle`. The first upload can take several minutes, depending on the number of BMCs, their response times, and whether collection needs a retry. If you see warnings or errors while you wait, use [Troubleshoot](#troubleshoot) to decide what to check. Press Ctrl+C once you've seen the first upload or identified a failure.
 
-3. In Fleet Intelligence, find each BMC's MAC under Machines and check that its inventory shows the expected hardware.
+3. If you enabled the collector, find each BMC's MAC under Machines in Fleet Intelligence and check that its inventory shows the expected hardware.
+
+4. If you enabled NICo, verify telemetry delivery. Look for recent BMC sensor readings for the configured machines and confirm that expected BMC log events arrive. Check in Fleet Intelligence when using the bundled gateway, or at your configured OTLP destination when using an external collector.
+
+   If telemetry is missing, check NICo and the bundled gateway logs. Skip the second command if you disabled the gateway.
+
+   ```bash
+   kubectl -n "$NAMESPACE" logs deployment/nico-hardware-health
+   kubectl -n "$NAMESPACE" logs deployment/fleet-intelligence-oob-collector-otel-gateway
+   ```
+
+   Empty logs can be normal for NICo's `generate-nico-config` init container and the gateway. Use recent telemetry at the destination to confirm delivery.
 
 ## Troubleshoot
 
@@ -157,7 +167,7 @@ Find the pod's status in the output of the watch command:
 | --- | --- |
 | `Pending` | The pod's events, for insufficient resources or scheduling settings that match no node. See [workload settings](configuration.md#workload-settings). |
 | `ErrImagePull` or `ImagePullBackOff` | That the nodes can reach `nvcr.io` or your registry mirror, and that `imagePullSecrets` is set for a mirror. |
-| `CreateContainerConfigError`, or a `FailedMount` event | That both Secrets exist in `$NAMESPACE` and contain the keys `credentials.json` and `enrollment-token`. |
+| `CreateContainerConfigError`, or a `FailedMount` event | That the Secrets referenced by the chart exist in `$NAMESPACE` and contain the configured keys. The defaults are `credentials.json` and `enrollment-token`. |
 | `Init:Error` or `Init:CrashLoopBackOff` on `nico-hardware-health` | The logs of its `generate-nico-config` init container. |
 | `CrashLoopBackOff` | The logs of the previous, crashed container (`--previous`). |
 | `Running` but not ready | The container's logs. |
@@ -183,11 +193,13 @@ If the Deployment reports `ProgressDeadlineExceeded`, Kubernetes detected that t
 
 If the pods run but collection fails, check the collector log. Per-BMC problems are logged at `warn` with `bmc_mac`, `bmc_address`, and the reason. Set the collector log level to `debug` to also see healthy per-BMC results.
 
-| Problem | What to check |
+| Log message or symptom | What it means and what to check |
 | --- | --- |
-| A BMC rejects the login | The target's `credentialsProfile`, any override for its MAC, and the account on the BMC itself |
-| The collector or gateway can't enroll | That the service key is valid, has the **Enroll Machines** scope, and belongs to the intended organization. Check `backend.url` as well. |
-| The gateway can't export telemetry | That the backend is reachable from the cluster and its TLS certificate is trusted |
+| Enrollment fails with HTTP `401` or `403` | Fleet Intelligence refused the enrollment request. The affected workload exits and Kubernetes retries startup. Check that the service key is valid, has the **Enroll Machines** scope, and belongs to the intended organization. Check `backend.url` as well. |
+| `retrying failed inventory targets after a delay` | The collector will retry the affected BMCs once after about five minutes. Check earlier warnings for the affected MAC and the cause. If Redfish rejected the login, check the target's `credentialsProfile`, its MAC override, and the BMC account. |
+| `backend JWT rejected; enrolling again before retry` | An inventory upload received HTTP `401`. The collector re-enrolls and retries the upload once. If that fails, check the service key and backend URL. |
+| `backend rejected inventory node` or `inventory mini-batch export failed` | The backend rejected a node or the batch could not be uploaded. The collector continues with later batches when possible. Check the logged reason and MAC for a node rejection, or the error and backend connectivity for a batch failure. |
+| The gateway reports repeated telemetry export errors | Inspect the HTTP status or connection error in the gateway log. Check backend connectivity and certificate trust from the cluster. For HTTP `401`, the gateway attempts to re-enroll and replay the request once when it can. If enrollment fails, check the service key and backend URL. |
 
 If `helm upgrade --install` itself fails, render the chart locally to see download, values validation, or template errors:
 
@@ -204,7 +216,7 @@ Run these steps from `~/fleetint-oob` with the release's context and namespace s
 
 ### Update credentials
 
-For Secrets synced from Vault or OpenBao, change the value at the source and let the operator sync it. For Secrets you created by hand, use these commands. They replace the Secret's contents in place; server-side apply keeps the values out of the Secret's annotations.
+For Secrets synced from Vault or OpenBao, change the value at the source and let the operator sync it. For Secrets you manage by hand, use these commands to update the configured keys in place. Server-side apply with the field manager below avoids writing the updated values to a last-applied annotation.
 
 To change BMC logins, edit `credentials.json`, then run:
 
@@ -227,6 +239,13 @@ printf '%s' "$TOKEN" | kubectl -n "$NAMESPACE" create secret generic \
 unset TOKEN
 ```
 
+If you previously managed either Secret using client-side `kubectl apply`, its `last-applied-configuration` annotation can still contain credential data. After a successful update, remove that annotation from each affected manually managed Secret. Set `SECRET` to its name. This command reports the Secret name without displaying the annotation.
+
+```bash
+SECRET='fleet-intelligence-enrollment-token'
+kubectl -n "$NAMESPACE" annotate secret "$SECRET" kubectl.kubernetes.io/last-applied-configuration-
+```
+
 The collector picks up new BMC logins without a restart; a new service key needs one. [Rotation and ownership](credentials.md#rotation-and-ownership) gives the timing and the restart commands.
 
 ### Add BMCs or change settings
@@ -241,7 +260,12 @@ Check the installed version:
 helm list -n "$NAMESPACE" --filter '^fleet-intelligence-oob-collector$'
 ```
 
-Read the [published documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new version, set `OOB_CHART_VERSION` to it, and run the [install command](#install) again. Then [verify the rollout](#verify-an-update).
+Read the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector) for the new chart version. Before upgrading to a chart that uses `backend.enrollmentToken`, check the service key reference in `values.yaml`:
+
+- If your values file has `backend.agentToken`, replace that field with `backend.enrollmentToken`. Set its `existingSecret` and `secretKey` to the Secret and key that hold your service key. You can keep your existing Secret name and key. The new chart rejects the old values field. See [Fleet Intelligence connection](configuration.md#fleet-intelligence-connection) for the values format.
+- If you omit the Secret reference, the chart expects `fleet-intelligence-enrollment-token` with key `enrollment-token`. [Create it](#create-the-secrets) before upgrading if you plan to use those defaults.
+
+Set `OOB_CHART_VERSION` to the new chart version and run the [install command](#install) again. Then [verify the rollout](#verify-an-update). If the referenced Secret or key is missing, the pods can report `CreateContainerConfigError`.
 
 ### Verify an update
 
