@@ -116,7 +116,7 @@ kubectl apply -f /path/to/auth.yaml
 kubectl get vaultconnection,vaultauth --namespace "$NAMESPACE"
 ```
 
-**OpenBao/ESO:** edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA, and identity settings. It defines two stores: `openbao-bmc` for the `bmc` mount and `openbao-service-keys` for the `credentials` mount. ESO talks to OpenBao through its `vault` provider; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
+**OpenBao/ESO:** edit [secret-stores.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/openbao/secret-stores.yaml) with your server, CA, and identity settings. It defines two stores: `openbao-bmc` for the `bmc` mount and `openbao-credentials` for the `credentials` mount. ESO talks to OpenBao through its `vault` provider; see the [OpenBao integration guide](https://external-secrets.io/latest/provider/openbao/).
 
 ```bash
 kubectl apply -f /path/to/secret-stores.yaml
