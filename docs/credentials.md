@@ -189,7 +189,7 @@ You should see `credentials.json` in `fleet-intelligence-bmc-credentials` and `s
 
 ## 6. Install the collector
 
-Point the chart at the synced Secrets. The same settings are in [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [service-key-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/service-key-values.yaml), and they work with either operator:
+Follow [Save your values file](installation.md#save-your-values-file) to create `values.yaml` with your BMC targets. The chart defaults below match the synced Secrets in these examples. If you changed the Secret names or keys, set the corresponding fields in `values.yaml`. The [credentials-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/credentials-values.yaml) and [service-key-values.yaml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/deployments/helm/examples/vault/service-key-values.yaml) examples work with either operator.
 
 ```yaml
 credentials:
@@ -201,7 +201,7 @@ backend:
     secretKey: service-key
 ```
 
-Install with these values and your targets, following [Installation](installation.md#install). A successful sync doesn't prove the credentials work, so finish with [the checks in Installation](installation.md#verify).
+Then [install the collector](installation.md#install) and [verify collection](installation.md#verify).
 
 ## Rotation and ownership
 
