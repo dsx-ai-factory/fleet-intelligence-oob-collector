@@ -252,8 +252,7 @@ async fn run_runtime_until_shutdown(
     )?);
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
-    let enrollment_token =
-        required_backend_option(options.enrollment_token.take(), "enrollment token")?;
+    let enrollment_token = required_backend_option(options.enrollment_token.take(), "service key")?;
     tracing::info!(
         target_count = target_config.targets.len(),
         "collector configuration validated"

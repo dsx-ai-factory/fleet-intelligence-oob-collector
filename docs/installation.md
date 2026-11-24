@@ -130,8 +130,6 @@ Use Advanced to enter target labels or add BMCs beyond the first one.
 
 Keep passwords and service keys in private files or Kubernetes Secrets. To reuse an existing Secret, leave its file variable unset and set its name and key if they differ from the defaults. In Basic, setting a Secret name or key without a file makes `existing` the default for that Secret.
 
-The installer also accepts `FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE`, `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_NAME`, and `FLEETINT_INSTALL_ENROLLMENT_TOKEN_SECRET_KEY`. Each nonempty `FLEETINT_INSTALL_SERVICE_KEY_*` variable takes precedence over its corresponding alias.
-
 Unset or empty variables use the normal prompts and defaults. To omit a value supplied by the environment, unset its variable before running the installer. If an environment value fails prompt validation, the installer names the variable to correct or unset before retrying.
 
 ## Choose a namespace

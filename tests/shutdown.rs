@@ -1048,7 +1048,7 @@ async fn shared_transport_recovers_jwt_and_accepts_inventory_without_uuid() {
 }
 
 #[test]
-fn runtime_help_shows_token_environment_name_without_its_value() {
+fn runtime_help_labels_service_key_and_hides_its_value() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
         .args(["run", "--help"])
         .env("FLEETINT_ENROLLMENT_TOKEN", "example-private-token")
@@ -1058,5 +1058,6 @@ fn runtime_help_shows_token_environment_name_without_its_value() {
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("--enrollment-token"));
     assert!(help.contains("FLEETINT_ENROLLMENT_TOKEN"));
+    assert!(help.contains("Fleet Intelligence service key"));
     assert!(!help.contains("example-private-token"));
 }

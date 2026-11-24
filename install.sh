@@ -445,7 +445,7 @@ fleetint_install() {
       'Add another BMC?'*) title='Add another BMC?'; hint='For a first install, verify one BMC before adding more.' ;;
       'Secret source'*)
         title='Choose a Secret source'; hint='Use a private file or an existing Kubernetes Secret.'
-        if [[ $ui_section == *'Service key' ]]; then hint='The collector and gateway use this key to enroll.'; fi
+        if [[ $ui_section == *'Service key' ]]; then hint='The collector and gateway use this key to connect.'; fi
         ;;
       'Install with these settings?'*) title='Ready to install?'; hint='Install the collector, NICo hardware health, and telemetry gateway.' ;;
       'Review the installation settings') hint='Check the cluster, hardware, and Secret references before installing.' ;;
@@ -664,7 +664,7 @@ fleetint_install() {
   }
   review_add() {
     local text=$1 boundary
-    while (( ${#text} > 68 )); do
+    while [[ $ui_active == yes ]] && (( ${#text} > 68 )); do
       boundary=68
       # Keep UTF-8 continuation bytes with the character on the next line.
       while [[ ${text:boundary:1} == [$'\200'-$'\277'] ]] && (( boundary > 0 )); do
@@ -1205,32 +1205,29 @@ fleetint_install() {
     [[ -z "$file" || ( -f "$file" && -r "$file" && -s "$file" ) ]] || fail 'A selected private input file is missing, unreadable, or empty.'
   done
 
-  token_field=enrollmentToken
-  build_values
   if [[ $workflow == basic ]]; then ui_section='4 / 4  Review and install'
   else ui_section='6 / 6  Review and install'; fi
+  review_lines=()
+  review_add "Context: $context"
+  review_add "Namespace: $namespace"
+  review_add "Release: $release"
+  review_add "Chart version: $version"
+  review_add "Backend: $backend"
+  review_add "Compute zone: ${zone:-(unset)} | Node group: ${group:-(unset)}"
+  for line in "${target_review[@]}"; do review_add "$line"; done
+  review_add "BMC Secret: $credentials_secret / $credentials_key"
+  review_add "BMC input: ${credentials_file:-(existing Secret)}"
+  review_add "Service key Secret: $token_secret / $token_key"
+  review_add "Service key input: ${token_file:-(existing Secret)}"
+  review_add "Image pull Secret: ${pull_secret:-(chart default)}"
+  review_add 'Deploy the collector, NICo health, and gateway with chart defaults.'
+  review_add 'Existing Secrets are preserved. New Secrets use your selected files.'
+  if [[ $environment_defaults == yes ]]; then review_add 'Defaults loaded from the terminal environment.'; fi
   if [[ $ui_active == yes ]]; then
-    review_lines=()
-    review_add "Context: $context"
-    review_add "Namespace: $namespace"
-    review_add "Release: $release"
-    review_add "Chart version: $version"
-    review_add "Backend: $backend"
-    review_add "Compute zone: ${zone:-(unset)} | Node group: ${group:-(unset)}"
-    for line in "${target_review[@]}"; do review_add "$line"; done
-    review_add "BMC Secret: $credentials_secret / $credentials_key"
-    review_add "BMC input: ${credentials_file:-(existing Secret)}"
-    review_add "Service key Secret: $token_secret / $token_key"
-    review_add "Service key input: ${token_file:-(existing Secret)}"
-    review_add "Image pull Secret: ${pull_secret:-(chart default)}"
-    review_add 'Deploy the collector, NICo health, and gateway with chart defaults.'
-    review_add 'Existing Secrets are preserved. New Secrets use your selected files.'
-    if [[ $environment_defaults == yes ]]; then review_add 'Defaults loaded from the terminal environment.'; fi
     ui_review
   else
-    printf '\nContext: %s\nNamespace: %s\nRelease: %s\nChart version: %s\n%s\n' "$context" "$namespace" "$release" "$version" "$values"
-    printf '%s\n' 'Deploy the collector, NICo health, and gateway with chart defaults.'
-    if [[ $environment_defaults == yes ]]; then printf '%s\n' 'Defaults loaded from the terminal environment.'; fi
+    printf '\n'
+    printf '%s\n' "${review_lines[@]}"
     printf '%s\n' 'For proxies, registry mirrors, or additional collection tuning, use the manual installation guide.'
   fi
   ask confirm 'Install with these settings? yes/no' no no valid_yes_no

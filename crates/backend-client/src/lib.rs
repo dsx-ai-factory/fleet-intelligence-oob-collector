@@ -111,7 +111,7 @@ pub async fn enroll(
     }
     let token = token.trim();
     if token.is_empty() {
-        return Err("enrollment token cannot be empty".into());
+        return Err("service key cannot be empty".into());
     }
     let response = request(client, Method::POST, endpoint)
         .bearer_auth(token)
@@ -401,7 +401,7 @@ mod tests {
         let client = local_client(reqwest::redirect::Policy::none());
         for input in ["", "\n", " \t\r\n"] {
             let error = enroll(&client, &endpoint, input).await.unwrap_err();
-            assert_eq!(error.to_string(), "enrollment token cannot be empty");
+            assert_eq!(error.to_string(), "service key cannot be empty");
         }
     }
 

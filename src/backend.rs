@@ -122,7 +122,7 @@ impl BackendSession {
         self.jwt = jwt;
     }
 
-    /// Re-enroll with the enrollment token, refreshing both the JWT and the
+    /// Re-enroll with the service key, refreshing both the JWT and the
     /// enrollment timestamp.
     pub async fn reenroll(&mut self) -> Result<(), Box<dyn Error>> {
         let Enrollment { jwt, enrolled_at } = enroll_once(
@@ -204,7 +204,9 @@ mod tests {
     #[test]
     fn required_backend_option_rejects_blank_values() {
         assert!(required_backend_option(None::<String>, "backend URL").is_err());
-        assert!(required_backend_option(Some("   ".to_string()), "enrollment token").is_err());
+        let err =
+            required_backend_option(Some("   ".to_string()), "service key").expect_err("blank key");
+        assert!(err.to_string().contains("service key is required"));
         assert_eq!(
             required_backend_option(Some("value".to_string()), "backend URL").expect("value"),
             "value"

@@ -406,7 +406,7 @@ elif 'logs' in args:
         self.assertEqual(code, 0, output)
         for text in ("Basic (recommended)", "Does NICo already monitor these BMCs?", "BMC IP address",
                      "BMC MAC address", "Chart version: 1.4.2", "Review the installation settings",
-                     "3 / 4  Service key", "The collector and gateway use this key to enroll.",
+                     "3 / 4  Service key", "The collector and gateway use this key to connect.",
                      "Service key Secret:", "Service key input:",
                      "first inventory upload accepted in this cycle"):
             self.assertIn(text, output)
@@ -564,6 +564,8 @@ elif 'logs' in args:
                                                       install_env=defaults)
         self.assertEqual(code, 0, output)
         self.assertIn("Fleet Intelligence service key", output)
+        self.assertIn("Service key Secret: custom-service-key / agent-token", output)
+        self.assertNotIn("enrollmentToken", output)
         self.assertEqual(json.loads(saved.read_text())["backend"]["enrollmentToken"], {
             "existingSecret": "custom-service-key", "secretKey": "agent-token",
         })
@@ -1075,12 +1077,17 @@ elif 'logs' in args:
     def test_review_wrap_preserves_utf8_and_spacing(self):
         text = "x" * 67 + "é" + "測試" * 30 + "  end"
         body = SCRIPT.split("  ui_mode=auto\n", 1)[0]
-        code = body + '\nreview_lines=(); review_add "$1"; printf "%s\\0" "${review_lines[@]}"\n}\nfleetint_install "$@"\n'
-        result = subprocess.run(["bash", "-c", code, "review", text], text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = result.stdout.rstrip("\0").split("\0")
-        self.assertEqual("".join(lines), text)
-        self.assertTrue(all(len(line.encode()) <= 68 for line in lines))
+        code = body + '\nui_active=$1; review_lines=(); review_add "$2"; ui_active=no; printf "%s\\0" "${review_lines[@]}"\n}\nfleetint_install "$@"\n'
+        for ui_active in ("yes", "no"):
+            with self.subTest(ui_active=ui_active):
+                result = subprocess.run(["bash", "-c", code, "review", ui_active, text], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.rstrip("\0").split("\0")
+                self.assertEqual("".join(lines), text)
+                if ui_active == "yes":
+                    self.assertTrue(all(len(line.encode()) <= 68 for line in lines))
+                else:
+                    self.assertEqual(lines, [text])
 
     def test_dumb_terminal_uses_plain_prompts_with_notice(self):
         code, output, _, _ = self.run_script(ui="fallback")
