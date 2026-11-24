@@ -344,10 +344,10 @@ mod tests {
     #[tokio::test]
     async fn enrollment_trims_surrounding_service_key_whitespace() {
         let cases = [
-            ("example-token", "example-token"),
-            ("example-token\n", "example-token"),
-            ("example-token\r\n", "example-token"),
-            (" \t\r\nexample-token \t\r\n", "example-token"),
+            ("example-service-key", "example-service-key"),
+            ("example-service-key\n", "example-service-key"),
+            ("example-service-key\r\n", "example-service-key"),
+            (" \t\r\nexample-service-key \t\r\n", "example-service-key"),
             ("first second", "first second"),
         ];
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -413,7 +413,7 @@ mod tests {
                 enroll(
                     &local_client(reqwest::redirect::Policy::default()),
                     &endpoint,
-                    "example-token"
+                    "example-service-key"
                 )
                 .await
                 .is_err()

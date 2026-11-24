@@ -21,7 +21,7 @@ sh /startup.sh /usr/lib/fleetint-oob/run-service /usr/lib/systemd/system
 for shell in /bin/sh /bin/bash; do
     for service in collector gateway; do
         status=0
-        runuser -u fleetint-oob -- env FLEETINT_SERVICE_KEY=test-token \
+        runuser -u fleetint-oob -- env FLEETINT_SERVICE_KEY=test-service-key \
             FLEETINT_SERVICE_KEY_FILE=/etc/fleetint-oob/service.conf \
             "$shell" /usr/lib/fleetint-oob/run-service "$service" || status=$?
         [ "$status" = 2 ]

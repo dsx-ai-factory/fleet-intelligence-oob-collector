@@ -40,11 +40,10 @@ export NAMESPACE=fleet-intelligence
 kubectl create namespace "$NAMESPACE"
 ```
 
-If the namespace already exists, `kubectl` reports `AlreadyExists`. Then set restrictive permissions for new files and open the working directory. The `chmod` command also protects the directory if it already exists.
+If the namespace already exists, `kubectl` reports `AlreadyExists`. Create a private working directory. The `chmod` command also protects the directory if it already exists.
 
 ```bash
-umask 077
-mkdir -p ~/fleetint-oob && chmod 700 ~/fleetint-oob && cd ~/fleetint-oob
+mkdir -m 700 -p ~/fleetint-oob && chmod 700 ~/fleetint-oob && cd ~/fleetint-oob
 ```
 
 Confirm you are in `~/fleetint-oob` before saving files. The examples use filenames relative to this directory. If you open a new terminal, confirm the context and set `OOB_CHART_VERSION` and `NAMESPACE` again, then run the working directory commands.
@@ -53,7 +52,13 @@ Confirm you are in `~/fleetint-oob` before saving files. The examples use filena
 
 The collector reads BMC logins from a credentials file and authenticates with the service key. Both go into Kubernetes Secrets; the chart only references them. To sync the Secrets from Vault or OpenBao instead, follow [Credentials](credentials.md) and continue at [Save your values file](#save-your-values-file).
 
-Save this as `credentials.json` and replace the example username and password:
+Prepare a private credentials file:
+
+```bash
+(umask 077; touch credentials.json) && chmod 600 credentials.json
+```
+
+Save this JSON in `credentials.json` and replace the example username and password:
 
 ```json
 {
@@ -246,7 +251,7 @@ SECRET='fleet-intelligence-service-key'
 kubectl -n "$NAMESPACE" annotate secret "$SECRET" kubectl.kubernetes.io/last-applied-configuration-
 ```
 
-The collector picks up new BMC logins without a restart; a new service key needs one. [Rotation and ownership](credentials.md#rotation-and-ownership) gives the timing and the restart commands.
+Follow [Rotation and ownership](credentials.md#rotation-and-ownership) for reload timing and restart commands.
 
 ### Add BMCs or change settings
 

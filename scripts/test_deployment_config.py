@@ -334,7 +334,7 @@ printf 'service_key=%s\\n' "${FLEETINT_SERVICE_KEY-}"
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("FLEETINT_") and key != "RUST_LOG"}
         env.update(settings or {})
-        env.setdefault("FLEETINT_SERVICE_KEY", "test-token")
+        env.setdefault("FLEETINT_SERVICE_KEY", "test-service-key")
         env["TEST_RENDER_ARGS"] = str(self.directory / "render-args")
         command = [shell, str(self.nico if nico else self.launcher)]
         if not nico:
@@ -364,7 +364,7 @@ printf 'service_key=%s\\n' "${FLEETINT_SERVICE_KEY-}"
                 self.assertEqual(self.arguments(self.launch(settings, shell=shell)), expected)
 
     def test_packaged_defaults_match_helm(self):
-        settings = self.defaults | {"FLEETINT_SERVICE_KEY": "test-token"}
+        settings = self.defaults | {"FLEETINT_SERVICE_KEY": "test-service-key"}
         self.compare_collector(settings)
         rendered = self.helm()
         for name, expected in (("RUST_LOG", self.defaults["RUST_LOG"]),

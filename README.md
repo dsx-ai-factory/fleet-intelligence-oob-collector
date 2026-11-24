@@ -28,9 +28,9 @@ OOB collector ──────────────► inventory and attest
 
 The OOB collector enrolls with Fleet Intelligence and uploads inventory from configured BMCs in batches. It preserves successfully collected data when an individual Redfish domain fails. GPU attestation uses backend-issued nonces and configured BMC MACs. Attestation needs the node's inventory to have been uploaded at least once. NICo reads the shared target configuration and BMC credentials to export metrics and logs through the gateway.
 
-## Getting started
+## Documentation
 
-- For installation and configuration, see the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). Choose the documentation version that matches your Helm chart or Linux package release.
+- For Kubernetes and Linux installation, target discovery, credentials, and troubleshooting, see the [OOB Collector documentation](https://docs.nvidia.com/fleet-intel/oob-collector). Choose the version that matches your Helm chart or Linux package release.
 - For service setup and the dashboard, see the [Fleet Intelligence service documentation](https://docs.nvidia.com/fleet-intel).
 
 ## Contributing

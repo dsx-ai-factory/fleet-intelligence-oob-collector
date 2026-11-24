@@ -25,9 +25,9 @@ for shell in sh bash; do
         expect_missing_service_key
         expect_missing_service_key FLEETINT_SERVICE_KEY=
         expect_missing_service_key FLEETINT_SERVICE_KEY_FILE="$test_root/empty-service-key" \
-            FLEETINT_SERVICE_KEY=environment-token
+            FLEETINT_SERVICE_KEY=environment-service-key
         expect_missing_service_key FLEETINT_SERVICE_KEY_FILE="$test_root/missing-service-key" \
-            FLEETINT_SERVICE_KEY=environment-token
+            FLEETINT_SERVICE_KEY=environment-service-key
     done
 done
 for unit in fleetint-oob-collector.service fleetint-otel-gateway.service fleetint-nico-health.service; do

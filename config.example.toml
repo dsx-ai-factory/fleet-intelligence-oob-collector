@@ -19,7 +19,7 @@ file = "/run/secrets/bmc/credentials.json"
 # client_id_file = "/run/secrets/nico-oauth2/client_id"
 # client_secret_file = "/run/secrets/nico-oauth2/client_secret"
 # scopes = ["nico"] # Use scopes configured by your identity-provider administrator.
-# credentials_profile = "bmc" # Required shared BMC profile for discovered MACs.
+# credentials_profile = "compute" # Shared BMC profile for discovered compute hosts.
 # timeout_seconds = 30
 # Configured node_group and compute_zone above override NICo site information.
 # Omit either to derive it from the site name or country/state/city, respectively.
