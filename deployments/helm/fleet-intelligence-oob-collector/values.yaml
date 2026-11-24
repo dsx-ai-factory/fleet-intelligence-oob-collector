@@ -34,14 +34,11 @@ credentials:
 # Fleet Intelligence destination and shared service key.
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  # An explicit serviceKey reference takes precedence over agentToken.
+  # Set serviceKey when using the service key Secret from the installation guide.
   # serviceKey:
   #   existingSecret: fleet-intelligence-service-key
   #   secretKey: service-key
-  # Keep the 1.0.0 Secret reference for upgrades that rely on chart defaults.
-  agentToken:
-    existingSecret: fleet-intelligence-oob-collector-agent-token
-    secretKey: agent-token
+  # Without serviceKey, the chart honors a supplied agentToken reference or uses the 1.0.0 defaults.
 
 # External OTLP/gRPC endpoint; requires otelGateway.enabled=false.
 telemetry:

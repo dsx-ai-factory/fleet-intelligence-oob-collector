@@ -392,8 +392,10 @@ printf 'service_key=%s\\n' "${FLEETINT_SERVICE_KEY-}"
                        "backend.serviceKey.secretKey": "credential"}
         cases = (
             ("1.0.0 defaults", {}, "fleet-intelligence-oob-collector-agent-token", "agent-token"),
-            ("1.0.0 partial override", {"backend.agentToken.existingSecret": "custom-agent-token"},
+            ("1.0.0 name override", {"backend.agentToken.existingSecret": "custom-agent-token"},
              "custom-agent-token", "agent-token"),
+            ("1.0.0 key override", {"backend.agentToken.secretKey": "legacy-key"},
+             "fleet-intelligence-oob-collector-agent-token", "legacy-key"),
             ("1.0.0 explicit reference", legacy, "custom-agent-token", "legacy-key"),
             ("service key reference", service_key, "custom-service-key", "credential"),
             ("service key takes precedence", legacy | service_key, "custom-service-key", "credential"),

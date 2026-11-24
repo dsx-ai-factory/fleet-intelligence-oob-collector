@@ -66,9 +66,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.serviceKeySecretRef" -}}
-{{- $ref := coalesce .Values.backend.serviceKey .Values.backend.agentToken | default dict -}}
-name: {{ required "Set backend.serviceKey.existingSecret or backend.agentToken.existingSecret" $ref.existingSecret | quote }}
-key: {{ required "Set backend.serviceKey.secretKey or backend.agentToken.secretKey" $ref.secretKey | quote }}
+{{- with .Values.backend.serviceKey -}}
+name: {{ required "backend.serviceKey.existingSecret is required" .existingSecret | quote }}
+key: {{ required "backend.serviceKey.secretKey is required" .secretKey | quote }}
+{{- else -}}
+{{- $legacy := .Values.backend.agentToken | default dict -}}
+name: {{ $legacy.existingSecret | default "fleet-intelligence-oob-collector-agent-token" | quote }}
+key: {{ $legacy.secretKey | default "agent-token" | quote }}
+{{- end -}}
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.scheduling" -}}
