@@ -331,6 +331,7 @@ async fn run_collection_cycle(
     let config::CollectorConfig {
         targets,
         credentials_file,
+        bmc_proxy,
         nico_health,
     } = target_config;
     let collector_config = collector_config
@@ -347,12 +348,15 @@ async fn run_collection_cycle(
         session,
         targets,
         InventoryRetry {
+            bmc_proxy: bmc_proxy.clone(),
             dispatcher: Arc::clone(&dispatcher),
             reload_credentials: Box::new({
                 let credentials_file = credentials_file.clone();
                 move |target| {
                     config::load_target_credentials(
-                        &credentials_file,
+                        credentials_file
+                            .as_deref()
+                            .ok_or("NICo proxy mode has no BMC credentials")?,
                         &target.mac.to_string(),
                         target.credentials_profile.as_deref(),
                     )
@@ -388,6 +392,7 @@ async fn run_collection_cycle(
     }
 
     let mut settings = attestation_config::defaults::attestation_config();
+    settings.bmc_proxy = bmc_proxy;
     settings.insecure_tls = options.inventory.insecure_tls;
     settings.concurrency = options.inventory.target_concurrency;
     settings.redfish_timeout = Duration::from_secs(options.inventory.timeout_seconds);
@@ -398,7 +403,7 @@ async fn run_collection_cycle(
     let uploads = collect_and_upload_attestation(
         AttestationTargets {
             targets: &attestation_targets,
-            credentials_file: &credentials_file,
+            credentials_file: credentials_file.as_deref(),
         },
         &settings,
         endpoints,
@@ -457,7 +462,7 @@ fn build_attestation_targets(targets: &[config::Target]) -> Vec<attestation_conf
 #[derive(Clone, Copy)]
 struct AttestationTargets<'a> {
     targets: &'a [attestation_config::Target],
-    credentials_file: &'a Path,
+    credentials_file: Option<&'a Path>,
 }
 
 /// Collect attestation for `targets`, enrolling again and collecting once more
@@ -563,6 +568,9 @@ async fn collect_and_upload_attestation(
             .filter(|target| outcome.retry_bmc_macs.contains(&target.bmc_mac))
             .cloned()
             .map(|mut target| {
+                let Some(credentials_file) = credentials_file else {
+                    return target;
+                };
                 match config::load_target_credentials(
                     credentials_file,
                     &target.bmc_mac,
@@ -775,7 +783,7 @@ fn split_attestation_batch(batch: &BatchAttestation, batch_size: usize) -> Vec<B
 
 async fn collect_attestation(
     targets: &[attestation_config::Target],
-    credentials_file: &Path,
+    credentials_file: Option<&Path>,
     attestation_settings: &attestation_config::AttestationConfig,
     endpoints: &BackendEndpoints,
     jwt: &str,
@@ -795,7 +803,7 @@ async fn collect_attestation(
         dispatcher,
         &|target| {
             config::load_target_credentials(
-                credentials_file,
+                credentials_file.ok_or("NICo proxy mode has no BMC credentials")?,
                 &target.bmc_mac,
                 target.credentials_profile.as_deref(),
             )
@@ -823,8 +831,13 @@ async fn upload_attestation(
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
     let collector_config = config::load_config_async(&options.config).await?;
     let dispatcher = Arc::new(start_dispatcher(&options, &collector_config.targets)?);
-    let inventories =
-        collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
+    let inventories = collect_inventory_targets(
+        &options,
+        collector_config.targets,
+        dispatcher,
+        collector_config.bmc_proxy.as_ref(),
+    )
+    .await?;
 
     match options.format {
         InventoryFormat::Table => TableSink::new(options.detail).write(&inventories)?,
@@ -847,9 +860,11 @@ async fn collect_and_upload_inventory(
     let timeout = Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
     let dispatcher = Arc::clone(&retry.dispatcher);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
-        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
-    );
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?
+        .with_proxy(retry.bmc_proxy.as_ref(), timeout)?
+        .with_latency_probe(
+            LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+        );
     let channel_capacity = target_concurrency.saturating_mul(2).max(1);
     let (tx, mut rx) = tokio::sync::mpsc::channel(channel_capacity);
     // JoinSet aborts the producer if an upload error exits this scope early.
@@ -951,6 +966,7 @@ type TargetCredentialReloader =
 /// A second attempt, later in the cycle, at inventory targets that failed as a
 /// whole.
 struct InventoryRetry {
+    bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     dispatcher: Arc<Dispatcher>,
     /// Called for each target before the retry, so rotated credentials are
     /// picked up.
@@ -1017,6 +1033,9 @@ async fn collect_inventory_with_retry(
         .iter()
         .filter_map(|inventory| by_mac.remove(&inventory.source.mac))
         .map(|mut target| {
+            if retry.bmc_proxy.is_some() {
+                return target;
+            }
             match (retry.reload_credentials)(&target) {
                 Ok((username, password)) => {
                     target.username = username;
@@ -1341,12 +1360,15 @@ async fn collect_inventory_targets(
     options: &InventoryOptions,
     targets: Vec<config::Target>,
     dispatcher: Arc<Dispatcher>,
+    proxy: Option<&bmc_dispatch::proxy::BmcProxyConfig>,
 ) -> Result<Vec<NodeInventory>, Box<dyn Error>> {
     let timeout = std::time::Duration::from_secs(options.timeout_seconds);
     let target_concurrency = options.target_concurrency.max(1);
-    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?.with_latency_probe(
-        LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
-    );
+    let source = RedfishSource::new(options.insecure_tls, timeout, dispatcher)?
+        .with_proxy(proxy, timeout)?
+        .with_latency_probe(
+            LatencyProbe::for_run(options.latency_probe, TcpProbeConfig::default()).await,
+        );
 
     Ok(inventory_collections(
         &source,
@@ -1981,6 +2003,7 @@ mod tests {
         let source = RedfishSource::new(false, Duration::from_secs(30), Arc::clone(&dispatcher))
             .expect("source");
         let retry = InventoryRetry {
+            bmc_proxy: None,
             dispatcher: Arc::clone(&dispatcher),
             reload_credentials: Box::new(|_| Ok(("user".into(), "good".into()))),
             delay: Some(Duration::ZERO),
@@ -2072,6 +2095,7 @@ mod tests {
             let source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
                 .expect("source");
             let retry = InventoryRetry {
+                bmc_proxy: None,
                 dispatcher: Arc::clone(&dispatcher),
                 reload_credentials: Box::new(move |_| Ok(("user".into(), reloaded.into()))),
                 delay: Some(Duration::ZERO),

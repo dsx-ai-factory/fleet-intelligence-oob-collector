@@ -20,11 +20,13 @@ endpointSource:
   nico:
     apiUrl: "" # HTTPS REST prefix, including /v2.
     org: ""
-    credentialsProfile: "" # Required for NICo: existing shared BMC credential profile.
     tokenUrl: "" # OAuth2 token endpoint.
     oauth2CredentialsSecretName: "" # Keys: client_id and client_secret.
     scopes: [] # Scopes required by the configured identity provider.
     timeoutSeconds: 30 # Whole-discovery budget (1-3600); raise for large organizations.
+    bmcProxy:
+      url: "" # Required HTTPS origin for NICo's authenticated BMC proxy.
+      tlsSecretName: "" # Required Secret keys: ca.crt, tls.crt, tls.key.
 
 # Shared BMC JSON file; credential values belong in the Secret.
 credentials:

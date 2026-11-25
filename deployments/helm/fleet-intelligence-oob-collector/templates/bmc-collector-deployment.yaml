@@ -102,10 +102,14 @@ spec:
             - name: nico-oauth2-credentials
               mountPath: /run/secrets/nico-oauth2
               readOnly: true
-            {{- end }}
+            - name: nico-bmc-proxy-tls
+              mountPath: /run/secrets/nico-bmc-proxy
+              readOnly: true
+            {{- else }}
             - name: bmc-credentials
               mountPath: /run/secrets/bmc
               readOnly: true
+            {{- end }}
       volumes:
         - name: hardware-config
           configMap:
@@ -124,7 +128,18 @@ spec:
                 path: client_id
               - key: client_secret
                 path: client_secret
-        {{- end }}
+        - name: nico-bmc-proxy-tls
+          secret:
+            secretName: {{ .Values.endpointSource.nico.bmcProxy.tlsSecretName | default "" | trim | required "endpointSource.nico.bmcProxy.tlsSecretName is required" | quote }}
+            defaultMode: 0440
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- else }}
         - name: bmc-credentials
           secret:
             secretName: {{ .Values.credentials.existingSecret | quote }}
@@ -132,4 +147,5 @@ spec:
             items:
               - key: {{ .Values.credentials.secretKey | quote }}
                 path: credentials.json
+        {{- end }}
 {{- end }}

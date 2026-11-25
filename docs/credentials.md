@@ -17,6 +17,8 @@ Three separate logins are involved, and it helps to keep them apart:
 
 For Linux installations, use [host configuration](host-configuration.md#bmc-credentials) for local credential files. The [rotation and ownership](#rotation-and-ownership) reference below applies to both deployment methods.
 
+NICo discovery uses OAuth2 client credentials for the NICo REST API and an mTLS client identity for the BMC proxy. The local BMC password workflow below applies to static targets. See [endpoint source configuration](configuration.md#endpoint-source) for NICo setup.
+
 ## Before you start
 
 ### Get a service key
@@ -212,6 +214,7 @@ What happens next depends on what changed:
 | Change | What you need to do |
 | --- | --- |
 | BMC passwords in the credentials file | Nothing. On Kubernetes, an updated Secret usually reaches the pods within a minute or two. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
+| NICo proxy CA bundle, client certificate, or key | Replace the mounted files. The collector rereads them when each inventory or attestation phase starts, including retry phases. In-flight requests retain their existing client. Keep the private key readable only by the service identity. |
 | Service key | Restart the collector and gateway, because they read the service key at startup. On Kubernetes, the VSO service key example does this for you. With ESO, a manually managed Secret, or a Linux service key file, restart them yourself (below). |
 | Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 | Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |

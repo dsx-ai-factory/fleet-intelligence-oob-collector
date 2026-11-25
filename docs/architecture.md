@@ -10,7 +10,7 @@ This page explains what runs, what one collection cycle does, and how the collec
 | [NICo hardware health](https://github.com/NVIDIA/infra-controller/tree/main/crates/health) | Collects BMC metrics and logs |
 | Telemetry gateway | Signs in to Fleet Intelligence and forwards NICo's metrics and logs |
 
-The collector and NICo read the same target list and the same credentials file, so you configure each BMC once:
+With static targets, the collector and bundled NICo health read the same target list and credentials file, so you configure each BMC once:
 
 ```text
 target list + credentials file
@@ -26,13 +26,15 @@ target list + credentials file
                                    Fleet Intelligence telemetry API
 ```
 
+In NICo mode, deployed through Helm, the OOB collector discovers BMCs through NICo REST and sends inventory and attestation Redfish requests through NICo's authenticated BMC proxy. The collector authenticates to the proxy with mTLS, identifies each target by BMC MAC, and uses no local BMC credentials. Operators run the collector alongside the site's existing health and telemetry services. TCP latency probes still connect directly to the discovered BMC IP for geolocation tracking. See [endpoint source configuration](configuration.md#endpoint-source) for access and configuration requirements.
+
 Each machine is identified by its BMC MAC address, from configuration through inventory, attestation, and telemetry.
 
 ## A collection cycle
 
 When the collector starts, it exchanges its service key for a Fleet Intelligence session, then runs its first cycle right away. Each cycle does the following:
 
-1. **Reload configuration.** The collector re-reads the target list and credentials file, so edits take effect at the next cycle. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
+1. **Reload configuration.** In static mode, the collector re-reads the target list and BMC credentials file. In NICo mode, it discovers the current targets and reads the proxy TLS files for each collection phase. If the new configuration is invalid, it skips the cycle rather than collect from an outdated target list.
 2. **Collect inventory.** The collector reads many BMCs in parallel and uploads finished nodes in small batches while collection continues. A batch is sent when it has as many nodes as `bmcCollector.targetConcurrency`, after 30 seconds, or when inventory collection ends.
 3. **Measure latency.** After reading each BMC, the collector measures how long a TCP connection to it takes and includes the result in that node's inventory. See [network latency measurement](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/crates/bmc-inventory/README.md#network-latency-measurement).
 4. **Collect attestation.** For each BMC, the collector asks Fleet Intelligence for a one-time nonce, collects signed GPU evidence from the BMC, and uploads it. This step runs even if some inventory failed. Fleet Intelligence verifies the evidence against the model and firmware details from inventory, so a machine's inventory must have been uploaded at least once.
