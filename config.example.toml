@@ -10,7 +10,7 @@ node_group = "gb200-training"
 file = "/run/secrets/bmc/credentials.json"
 
 # Static targets below are the default endpoint source.
-# For NICo mode, use config.nico.example.toml instead of this static configuration.
+# Configure NICo integration through Helm; this example is for static targets.
 
 # Optional NICo collection controls; omit fields to use the bundle defaults below.
 # [nico_health]

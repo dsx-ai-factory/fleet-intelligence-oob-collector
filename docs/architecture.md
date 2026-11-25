@@ -26,7 +26,7 @@ target list + credentials file
                                    Fleet Intelligence telemetry API
 ```
 
-In NICo mode, the OOB collector discovers BMCs through NICo REST and sends inventory and attestation Redfish requests through NICo's authenticated BMC proxy. The collector authenticates to the proxy with mTLS, identifies each target by BMC MAC, and uses no local BMC credentials. Operators run the collector alongside the site's existing health and telemetry services. TCP latency probes still connect directly to the discovered BMC IP for geolocation tracking. See [endpoint source configuration](configuration.md#endpoint-source) for access and configuration requirements.
+In NICo mode, deployed through Helm, the OOB collector discovers BMCs through NICo REST and sends inventory and attestation Redfish requests through NICo's authenticated BMC proxy. The collector authenticates to the proxy with mTLS, identifies each target by BMC MAC, and uses no local BMC credentials. Operators run the collector alongside the site's existing health and telemetry services. TCP latency probes still connect directly to the discovered BMC IP for geolocation tracking. See [endpoint source configuration](configuration.md#endpoint-source) for access and configuration requirements.
 
 Each machine is identified by its BMC MAC address, from configuration through inventory, attestation, and telemetry.
 

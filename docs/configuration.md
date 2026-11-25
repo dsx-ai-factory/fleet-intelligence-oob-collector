@@ -53,7 +53,7 @@ If a site's name or location can't be used as a node group or compute zone, the 
 
 All site and machine pages must succeed before BMC collection begins. A failed discovery skips that cycle instead of using a partial list, and the next cycle discovers again. If discovery fails when the collector starts, for example because NICo or the identity provider isn't reachable yet, the collector exits and Kubernetes restarts it with its usual backoff.
 
-For TOML, start with [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml). Configure `[endpoint_source]` and `[bmc_proxy]`; omit `[[targets]]`, `[credentials]`, and top-level placement overrides. Relative OAuth2 and proxy TLS file paths resolve beside the TOML file. Run only the OOB collector; operators disable bundled NICo health and the telemetry gateway as shown above. See [rotation and ownership](credentials.md#rotation-and-ownership) for certificate renewal. Run `bmc-collector discover --config config.toml` to inspect discovered IPs, MACs, names, and placement without reading BMC passwords or querying hardware.
+NICo integration is supported through Helm. Configure discovery and proxy access with the values above, and disable the bundled NICo health and telemetry gateway workloads. See [rotation and ownership](credentials.md#rotation-and-ownership) for certificate renewal.
 
 ## Targets
 

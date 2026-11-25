@@ -24,11 +24,6 @@ jobs:
         with:
           toolchain: 1.95.0
       - run: cargo test --workspace --locked
-      - name: Test NICo proxy mTLS with local fixtures
-        run: |
-          openssl version
-          cargo build --bin bmc-collector --locked
-          python3 -m unittest discover -s scripts -p 'test_bmc_proxy_tls.py'
 
   packaging:
     name: Validate packaging

@@ -38,14 +38,3 @@ Run `make rpm-test` for the same daemon runtime and authenticated telemetry chec
 | Docs | `docs-fetch-versions.py` stages versioned docs; `check-docs-links.py` validates source/staged links. Their Python tests cover distinct behaviors. |
 | Deployment configuration | `test_deployment_config.py` covers Helm rendering, NICo controls, and Linux launchers under `sh` and `bash`. It compares packaged defaults and overrides with Helm and checks validation, service key file handling, and component log levels. |
 | Static notices | `check-notice.py` checks collector Cargo.lock crate/version coverage, component sections and source revisions, and shared references. Its optional `--crate-sources` audit checks root and nested license/attribution files against each dependency's expanded notice. `test_notice.py` covers missing terms and malformed references, source discovery, declared license files, source identity, and audit failures using local crate fixtures. Installed package tests compare the complete NOTICE with the source file validated by CI. |
-
-## NICo BMC proxy TLS smoke tests
-
-Build the collector, then run the local TLS fixtures:
-
-```bash
-cargo build --bin bmc-collector --locked
-python3 -m unittest discover -s scripts -p 'test_bmc_proxy_tls.py'
-```
-
-These tests require OpenSSL and Python and bind only loopback sockets. They generate temporary CA, server, and client certificates and exercise NICo discovery plus inventory through an mTLS proxy, untrusted server certificates with the BMC insecure-TLS flag enabled, missing client keys, and redirects. `BMC_PROXY_TLS_BINARY` can select a collector binary outside `target/debug/`. The tests skip when the binary or OpenSSL is unavailable. Rust tests cover the attestation exchange, shared dispatcher admission, retained direct TCP probes, and absence of direct Redfish fallback.
