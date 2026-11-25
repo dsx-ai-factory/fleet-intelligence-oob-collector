@@ -210,6 +210,8 @@ After editing configuration, apply the change to the affected services:
    sudo journalctl -u fleetint-nico-health.service -n 100 --no-pager
    ```
 
+   If you changed a NICo environment setting that the collector reports, such as `FLEETINT_NICO_LOG_LEVEL`, also run `sudo systemctl restart fleetint-oob-collector.service` so the collector reports the new value.
+
 3. Confirm the affected services are active and address errors in their logs. Check fresh inventory and expected health telemetry in Fleet Intelligence, allowing for your selected polling intervals. Follow the full [installation verification](host-installation.md#start-and-verify-collection) when restarting the stack.
 
 The collector's configuration report describes configured values. It does not establish that a running NICo process has loaded your edits; complete the restart and telemetry checks.
@@ -229,7 +231,7 @@ For password and service key rotation, follow [rotation and ownership](credentia
    If you also plan to edit NICo settings in `service.conf`, save it in the same protected directory. In the same terminal, run `sudo install -m 0600 /etc/fleetint-oob/service.conf "${NICO_BACKUP_DIR:?Set the backup directory}/service.conf"`.
 
 2. If the change causes problems, use `sudoedit /etc/fleetint-oob/config.toml` to restore the saved `[nico_health]` section. If you added the section and the saved file has none, remove it. If NICo settings were your only edits to that file, you can replace its entire contents with the backup. Restore any NICo settings you changed in `service.conf` too. Leave the current BMC targets, credential references, and enrollment settings in place.
-3. Use the NICo restart and log checks under [Apply changes](#apply-changes). Restarting regenerates NICo's configuration from the restored files. Confirm the service is active and fresh health readings arrive for the affected BMCs in Fleet Intelligence.
+3. Use the NICo restart and log checks under [Apply changes](#apply-changes). Restarting regenerates NICo's configuration from the restored files. Run `sudo systemctl restart fleetint-oob-collector.service` to resume inventory and attestation immediately after restoring the shared configuration. Confirm the services are active and check fresh inventory and health telemetry for the affected BMCs in Fleet Intelligence.
 
 ## Troubleshooting
 

@@ -210,7 +210,7 @@ What happens next depends on what changed:
 | Change | What you need to do |
 | --- | --- |
 | BMC passwords in the credentials file | Nothing. The collector reads the file at the start of each collection cycle, and NICo picks up changes on its own. Once a BMC rejects a password, NICo stops sending it requests and tries the current file again after a cooldown of up to five minutes. If a BMC rejects a password during attestation, the collector reloads the file and retries once if the password changed. It also reloads the file before retrying BMCs that failed earlier in the cycle. |
-| Service key | Restart the collector and gateway, because they read the key only at startup. On Kubernetes, the VSO service key example does this for you. With ESO, a hand-made Secret, or a Linux service key file, restart them yourself (below). |
+| Service key | Restart the collector and gateway after the new key is available. The VSO example restarts them when it syncs the key. With ESO or a Secret you update yourself, confirm that the Kubernetes Secret has received the new key before restarting. On Linux, replace the key file before restarting. |
 | Kubernetes targets or other Helm values | Run `helm upgrade`. The chart restarts the workloads whose configuration changed: target changes restart the collector and NICo, and gateway settings restart the gateway. |
 | Linux targets, NICo controls, or service environment settings | Restart the affected services so they apply the shared settings together. `sudo systemctl restart fleetint-oob.target` restarts the bundled stack. NICo regenerates its configuration when its service starts. |
 

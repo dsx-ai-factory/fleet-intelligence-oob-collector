@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import fcntl
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
 import pty
+from queue import Queue
 import re
 import select
 import shutil
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+from threading import Thread
 import time
 import unittest
 
@@ -24,6 +27,8 @@ SCRIPT = (ROOT / "install.sh").read_text()
 CHART_LOOKUP = ["helm", "show", "chart", "fleet-intelligence-oob-collector",
                 "--repo", "https://helm.ngc.nvidia.com/nvidia/fleet-intelligence"]
 CURRENT_CONTEXT = ["kubectl", "config", "current-context"]
+HELM_LIST = ["helm", "list", "--namespace", "fleet-intelligence", "--kube-context", "test-context",
+             "--short", "--filter", "^fleet-intelligence-oob-collector$"]
 
 
 def terminal_screen(text, columns, rows=24):
@@ -77,6 +82,60 @@ def terminal_screen(text, columns, rows=24):
     return cells
 
 
+class HelmKubeAPI(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def respond(self, code, payload):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode())
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        resources = {"kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "v1", "resources": [
+            {"name": "configmaps", "singularName": "configmap", "kind": "ConfigMap", "namespaced": True,
+             "verbs": ["get", "create", "patch"]},
+            {"name": "secrets", "singularName": "secret", "kind": "Secret", "namespaced": True,
+             "verbs": ["get", "create", "list", "update"]},
+        ]}
+        payload = {
+            "/version": {"major": "1", "minor": "34", "gitVersion": "v1.34.0"},
+            "/api": {"kind": "APIVersions", "apiVersion": "v1", "versions": ["v1"]},
+            "/apis": {"kind": "APIGroupList", "apiVersion": "v1", "groups": []},
+            "/api/v1": resources,
+            "/api/v1/namespaces/fixture/secrets": {"kind": "SecretList", "apiVersion": "v1", "items": []},
+        }.get(path, self.server.objects.get(path))
+        if payload is not None:
+            self.respond(200, payload)
+        else:
+            self.respond(404, {"kind": "Status", "apiVersion": "v1", "status": "Failure",
+                               "reason": "NotFound", "code": 404})
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if path.endswith("/secrets"):
+            self.respond(201, {"kind": "Secret", "apiVersion": "v1"})
+            return
+        if path.endswith("/configmaps"):
+            self.server.writes.put(("POST", path))
+        resource = json.loads(body)
+        resource["metadata"]["resourceVersion"] = "1"
+        self.server.objects[path + "/" + resource["metadata"]["name"]] = resource
+        self.respond(201, resource)
+
+    def do_PUT(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.respond(200, {"kind": "Secret", "apiVersion": "v1"})
+
+    def do_PATCH(self):
+        self.server.writes.put(("PATCH", self.path.split("?", 1)[0]))
+        self.respond(403, {"kind": "Status", "apiVersion": "v1", "status": "Failure",
+                           "reason": "Forbidden", "code": 403})
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -108,6 +167,14 @@ class InstallerTests(unittest.TestCase):
         for value in ("1", "443", "65535", "00000443"):
             self.assertEqual(self.validate("valid_port", value).returncode, 0)
 
+    def test_rejects_release_names_that_collide_with_the_gateway(self):
+        chart = "fleet-intelligence-oob-collector"
+        longest_short_name = "a" * (61 - len(chart) - 1)
+        for value in ("fleet-intelligence-staging-east", longest_short_name + "a", longest_short_name + "aa"):
+            self.assertNotEqual(self.validate("valid_release", value).returncode, 0)
+        for value in (longest_short_name, chart + "-staging-east"):
+            self.assertEqual(self.validate("valid_release", value).returncode, 0)
+
     def test_questionnaire_handles_multiple_targets_and_retries_invalid_answers(self):
         answers = ["test-context", "", "", "1.2.3", "", "zone", "group", "no",
                    "compute", "not-an-ip", "192.0.2.10", "001122334455", "", "node-01", "bmc", "", "", "rack", "rack-12", "",
@@ -131,7 +198,7 @@ class InstallerTests(unittest.TestCase):
                    color_mode="truecolor", echo=False, terminal=None, input_delay=0, input_signal=None,
                    missing_stty=False, glyphs=None, chart_token="enrollmentToken", existing_nico="no",
                    version_answer="1.2.3", chart_metadata="appVersion: 9.9.9\nversion: 1.4.2", install_env=None,
-                   result_keys=("\n",), workflow="advanced", current_context="test-context"):
+                   result_keys=("\n",), workflow="advanced", current_context="test-context", setup_signal=None):
         mock = self.directory / "mock.py"
         mock.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, signal, subprocess, sys, time
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
@@ -142,9 +209,23 @@ if name == 'helm':
     if args == ['version', '--short']:
         print(os.environ['TEST_HELM_VERSION'])
     if args[:2] == ['show', 'chart']:
-        if failure == 'chart-lookup':
+        if '--repo' in args:
+            if failure == 'chart-lookup':
+                sys.exit(1)
+            print(os.environ['CHART_METADATA'])
+        else:
+            print(pathlib.Path(args[2]).read_text())
+    if args[0] == 'pull':
+        version = args[args.index('--version') + 1]
+        if failure == 'chart-version-mismatch':
+            version = version.split('+')[0]
+        pathlib.Path(args[args.index('--destination') + 1], 'downloaded.tgz').write_text(f'version: {version}')
+    if args[0] == 'list':
+        if failure == 'release-lookup':
+            print('release lookup forbidden', file=sys.stderr)
             sys.exit(1)
-        print(os.environ['CHART_METADATA'])
+        if failure == 'existing-release':
+            print(args[args.index('--filter') + 1][1:-1])
     if args[:2] == ['show', 'values']:
         if failure == 'show-values':
             sys.exit(1)
@@ -155,10 +236,10 @@ if name == 'helm':
     if failure == 'template' and args[0] == 'template':
         sys.exit(1)
     if args[0] == 'template' and os.environ['REAL_RENDER']:
-        sys.exit(subprocess.run([os.environ['REAL_HELM'], 'template', 'test', os.environ['CHART'], '--values', str(path)]).returncode)
-    if failure == 'upgrade' and args[0] == 'upgrade':
+        sys.exit(subprocess.run([os.environ['REAL_HELM'], 'template', args[1], os.environ['CHART'], '--values', str(path)]).returncode)
+    if failure == 'install' and args[0] == 'install':
         sys.exit(1)
-    if failure == 'terminate' and args[0] == 'upgrade':
+    if failure == 'terminate' and args[0] == 'install':
         os.kill(os.getppid(), signal.SIGTERM)
         time.sleep(5)
 elif args == ['config', 'current-context']:
@@ -173,8 +254,22 @@ elif 'secret' in args and 'get' in args:
             print('secret/example')
     else:
         print('0' if failure == 'empty-key' else '24')
+elif 'get' in args and 'namespace' in args:
+    if failure == 'existing-namespace' or pathlib.Path('namespace-created').exists():
+        print('namespace/fixture')
 elif 'create' in args and 'namespace' in args:
+    if failure == 'namespace-create':
+        print('namespace create forbidden', file=sys.stderr)
+        sys.exit(1)
+    pathlib.Path('namespace-created').touch()
+    if failure == 'namespace-race':
+        print('namespace already exists', file=sys.stderr)
+        sys.exit(1)
     print('namespace fixture')
+elif 'create' in args and 'secret' in args:
+    source = next(arg.split('=', 2)[2] for arg in args if arg.startswith('--from-file='))
+    assert source == '/dev/fd/4'
+    assert pathlib.Path(source).read_bytes() == b'fixture-secret-never-print'
 elif 'apply' in args:
     sys.stdin.read()
 elif 'wait' in args and failure == 'namespace-wait':
@@ -210,6 +305,10 @@ elif 'logs' in args and '--tail=500' in args:
         print('2026-01-01T00:00:00Z WARN fleet_intelligence_oob: BMC login failed')
     elif failure == 'legacy-inventory':
         print('2026-01-01T00:00:00Z INFO fleet_intelligence_oob: inventory mini-batch export completed exportable_count=1')
+    elif failure == 'large-inventory-tail':
+        print(('unrelated log line ' + 'x' * 340 + '\\n') * 400, end='')
+        if not any(arg.startswith('--limit-bytes=') for arg in args):
+            print('2026-01-01T00:00:00Z INFO fleet_intelligence_oob: first inventory upload accepted in this cycle')
     else:
         polls = sum('--tail=500' in json.loads(line) for line in pathlib.Path(os.environ['CALL_LOG']).read_text().splitlines())
         if failure == 'inventory-retry' and polls == 1:
@@ -234,7 +333,7 @@ elif 'logs' in args:
         sleep.write_text("#!/bin/sh\nexit 0\n")
         sleep.chmod(0o700)
         log, saved = self.directory / "calls.jsonl", self.directory / "saved-values.json"
-        private_file = self.directory / "private input $(touch SENTINEL)"
+        private_file = self.directory / "private site=west, $(touch SENTINEL)"
         private_file.write_text("fixture-secret-never-print")
         if fail == "missing-file":
             private_file.unlink()
@@ -251,6 +350,11 @@ elif 'logs' in args:
                 if name == "stty" and missing_stty:
                     continue
                 (self.directory / name).symlink_to(shutil.which(name))
+        if setup_signal:
+            stty = self.directory / "stty"
+            stty.write_text(f'#!/bin/sh\n{shutil.which("stty")} "$@" || exit $?\n'
+                            f'if [ "$1" = -echo ]; then kill -{setup_signal.name[3:]} "$PPID"; fi\n')
+            stty.chmod(0o700)
         env = {key: value for key, value in os.environ.items() if not key.startswith("FLEETINT_INSTALL_")}
         env.update(PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
                    CALL_LOG=str(log), TEST_MODE=mode, FAIL_AT=fail, SAVED_VALUES=str(saved), TEST_HELM_VERSION=helm_version,
@@ -398,7 +502,7 @@ elif 'logs' in args:
         self.assertIn("first inventory upload accepted in this cycle", output)
 
     def test_default_basic_workflow_installs_one_bmc_with_recommended_settings(self):
-        private_file = str(self.directory / "private input $(touch SENTINEL)")
+        private_file = str(self.directory / "private site=west, $(touch SENTINEL)")
         answers = ["", "", "192.0.2.10", "001122334455", "", private_file, "", private_file, "yes"]
         code, output, calls, saved = self.run_script(
             workflow=None, ui="auto", mode="file", answers=answers, real_render=bool(shutil.which("helm")),
@@ -415,10 +519,10 @@ elif 'logs' in args:
             self.assertNotIn(text, output)
         self.assertIn(CURRENT_CONTEXT, calls)
         self.assertIn(CHART_LOOKUP, calls)
-        upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
-        self.assertEqual(upgrade[3], "fleet-intelligence-oob-collector")
-        for flag, value in (("--kube-context", "test-context"), ("--namespace", "fleet-intelligence"), ("--version", "1.4.2")):
-            self.assertEqual(upgrade[upgrade.index(flag) + 1], value)
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        self.assertEqual(install[2], "fleet-intelligence-oob-collector")
+        for flag, value in (("--kube-context", "test-context"), ("--namespace", "fleet-intelligence")):
+            self.assertEqual(install[install.index(flag) + 1], value)
         values = json.loads(saved.read_text())
         self.assertEqual(values["inventory"], {"computeZone": "", "nodeGroup": "", "targets": [{
             "address": "192.0.2.10", "mac": "00:11:22:33:44:55", "kind": "unknown", "port": 443,
@@ -428,7 +532,7 @@ elif 'logs' in args:
         self.assertEqual(len([c for c in calls if "create" in c and "secret" in c]), 2)
 
     def test_basic_workflow_uses_exported_values_and_skips_prefilled_inputs(self):
-        private_file = str(self.directory / "private input $(touch SENTINEL)")
+        private_file = str(self.directory / "private site=west, $(touch SENTINEL)")
         defaults = {
             "KUBE_CONTEXT": "env-context", "NAMESPACE": "env-ns", "CHART_VERSION": "2.3.4",
             "BMC_KIND": "compute", "BMC_IP": "192.0.2.1", "BMC_MAC": "02:00:00:00:00:01",
@@ -447,9 +551,9 @@ elif 'logs' in args:
             self.assertNotIn(text, output)
         self.assertNotIn(CURRENT_CONTEXT, calls)
         self.assertNotIn(CHART_LOOKUP, calls)
-        upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
-        for flag, value in (("--kube-context", "env-context"), ("--namespace", "env-ns"), ("--version", "2.3.4")):
-            self.assertEqual(upgrade[upgrade.index(flag) + 1], value)
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        for flag, value in (("--kube-context", "env-context"), ("--namespace", "env-ns")):
+            self.assertEqual(install[install.index(flag) + 1], value)
         values = json.loads(saved.read_text())
         self.assertEqual(values["inventory"]["targets"], [{
             "address": "192.0.2.1", "mac": "02:00:00:00:00:01", "kind": "compute", "port": 8443,
@@ -467,7 +571,8 @@ elif 'logs' in args:
         self.assertIn("Context: chosen-context", output)
         self.assertIn("Chart version: 1.2.3", output)
         self.assertIn("Installation cancelled; no cluster changes were made.", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CURRENT_CONTEXT, CHART_LOOKUP])
+        self.assertEqual(calls[:-1], [["helm", "version", "--short"], CURRENT_CONTEXT, CHART_LOOKUP])
+        self.assertEqual(calls[-1][:2], ["helm", "list"])
         self.assertFalse(saved.exists())
 
     def test_enter_accepts_and_pins_the_latest_chart_in_plain_and_tui_modes(self):
@@ -479,9 +584,12 @@ elif 'logs' in args:
                 self.assertIn("NGC chart version [1.4.2]" if ui == "plain" else "Default: 1.4.2", output)
                 self.assertIn("Chart version: 1.4.2", output)
                 self.assertEqual(calls[1], CHART_LOOKUP)
-                for command in (["show", "values"], ["template"], ["upgrade", "--install"]):
-                    call = next(c for c in calls if c[:len(command) + 1] == ["helm", *command])
-                    self.assertEqual(call[call.index("--version") + 1], "1.4.2")
+                pulls = [c for c in calls if c[:2] == ["helm", "pull"]]
+                self.assertEqual(len(pulls), 1)
+                self.assertEqual(pulls[0][pulls[0].index("--version") + 1], "1.4.2")
+                chart_package = next(c[3] for c in calls if c[:3] == ["helm", "show", "values"])
+                self.assertEqual(chart_package, next(c[3] for c in calls if c[:2] == ["helm", "template"]))
+                self.assertEqual(chart_package, next(c[3] for c in calls if c[:2] == ["helm", "install"]))
 
     def test_unavailable_default_leaves_an_exact_version_required(self):
         cases = (("chart-lookup", ""), ("", "appVersion: 9.9.9"),
@@ -495,8 +603,8 @@ elif 'logs' in args:
                 code, output, calls, _ = self.run_script(fail=fail, chart_metadata=metadata, answers=answers)
                 self.assertEqual(code, 0, output)
                 self.assertIn("Latest release lookup failed", output)
-                upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
-                self.assertEqual(upgrade[upgrade.index("--version") + 1], "1.2.3")
+                pull = next(c for c in calls if c[:2] == ["helm", "pull"])
+                self.assertEqual(pull[pull.index("--version") + 1], "1.2.3")
 
     def test_exported_defaults_are_labeled_and_used_in_plain_and_tui_modes(self):
         for ui in ("plain", "tui"):
@@ -533,10 +641,10 @@ elif 'logs' in args:
                 for key in legacy:
                     self.assertNotIn(f"From environment: {key}", output)
                 self.assertNotIn(CHART_LOOKUP, calls)
-                upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
-                self.assertEqual(upgrade[3], "env-release")
-                for flag, value in (("--kube-context", "env-context"), ("--namespace", "env-ns"), ("--version", "2.3.4")):
-                    self.assertEqual(upgrade[upgrade.index(flag) + 1], value)
+                install = next(c for c in calls if c[:2] == ["helm", "install"])
+                self.assertEqual(install[2], "env-release")
+                for flag, value in (("--kube-context", "env-context"), ("--namespace", "env-ns")):
+                    self.assertEqual(install[install.index(flag) + 1], value)
                 values = json.loads(saved.read_text())
                 self.assertEqual(values["inventory"], {
                     "computeZone": "env-zone", "nodeGroup": "env-group", "targets": [{
@@ -552,11 +660,11 @@ elif 'logs' in args:
                 self.assertEqual(values["imagePullSecrets"], [{"name": "env-registry"}])
                 secret_creates = [c for c in calls if c[0] == "kubectl" and "create" in c and "secret" in c]
                 self.assertEqual(len(secret_creates), 2)
-                self.assertIn(f"--from-file=bmc.json={credentials}", secret_creates[0])
-                self.assertIn(f"--from-file=key={service_key}", secret_creates[1])
+                self.assertIn("--from-file=bmc.json=/dev/fd/4", secret_creates[0])
+                self.assertIn("--from-file=key=/dev/fd/4", secret_creates[1])
 
     def test_legacy_service_key_file_variable_still_creates_a_secret(self):
-        service_key = self.directory / "private input $(touch SENTINEL)"
+        service_key = self.directory / "private site=west, $(touch SENTINEL)"
         defaults = {"FLEETINT_INSTALL_ENROLLMENT_TOKEN_FILE": str(service_key),
                     "FLEETINT_INSTALL_SERVICE_KEY_SECRET_NAME": "custom-service-key"}
         answers = ["", "192.0.2.10", "001122334455", "", str(service_key), "", "yes"]
@@ -571,7 +679,7 @@ elif 'logs' in args:
         })
         secret_creates = [c for c in calls if c[0] == "kubectl" and "create" in c and "secret" in c]
         self.assertEqual(len(secret_creates), 2)
-        self.assertIn(f"--from-file=agent-token={service_key}", secret_creates[1])
+        self.assertIn("--from-file=agent-token=/dev/fd/4", secret_creates[1])
 
     def test_answers_override_defaults_and_bmc_environment_only_applies_to_first_target(self):
         exported = {
@@ -588,9 +696,10 @@ elif 'logs' in args:
                    "existing", "", "", "existing", "", "", "", "yes"]
         code, output, calls, saved = self.run_script(ui="tui", install_env=exported, answers=answers)
         self.assertEqual(code, 0, output)
-        upgrade = next(c for c in calls if c[:3] == ["helm", "upgrade", "--install"])
-        self.assertEqual(upgrade[upgrade.index("--namespace") + 1], "manual-ns")
-        self.assertEqual(upgrade[upgrade.index("--version") + 1], "1.2.3")
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        self.assertEqual(install[install.index("--namespace") + 1], "manual-ns")
+        pull = next(c for c in calls if c[:2] == ["helm", "pull"])
+        self.assertEqual(pull[pull.index("--version") + 1], "1.2.3")
         targets = json.loads(saved.read_text())["inventory"]["targets"]
         self.assertEqual([(t["kind"], t["address"], t["port"]) for t in targets],
                          [("compute", "192.0.2.1", 8443), ("unknown", "192.0.2.2", 443)])
@@ -633,21 +742,22 @@ elif 'logs' in args:
         for call in calls:
             if call[0] == "kubectl":
                 self.assertEqual(call[call.index("--context") + 1], "test-context")
-        upgrade = next(c for c in calls if "upgrade" in c)
-        self.assertIn("--wait", upgrade)
-        self.assertFalse(any(arg.startswith("--server-side") for arg in upgrade))
-        self.assertEqual(upgrade[upgrade.index("--version") + 1], "1.2.3")
-        self.assertEqual(upgrade[upgrade.index("--kube-context") + 1], "test-context")
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        self.assertIn("--wait", install)
+        self.assertFalse(any(arg.startswith("--server-side") for arg in install))
+        pull = next(c for c in calls if c[:2] == ["helm", "pull"])
+        self.assertEqual(pull[pull.index("--version") + 1], "1.2.3")
+        self.assertEqual(install[install.index("--kube-context") + 1], "test-context")
 
     def test_helm4_installs_with_client_side_apply_and_legacy_wait(self):
         code, output, calls, saved = self.run_script(helm_version="v4.0.0", ui="tui", no_python=True)
         self.assertEqual(code, 0, output)
         self.assertTrue(saved.is_file())
-        upgrade = next(c for c in calls if c[:2] == ["helm", "upgrade"])
-        self.assertIn("--server-side=false", upgrade)
-        self.assertIn("--wait=legacy", upgrade)
-        self.assertNotIn("--wait", upgrade)
-        self.assertEqual(upgrade[upgrade.index("--timeout") + 1], "10m")
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        self.assertIn("--server-side=false", install)
+        self.assertIn("--wait=legacy", install)
+        self.assertNotIn("--wait", install)
+        self.assertEqual(install[install.index("--timeout") + 1], "10m")
         self.assertTrue(any(c[:2] == ["helm", "status"] for c in calls))
 
     def test_unsupported_helm_versions_fail_before_questions_or_cluster_access(self):
@@ -662,12 +772,37 @@ elif 'logs' in args:
     def test_helm4_declining_confirmation_makes_no_cluster_changes(self):
         code, output, calls, _ = self.run_script(helm_version="v4.3.2+g8346aaa", confirm="no")
         self.assertEqual(code, 0, output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, HELM_LIST])
 
     def test_helm4_preflight_failure_makes_no_cluster_changes(self):
         code, _, calls, _ = self.run_script(helm_version="v4.0.0", fail="template")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any("create" in c or "apply" in c or "upgrade" in c for c in calls))
+        self.assertFalse(any("create" in c or "apply" in c or "install" in c for c in calls))
+
+    def test_chart_version_mismatch_stops_before_namespace_or_release_creation(self):
+        code, output, calls, saved = self.run_script(fail="chart-version-mismatch", version_answer="1.2.3+build.2")
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("does not match the reviewed version 1.2.3+build.2", output)
+        self.assertFalse(any("create" in c or "install" in c for c in calls))
+        self.assertFalse(saved.exists())
+
+    def test_existing_release_redirects_to_saved_values_before_confirmation(self):
+        for version in ("v3.19.0", "v4.0.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                self.directory = Path(directory)
+                code, output, calls, saved = self.run_script(helm_version=version, fail="existing-release")
+                self.assertNotEqual(code, 0, output)
+                self.assertIn("#change-settings-after-installation", output)
+                self.assertNotIn("Install with these settings?", output)
+                lookup = [*HELM_LIST, "--all"] if version.startswith("v3.") else HELM_LIST
+                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, lookup])
+                self.assertFalse(saved.exists())
+
+    def test_failed_release_lookup_stops_before_confirmation(self):
+        code, output, calls, _ = self.run_script(ui="tui", fail="release-lookup")
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("release lookup forbidden", output)
+        self.assertFalse(any(c[0] == "kubectl" or "install" in c for c in calls))
 
     def test_selected_chart_controls_the_token_values_field(self):
         for chart_field in ("enrollmentToken", "agentToken", "both"):
@@ -680,18 +815,17 @@ elif 'logs' in args:
                 self.assertEqual(set(backend), {"url", expected})
                 self.assertEqual(backend[expected], {"existingSecret": "fleet-intelligence-oob-collector-agent-token", "secretKey": "agent-token"})
                 show = next(c for c in calls if c[:3] == ["helm", "show", "values"])
-                self.assertEqual(show[show.index("--version") + 1], "1.2.3")
                 self.assertLess(calls.index(show), next(i for i, c in enumerate(calls) if c[:2] == ["helm", "template"]))
 
     def test_unreadable_chart_defaults_stop_before_cluster_mutations(self):
         code, _, calls, _ = self.run_script(fail="show-values")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any("create" in c or "apply" in c or "upgrade" in c for c in calls))
+        self.assertFalse(any("create" in c or "apply" in c or "install" in c for c in calls))
 
     def test_unsupported_chart_defaults_stop_before_cluster_mutations(self):
         code, _, calls, _ = self.run_script(chart_token="")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any("create" in c or "apply" in c or "upgrade" in c for c in calls))
+        self.assertFalse(any("create" in c or "apply" in c or "install" in c for c in calls))
 
     def test_installs_without_python_or_jq_on_path(self):
         code, output, _, _ = self.run_script(no_python=True)
@@ -789,7 +923,7 @@ elif 'logs' in args:
         self.assertEqual(code, 0, output)
         self.assertIn("Terminal smaller than 80x24", output)
         self.assertNotIn("\x1b[?1049h", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_forced_tui_rejects_a_short_terminal_before_cluster_changes(self):
         code, output, calls, _ = self.run_script(ui="tui", rows=20)
@@ -833,12 +967,12 @@ elif 'logs' in args:
                 self.assertIn("test-context", lines[top + 1])
                 self.assertTrue(all(not shaded for _, shaded in field[:left + 1] + field[right:]))
                 self.assertTrue(all(shaded for _, shaded in field[left + 1:right]))
-                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_input_remains_responsive_after_an_idle_timeout(self):
         code, output, calls, _ = self.run_script(ui="tui", input_delay=1.2, confirm="no", echo=True)
         self.assertEqual(code, 0, output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_termination_during_input_restores_terminal_modes(self):
         code, output, calls, _ = self.run_script(ui="tui", input_signal=signal.SIGTERM, input_delay=0.1, echo=True)
@@ -846,12 +980,20 @@ elif 'logs' in args:
         self.assertIn("\x1b[?1049l", output)
         self.assertEqual(calls, [["helm", "version", "--short"]])
 
+    def test_signal_before_input_restores_original_terminal_modes(self):
+        for event in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                self.directory = Path(directory)
+                code, output, calls, _ = self.run_script(ui="tui", setup_signal=event, echo=True)
+                self.assertEqual(code, 128 + event, output)
+                self.assertEqual(calls, [["helm", "version", "--short"]])
+
     def test_missing_stty_uses_plain_prompts_with_a_visible_notice(self):
         code, output, calls, _ = self.run_script(ui="fallback", no_python=True, missing_stty=True, confirm="no")
         self.assertEqual(code, 0, output)
         self.assertIn("stty unavailable; using plain text prompts.", output)
         self.assertNotIn("\x1b[?1049h", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_multiline_paste_is_rejected_without_answering_later_questions(self):
         answers = ["\x1b[200~bad\ncontext\x1b[201~", "demo-cluster", "", "", "1.2.3", "", "zone", "group", "no",
@@ -859,8 +1001,8 @@ elif 'logs' in args:
                    "existing", "", "", "existing", "", "", "", "yes"]
         code, output, calls, _ = self.run_script(ui="tui", answers=answers, echo=True)
         self.assertEqual(code, 0, output)
-        upgrade = next(c for c in calls if c[:2] == ["helm", "upgrade"])
-        self.assertEqual(upgrade[upgrade.index("--kube-context") + 1], "demo-cluster")
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        self.assertEqual(install[install.index("--kube-context") + 1], "demo-cluster")
 
     def test_no_options_defaults_to_unicode_tui_in_any_locale(self):
         for c_locale in (True, False):
@@ -873,7 +1015,7 @@ elif 'logs' in args:
                 self.assertIn("╭───╮", output)
                 self.assertIn("● Cluster", output)
                 self.assertNotIn("[===]", output)
-                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+                self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_unicode_override_works_with_a_c_locale_and_generic_terminal(self):
         code, output, calls, _ = self.run_script(ui="tui", glyphs="unicode", ascii_only=True,
@@ -883,7 +1025,7 @@ elif 'logs' in args:
         self.assertIn("● Cluster", output)
         self.assertNotIn("[===]", output)
         self.assertNotIn("48;", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_ascii_override_works_with_a_utf8_locale(self):
         code, output, calls, _ = self.run_script(ui="tui", glyphs="ascii", terminal="xterm-ghostty", confirm="no")
@@ -891,13 +1033,13 @@ elif 'logs' in args:
         output.encode("ascii")
         self.assertIn("[===]", output)
         self.assertIn("\x1b[?1049h", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_unicode_override_does_not_force_tui_or_override_plain_mode(self):
         code, output, calls, _ = self.run_script(ui="plain", glyphs="unicode", confirm="no")
         self.assertEqual(code, 0, output)
         self.assertNotIn("\x1b", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_ghostty_uses_unicode_borders_with_a_c_locale(self):
         code, output, calls, _ = self.run_script(ui="tui", terminal="xterm-ghostty", ascii_only=True, color_mode="", confirm="no")
@@ -905,7 +1047,7 @@ elif 'logs' in args:
         self.assertIn("╭───╮", output)
         self.assertIn("● Cluster", output)
         self.assertIn("48;2;16;20;24m", output)
-        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP])
+        self.assertEqual(calls, [["helm", "version", "--short"], CHART_LOOKUP, [*HELM_LIST, "--all"]])
 
     def test_field_editing_preserves_the_submitted_value(self):
         cases = (("demo-clustr\x1b[De\x1b[F", "demo-cluster"),
@@ -922,8 +1064,8 @@ elif 'logs' in args:
                            "existing", "", "", "existing", "", "", "", "yes"]
                 code, output, calls, _ = self.run_script(ui="tui", answers=answers, echo=True)
                 self.assertEqual(code, 0, output)
-                upgrade = next(c for c in calls if c[:2] == ["helm", "upgrade"])
-                self.assertEqual(upgrade[upgrade.index("--kube-context") + 1], expected)
+                install = next(c for c in calls if c[:2] == ["helm", "install"])
+                self.assertEqual(install[install.index("--kube-context") + 1], expected)
 
     def test_tui_auto_detection_needs_no_additional_tools(self):
         code, output, _, _ = self.run_script(ui="auto", no_python=True)
@@ -968,7 +1110,7 @@ elif 'logs' in args:
         self.assertIn("[OK]  NICo health Deployment ready", output.replace("\x1b[0m", ""))
 
     def test_tui_install_failure_does_not_report_completion(self):
-        code, output, _, _ = self.run_script(ui="tui", fail="upgrade")
+        code, output, _, _ = self.run_script(ui="tui", fail="install")
         self.assertNotEqual(code, 0)
         self.assertIn("[3/5]", output)
         self.assertNotIn("[done]", output)
@@ -977,8 +1119,25 @@ elif 'logs' in args:
         code, output, calls, _ = self.run_script(fail="namespace-wait")
         self.assertNotEqual(code, 0, output)
         self.assertIn("namespace never became Active", output)
-        self.assertFalse(any(call[:3] == ["helm", "upgrade", "--install"] for call in calls))
+        self.assertFalse(any(call[:2] == ["helm", "install"] for call in calls))
         self.assertNotIn("[done]", output)
+
+    def test_namespace_creation_preserves_existing_namespaces_and_tolerates_race(self):
+        for scenario, creates in (("existing-namespace", 0), ("namespace-race", 1)):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                self.directory = Path(directory)
+                code, output, calls, _ = self.run_script(fail=scenario)
+                self.assertEqual(code, 0, output)
+                mutations = [c for c in calls if c[0] == "kubectl" and ("create" in c or "apply" in c)]
+                self.assertEqual(len(mutations), creates)
+                self.assertTrue(all("create" in c and "namespace" in c for c in mutations))
+                self.assertTrue(any("wait" in c and "namespace/fleet-intelligence" in c for c in calls))
+
+    def test_namespace_creation_failure_stops_before_secrets(self):
+        code, output, calls, _ = self.run_script(fail="namespace-create", mode="file")
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("namespace create forbidden", output)
+        self.assertFalse(any("secret" in c or "install" in c for c in calls))
 
     def test_installer_waits_for_all_rollouts_and_an_accepted_upload(self):
         code, output, calls, _ = self.run_script(
@@ -1019,7 +1178,7 @@ elif 'logs' in args:
         code, output, calls, _ = self.run_script(fail="missing-nico")
         self.assertNotEqual(code, 0, output)
         self.assertIn("Expected one NICo health Deployment", output)
-        self.assertTrue(any(call[:3] == ["helm", "upgrade", "--install"] for call in calls))
+        self.assertTrue(any(call[:2] == ["helm", "install"] for call in calls))
         self.assertNotIn("[done]", output)
 
     def test_rollout_failure_displays_release_events_and_relevant_logs(self):
@@ -1054,6 +1213,12 @@ elif 'logs' in args:
         self.assertIn("Collector still has no confirmed inventory upload", output)
         self.assertGreater(sum("--tail=500" in call for call in calls), 1)
         self.assertNotIn("[done]", output)
+
+    def test_inventory_receipt_after_large_earlier_log_lines_is_seen(self):
+        code, output, calls, _ = self.run_script(fail="large-inventory-tail")
+        self.assertEqual(code, 0, output)
+        self.assertIn("first inventory upload accepted in this cycle", output)
+        self.assertEqual(sum("--tail=500" in c for c in calls), 1)
 
     def test_forbidden_inventory_logs_explain_the_stalled_verification(self):
         code, output, calls, _ = self.run_script(fail="logs-forbidden")
@@ -1107,25 +1272,25 @@ elif 'logs' in args:
         })
         self.assertEqual(code, 0, output)
         self.assertIn("From environment: FLEETINT_INSTALL_NAMESPACE", output)
-        self.assertFalse(any(c[0] == "kubectl" or "upgrade" in c for c in calls))
+        self.assertFalse(any(c[0] == "kubectl" or "install" in c for c in calls))
 
     def test_preflight_failure_makes_no_cluster_changes(self):
         code, _, calls, _ = self.run_script(fail="template")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any("create" in c or "apply" in c or "upgrade" in c for c in calls))
+        self.assertFalse(any("create" in c or "apply" in c or "install" in c for c in calls))
 
     def test_secret_read_failure_never_creates_or_installs(self):
         code, _, calls, _ = self.run_script(mode="file", fail="secret-read")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any(("secret" in c and "create" in c) or "upgrade" in c for c in calls))
+        self.assertFalse(any(("secret" in c and "create" in c) or "install" in c for c in calls))
 
     def test_empty_secret_key_stops_install(self):
         code, _, calls, _ = self.run_script(fail="empty-key")
         self.assertNotEqual(code, 0)
-        self.assertFalse(any("upgrade" in c for c in calls))
+        self.assertFalse(any("install" in c for c in calls))
 
     def test_helm_failure_cleans_up(self):
-        code, _, calls, _ = self.run_script(fail="upgrade")
+        code, _, calls, _ = self.run_script(fail="install")
         self.assertNotEqual(code, 0)
         self.assertFalse(any("status" in c for c in calls))
 
@@ -1139,11 +1304,48 @@ elif 'logs' in args:
         if not shutil.which("helm"):
             self.skipTest("Helm is unavailable")
         version = subprocess.run(["helm", "version", "--short"], check=True, text=True, capture_output=True).stdout.strip()
-        code, output, calls, _ = self.run_script(real_render=True, helm_version=version)
+        code, output, _, _ = self.run_script(real_render=True, helm_version=version)
         self.assertEqual(code, 0, output)
-        upgrade = next(c for c in calls if c[:2] == ["helm", "upgrade"])
-        result = subprocess.run(["helm", "upgrade", "--help", *[arg for arg in upgrade if arg.startswith(("--wait", "--server-side"))]], text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_real_helm4_first_install_creates_workload_without_patching(self):
+        helm = shutil.which("helm")
+        if not helm:
+            self.skipTest("Helm is unavailable")
+        version = subprocess.check_output([helm, "version", "--short"], text=True).strip()
+        if not version.startswith("v4."):
+            self.skipTest("Helm 4 install behavior only")
+        code, output, calls, _ = self.run_script(helm_version=version)
+        self.assertEqual(code, 0, output)
+        install = next(c for c in calls if c[:2] == ["helm", "install"])
+        chart = self.directory / "fixture-chart"
+        (chart / "templates").mkdir(parents=True)
+        (chart / "Chart.yaml").write_text("apiVersion: v2\nname: fixture\nversion: 1.0.0\n")
+        (chart / "templates" / "cm.yaml").write_text("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fixture\n")
+
+        with HTTPServer(("127.0.0.1", 0), HelmKubeAPI) as server:
+            server.writes = Queue()
+            server.objects = {}
+            runner = Thread(target=server.serve_forever)
+            runner.start()
+            try:
+                kubeconfig = self.directory / "kubeconfig"
+                kubeconfig.write_text(json.dumps({
+                    "apiVersion": "v1", "kind": "Config", "current-context": "fixture",
+                    "clusters": [{"name": "fixture", "cluster": {"server": f"http://127.0.0.1:{server.server_port}"}}],
+                    "contexts": [{"name": "fixture", "context": {"cluster": "fixture", "namespace": "fixture"}}],
+                }))
+                env = {key: value for key, value in os.environ.items() if not key.startswith("HELM_KUBE")}
+                env.update(HELM_DRIVER="secret", NO_PROXY="127.0.0.1")
+                flags = [arg for arg in install if arg.startswith(("--wait", "--server-side"))]
+                result = subprocess.run([helm, "install", "fixture", str(chart), *flags, "--kubeconfig", str(kubeconfig),
+                                         "--namespace", "fixture", "--disable-openapi-validation", "--timeout", "5s"],
+                                        text=True, capture_output=True, timeout=10, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(server.writes.get_nowait(), ("POST", "/api/v1/namespaces/fixture/configmaps"))
+                self.assertTrue(server.writes.empty())
+            finally:
+                server.shutdown()
+                runner.join()
 
     def test_missing_terminal_fails_before_cluster_access(self):
         result = subprocess.run(["bash"], input=SCRIPT, text=True, capture_output=True, start_new_session=True)

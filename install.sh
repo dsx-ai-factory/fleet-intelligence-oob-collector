@@ -7,6 +7,7 @@ fleetint_install() {
   set -eEuo pipefail
   export LC_ALL=C
   umask 077
+  chart=fleet-intelligence-oob-collector
   work_dir=''
   child_pid=''
   REPLY=''
@@ -68,7 +69,11 @@ fleetint_install() {
 
   valid_text() { [[ ${#1} -le 1024 ]]; }
   valid_label() { [[ ${#1} -le 63 && $1 =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; }
-  valid_release() { [[ ${#1} -le 53 ]] && valid_label "$1"; }
+  valid_release() {
+    [[ ${#1} -le 53 ]] && valid_label "$1" || return 1
+    # A truncated gateway name must have room for both the separator and suffix.
+    [[ $1 == *"$chart"* ]] || (( ${#1} + 1 + ${#chart} <= 61 ))
+  }
   valid_secret() {
     local part rest=$1
     [[ ${#rest} -le 253 && $rest != *. ]] || return 1
@@ -81,6 +86,16 @@ fleetint_install() {
   }
   valid_key() { [[ ${#1} -le 253 && $1 =~ ^[a-zA-Z0-9._-]+$ ]]; }
   valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; }
+  read_chart_version() {
+    local line
+    REPLY=''
+    while IFS= read -r line || [[ -n $line ]]; do
+      if [[ $line == 'version: '* ]]; then
+        REPLY=${line#version: }
+        break
+      fi
+    done < "$1"
+  }
   valid_yes_no() { [[ $1 == yes || $1 == no ]]; }
   valid_workflow() { [[ $1 == basic || $1 == advanced ]]; }
   valid_source() { [[ $1 == existing || $1 == file ]]; }
@@ -352,7 +367,7 @@ fleetint_install() {
       remaining=$((deadline - SECONDS))
       (( remaining > 0 )) || return 1
       request_timeout=$((remaining < 10 ? remaining : 10))
-      if run "${kube[@]}" logs "$deployment" --container collector --tail=500 --limit-bytes=131072 \
+      if run "${kube[@]}" logs "$deployment" --container collector --tail=500 \
           "--request-timeout=${request_timeout}s" "--pod-running-timeout=${request_timeout}s" \
           > "$work_dir/inventory-logs" 2> "$work_dir/log-error"; then
         if inventory_receipt "$work_dir/inventory-logs"; then
@@ -418,8 +433,9 @@ fleetint_install() {
         if [[ $workflow == basic ]]; then hint='No current context found. List with kubectl config get-contexts.'; fi
         ;;
       Namespace) title='Kubernetes namespace'; hint='Use a dedicated namespace to keep the workloads together.' ;;
-      'Helm release name') hint='Use this name to manage and upgrade the Helm release.' ;;
+      'Helm release name') hint='Use the default or a short name to keep workload names distinct.' ;;
       'Checking for the latest chart release') hint='Looking up the latest stable release in NGC. Ctrl-C cancels.' ;;
+      'Checking for an existing Helm release') hint='Looking up the release in the selected namespace. Ctrl-C cancels.' ;;
       'NGC chart version')
         title='Choose a chart version'
         if [[ -n ${FLEETINT_INSTALL_CHART_VERSION:-} ]]; then
@@ -925,7 +941,8 @@ fleetint_install() {
     if [[ -n "$existing" ]]; then
       printf 'Reusing Secret %s; its contents are not changed.\n' "$name"
     elif [[ -n "$file" ]]; then
-      run "${kube[@]}" create secret generic "$name" "--from-file=$key=$file" > /dev/null
+      # kubectl parses commas and equals signs in --from-file arguments.
+      run "${kube[@]}" create secret generic "$name" "--from-file=$key=/dev/fd/4" 4< "$file" > /dev/null
     else
       fail "Required Secret $name is missing; create/sync it before retrying."
     fi
@@ -1049,7 +1066,6 @@ fleetint_install() {
     fi
   fi
 
-  chart=fleet-intelligence-oob-collector
   repo=https://helm.ngc.nvidia.com/nvidia/fleet-intelligence
   guide=https://docs.nvidia.com/fleet-intel/oob-collector/installation
   printf '%s\n' 'Install the Fleet Intelligence OOB collector on Kubernetes.'
@@ -1089,17 +1105,8 @@ fleetint_install() {
     fi
     if run helm show chart "$chart" --repo "$repo" > "$work_dir/chart.yaml" 2>/dev/null; then
       # Helm selects the latest stable version unless given a version or --devel.
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        case $line in
-          'version: '*)
-            candidate=${line#version: }
-            if valid_version "$candidate" && [[ ${candidate%%+*} != *-* ]]; then
-              latest_version=$candidate
-            fi
-            break
-            ;;
-        esac
-      done < "$work_dir/chart.yaml"
+      read_chart_version "$work_dir/chart.yaml"
+      if valid_version "$REPLY" && [[ ${REPLY%%+*} != *-* ]]; then latest_version=$REPLY; fi
     fi
     if [[ -z $latest_version && $ui_active == no ]]; then
       printf 'Latest release lookup failed. Enter an exact chart version from the NGC listing in %s\n' "$guide"
@@ -1207,6 +1214,22 @@ fleetint_install() {
 
   if [[ $workflow == basic ]]; then ui_section='4 / 4  Review and install'
   else ui_section='6 / 6  Review and install'; fi
+  if [[ $ui_active == yes ]]; then
+    ui_screen 'Checking for an existing Helm release'
+    ui_flush
+  fi
+  release_lookup_args=(--namespace "$namespace" --kube-context "$context" --short --filter "^${release}$")
+  if [[ $tool_version == v3.* ]]; then release_lookup_args+=(--all); fi
+  if ! run helm list "${release_lookup_args[@]}" > "$work_dir/release-list" 2> "$work_dir/release-error"; then
+    ui_leave
+    show_diagnostic "$work_dir/release-error"
+    fail 'Could not check for an existing Helm release. Check Kubernetes access and retry.'
+  fi
+  if [[ -s "$work_dir/release-list" ]]; then
+    ui_leave
+    printf 'Helm release %s already exists in namespace %s. Use its saved values to update or recover it.\n' "$release" "$namespace" >&2
+    fail "$guide#change-settings-after-installation"
+  fi
   review_lines=()
   review_add "Context: $context"
   review_add "Namespace: $namespace"
@@ -1243,7 +1266,14 @@ fleetint_install() {
   gateway_selector="$release_selector,app.kubernetes.io/component=otel-gateway"
   install_status 1/5 'Checking cluster access and chart configuration'
   run "${kube[@]}" get --raw=/version --request-timeout=15s > /dev/null
-  run helm show values "$chart" --repo "$repo" --version "$version" > "$work_dir/chart-values.yaml"
+  run helm pull "$chart" --repo "$repo" --version "$version" --destination "$work_dir"
+  chart_packages=("$work_dir/"*.tgz)
+  (( ${#chart_packages[@]} == 1 )) && [[ -f ${chart_packages[0]} ]] || fail 'Expected one downloaded Helm chart package.'
+  package=${chart_packages[0]}
+  run helm show chart "$package" > "$work_dir/downloaded-chart.yaml"
+  read_chart_version "$work_dir/downloaded-chart.yaml"
+  [[ $REPLY == "$version" ]] || fail "The downloaded Helm chart does not match the reviewed version $version."
+  run helm show values "$package" > "$work_dir/chart-values.yaml"
   token_field='' in_backend=no
   while IFS= read -r line || [[ -n "$line" ]]; do
     case $line in
@@ -1260,12 +1290,18 @@ fleetint_install() {
   build_values
   # The private directory prevents path replacement; set permissions through the open handle.
   (set -C; exec 4> "$work_dir/values.json"; chmod 600 /dev/fd/4; printf '%s\n' "$values" >&4)
-  chart_args=("$chart" --repo "$repo" --version "$version" --values "$work_dir/values.json" --namespace "$namespace" --kube-context "$context")
+  chart_args=("$package" --values "$work_dir/values.json" --namespace "$namespace" --kube-context "$context")
   run helm template "$release" "${chart_args[@]}" > /dev/null
   verified_checks+=('Kubernetes API reachable and Helm chart rendered')
   install_status 2/5 'Checking namespace and Secret references'
-  run kubectl --context "$context" create namespace "$namespace" --dry-run=client -o yaml > "$work_dir/namespace.yaml"
-  run_logged 'Kubernetes namespace apply' kubectl --context "$context" apply -f "$work_dir/namespace.yaml"
+  namespace_lookup=(kubectl --context "$context" get namespace "$namespace" --ignore-not-found -o name --request-timeout=15s)
+  run "${namespace_lookup[@]}" > "$work_dir/namespace-name"
+  if [[ ! -s "$work_dir/namespace-name" ]] &&
+     ! run_logged 'Kubernetes namespace creation' kubectl --context "$context" create namespace "$namespace" --request-timeout=15s; then
+    run "${namespace_lookup[@]}" > "$work_dir/namespace-name"
+    [[ -s "$work_dir/namespace-name" ]] || fail "Could not create namespace $namespace. Check the Kubernetes error above."
+    printf 'Namespace %s now exists. Continuing with the existing namespace.\n' "$namespace"
+  fi
   run_logged 'Kubernetes namespace readiness' "${kube[@]}" wait --for=jsonpath='{.status.phase}'=Active "namespace/$namespace" --timeout=30s ||
     fail "Namespace $namespace did not become Active. Check the Kubernetes error above."
   ensure_secret "$credentials_secret" "$credentials_key" "$credentials_file"
@@ -1276,8 +1312,8 @@ fleetint_install() {
   fi
   verified_checks+=('Namespace active and required Secret keys present')
   install_status 3/5 'Installing workloads (Helm waits up to 10 minutes)'
-  run_logged 'Helm install or upgrade' helm upgrade --install "$release" "${chart_args[@]}" --create-namespace "${helm_install_args[@]}" --timeout 10m ||
-    deployment_failed 'Helm install or upgrade failed.'
+  run_logged 'Helm install' helm install "$release" "${chart_args[@]}" "${helm_install_args[@]}" --timeout 10m ||
+    deployment_failed 'Helm install failed.'
   verified_checks+=('Helm release applied')
   install_status 4/5 'Waiting for the collector, NICo, and gateway Deployments'
   verify_rollout 'OOB collector' "$collector_selector,app.kubernetes.io/component!=nico-hardware-health,app.kubernetes.io/component!=otel-gateway"

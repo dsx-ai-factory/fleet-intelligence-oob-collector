@@ -8,7 +8,7 @@ For a NICo-managed site, use [endpoint source configuration](configuration.md#en
 
 ## Prerequisites
 
-- A Kubernetes context with permission to deploy the chart and read the two Secrets in your chosen namespace. The installer applies the namespace and can create Secrets from files. Its verification checks need access to Deployments, pods, and pod logs. Read access to ReplicaSets and events helps diagnose failures. If your administrator provisions the namespace and Secrets for you, the manual Helm path can use them directly.
+- A Kubernetes context with permission to deploy the chart and read the two Secrets in your chosen namespace. The installer checks for an existing Helm release and namespace, and creates the namespace or file-backed Secrets when needed. Its verification checks need access to Deployments, pods, and pod logs. Read access to ReplicaSets and events helps diagnose failures. The manual Helm path can use namespaces and Secrets your administrator provisions for you.
 - Helm 3 or 4 and `kubectl`. The interactive installer also needs Bash 3.2 or later, `curl`, and an interactive terminal.
 - Network access from the pods to each BMC's Redfish HTTPS port and to Fleet Intelligence over HTTPS. Your install machine needs access to the NGC chart repository, and the cluster needs access to the workload image registry.
 - One BMC to verify first. Have its hardware type, IP address, physical BMC MAC address, Redfish port, and login ready. Add the rest once inventory and health telemetry are visible.
@@ -61,19 +61,27 @@ Use a terminal at least 80 columns wide and 24 rows high for the Unicode UI. Use
 Choose **Basic (recommended)** for a first install with one BMC. Basic uses your current Kubernetes context, the latest stable chart release in NGC, and the [recommended deployment settings](#plan-your-installation). It asks for a context or exact chart version if it cannot find one. You can find chart versions in the [NGC chart listing](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/fleet-intelligence/helm-charts/fleet-intelligence-oob-collector).
 
 1. **Setup.** Press Enter to use the bundled NICo and telemetry gateway for a BMC without NICo coverage. If NICo already monitors the BMC, choose Yes for the manual Helm steps to keep your existing deployment.
-2. **Target.** Enter the BMC IP address and its physical MAC address. Basic uses Redfish port `443`, leaves the hardware type unspecified, and uses the `bmc` profile from the example credentials JSON.
+2. **Target.** Enter the BMC IP address and its physical MAC address. See the defaults below. If Redfish listens on a different port, choose **Advanced** or export `FLEETINT_INSTALL_BMC_PORT` before starting Basic.
 3. **Access.** Choose a source for the BMC credentials and the Fleet Intelligence service key. For new Secrets, choose `file` and enter the absolute paths to your private files. For provisioned Secrets, choose `existing`. Basic uses `fleet-intelligence-bmc-credentials` with key `credentials.json` and `fleet-intelligence-oob-collector-agent-token` with key `agent-token`, unless you [export different names or keys](#set-installer-defaults-from-environment-variables).
 4. **Review.** Check the cluster, chart version, target, and Secret sources before choosing Yes. Enter advances through review pages. The final confirmation defaults to No.
 
-Choose **Advanced** to set a hardware type, use a different credentials profile, configure compute zones or node groups, add labels or more BMCs, or customize the deployment and Secrets at the prompts. Match the profile name to your credentials JSON. Leave it blank only if a per-MAC override supplies both login fields. See [Target fields](configuration.md#targets) for the available settings.
+| Basic target setting | Default when you leave its environment variable unset |
+| --- | --- |
+| Redfish port | `443` |
+| Hardware type | `unknown` |
+| Credentials profile | `bmc` from the example credentials JSON |
 
-The installer uses the exact chart version shown on the review screen for validation and installation. After confirmation, it checks cluster access and renders the chart, waits for the namespace to become active, and checks the Secret references. It creates missing Secrets from the selected files and reuses existing Secrets.
+Choose **Advanced** to set a hardware type or Redfish port, use a different credentials profile, configure compute zones or node groups, add labels or more BMCs, or customize the deployment and Secrets at the prompts. Match the profile name to your credentials JSON. Leave it blank only if a per-MAC override supplies both login fields. See [Target fields](configuration.md#targets) for the available settings.
 
-Once Helm returns, the installer checks the collector, NICo, and gateway Deployments. It then waits up to six minutes for the current collector's logs to confirm that Fleet Intelligence accepted an inventory upload. An unchanged collector can already have this evidence in its retained logs. The check confirms at least one accepted upload. Follow [Verify](#verify) to confirm fresh inventory and health telemetry for each BMC.
+The installer checks for an existing release before asking you to confirm. For a new release, it downloads the exact chart version shown on the review screen and uses that package for validation and installation. It waits for the namespace to become active and checks the Secret references. You can reuse an existing namespace and Secrets or create them during setup.
+
+Once Helm returns, the installer checks the collector, NICo, and gateway Deployments. It then waits up to six minutes for the collector's logs to confirm that Fleet Intelligence accepted an inventory upload. The check confirms at least one accepted upload. Follow [Verify](#verify) to confirm fresh inventory and health telemetry for each BMC.
 
 Both the terminal UI and plain mode show progress and recent workload warnings. In the terminal UI, the final panel opens on **Checks** and marks the checks that passed. Press **2** for **Logs**. Use Left and Right to switch between Kubernetes, collector, NICo, and gateway output, and Up and Down to change pages. Press **1** to return to the checks or **Enter** to close the panel and return to the terminal output. Plain mode prints `[OK]` beside completed checks and exits after printing the result.
 
 If Helm fails, a Deployment does not finish rolling out, or the installer cannot confirm an inventory upload, it shows completed checks alongside the failure and available diagnostics. Those diagnostics include pod status, Kubernetes warning events, and recent workload logs for the release. Resources remain in the cluster for diagnosis.
+
+After correcting the problem, rerun the installer if Helm has no release under that name. The installer reuses the namespace and Secrets from the first attempt. If Helm already has a release under that name, including a failed release, retrieve its [saved values](#change-settings-after-installation) and use them to recover it.
 
 To open a workflow directly, replace `bash` in the install command with `bash -s -- --basic` or `bash -s -- --advanced`. Combine it with a display option such as `bash -s -- --basic --plain`. To run from a reviewed commit, replace `main` in the URL with the full commit SHA.
 
@@ -204,7 +212,7 @@ Choose a published chart version from the [NGC chart listing](https://catalog.ng
 ```bash
 export OOB_CHART_VERSION='<chart-version>'
 
-helm upgrade --install "$RELEASE" \
+helm install "$RELEASE" \
   fleet-intelligence-oob-collector \
   --repo https://helm.ngc.nvidia.com/nvidia/fleet-intelligence \
   --version "$OOB_CHART_VERSION" \
@@ -268,7 +276,7 @@ helm get values "$RELEASE" \
   --output yaml > /path/to/collector-values.yaml
 ```
 
-Edit that file and repeat the [Install](#install) command with the same release, namespace, chart version, and Kubernetes context. Before adjusting NICo settings, [save the working values for rollback](#roll-back-bundled-nico-health-settings).
+Edit that file and use the [Install](#install) command with `helm upgrade` in place of `helm install`. Pass the updated file and use the same release, namespace, chart version, and Kubernetes context. Before adjusting NICo settings, [save the working values for rollback](#roll-back-bundled-nico-health-settings).
 
 Changes to the shared targets or `nicoHardwareHealth.config` restart the collector and bundled NICo. Helm waits for the workloads to become ready, and NICo's init container generates its configuration before it starts. Repeat [verification](#verify) to confirm the updated configuration delivers fresh data. For BMC credentials or service key changes, follow [Rotation and ownership](credentials.md#rotation-and-ownership).
 
@@ -287,7 +295,7 @@ Changes to the shared targets or `nicoHardwareHealth.config` restart the collect
    ```
 
 2. If the change causes problems, restore the previous `nicoHardwareHealth` settings in your deployment's values file. Remove any NICo keys you added that were absent in the backup. If you changed only NICo and made no other edits, you can use the backup as the entire `--values` file.
-3. Repeat the [Install](#install) command with the restored values and the same chart version, release, namespace, and context. NICo generates its runtime configuration when its pod starts. If you manage Helm values in source control, restore those settings there as well so a later deployment keeps the rollback.
+3. [Upgrade the release](#change-settings-after-installation) with the restored values and the same chart version, release, namespace, and context. NICo generates its runtime configuration when its pod starts. If you manage Helm values in source control, restore those settings there as well so a later deployment keeps the rollback.
 4. Follow [Verify](#verify) to check NICo startup and confirm that fresh health telemetry reaches Fleet Intelligence. Keep the existing BMC credentials and service key Secrets in place.
 
 ## Disconnect an individual machine
@@ -297,7 +305,7 @@ Before you delete a machine in Fleet Intelligence (the Delete Machine flow), rem
 If your values file is generated by configuration management, make the change there too, so the machine doesn't come back on the next deploy. Substitute your own resource names in the commands below.
 
 1. In your values file, find the target with the machine's BMC `mac` under `inventory.targets` and delete it. If it's the last target, [uninstall the collector](#uninstall-the-oob-collector) instead, because the target list can't be empty.
-2. Run the same `helm upgrade --install` command with the updated file. The collector and NICo restart with the new target list.
+2. [Upgrade the release](#change-settings-after-installation) with the updated file. The collector and NICo restart with the new target list.
 3. Wait for both to finish restarting:
 
    ```bash
@@ -315,25 +323,33 @@ Keep the shared credentials Secret. If the machine had its own MAC override in t
 
 Uninstalling stops collection for every target in the release. Data that was already uploaded stays in Fleet Intelligence. Substitute your own release name if it differs, and turn off any automation that would reinstall the release.
 
-1. Remove the Helm release and its workloads:
+1. Before uninstalling, look up the Secret names in the release's effective values. Save the output to a private file and record `credentials.existingSecret` and `backend.enrollmentToken.existingSecret`. Some charts use `backend.agentToken.existingSecret` for the service key.
+
+   ```bash
+   umask 077
+   helm get values "$RELEASE" --all --output yaml \
+     --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE" > /path/to/collector-values.yaml
+   ```
+
+2. Remove the Helm release and its workloads:
 
    ```bash
    helm uninstall "$RELEASE" \
      --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --wait --timeout 10m
    ```
 
-2. Verify that no pods remain for the release:
+3. Verify that no pods remain for the release:
 
    ```bash
    kubectl --context "$KUBE_CONTEXT" get pods --namespace "$NAMESPACE" \
      -l "app.kubernetes.io/instance=$RELEASE"
    ```
 
-3. Delete unused credential Secrets:
+4. Confirm that the Secret is dedicated to this release and that no other workload uses it. For a Secret synced by an operator, use the operator to remove it. To remove a Secret you created directly or through the interactive installer, run this command once for each unused Secret you recorded:
 
    ```bash
-   kubectl --context "$KUBE_CONTEXT" delete secret fleet-intelligence-enrollment-token \
-     fleet-intelligence-bmc-credentials --namespace "$NAMESPACE"
+   kubectl --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" \
+     delete secret '<recorded-secret-name>'
    ```
 
 Also remove any other unused Secrets dedicated to this deployment. Deleting a Secret does not revoke its credentials; retire them through their issuing system. Keep shared resources and separately managed external telemetry collectors.
