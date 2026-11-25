@@ -8,7 +8,7 @@ For DEB/RPM installations, use the [Linux package guide](host-configuration.md).
 
 ## Endpoint source
 
-Static targets are the default. To discover compute-host BMCs across the NICo sites visible to your service identity, omit `inventory.targets` and configure:
+Static targets are the default and connect directly to BMCs. The BMC proxy is specific to the NICo endpoint source. To discover compute-host BMCs across the NICo sites visible to your service identity, omit `inventory.targets` and configure:
 
 ```yaml
 endpointSource:
@@ -53,7 +53,7 @@ If a site's name or location can't be used as a node group or compute zone, the 
 
 All site and machine pages must succeed before BMC collection begins. A failed discovery skips that cycle instead of using a partial list, and the next cycle discovers again. If discovery fails when the collector starts, for example because NICo or the identity provider isn't reachable yet, the collector exits and Kubernetes restarts it with its usual backoff.
 
-NICo integration is supported through Helm. Configure discovery and proxy access with the values above, and disable the bundled NICo health and telemetry gateway workloads. See [rotation and ownership](credentials.md#rotation-and-ownership) for certificate renewal.
+Deploy NICo integration on Kubernetes through Helm. Configure discovery and proxy access with the values above, and disable the bundled NICo health and telemetry gateway workloads. NICo integration is not supported by the Linux packages. For local development tests, [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml) exercises the same NICo API and BMC proxy path. See [rotation and ownership](credentials.md#rotation-and-ownership) for certificate renewal.
 
 ## Targets
 

@@ -253,6 +253,7 @@ struct Config {
     labels: BTreeMap<String, String>,
     #[serde(default)]
     credentials: Option<CredentialsConfig>,
+    // NICo-only transport policy; other endpoint sources connect directly.
     #[serde(default)]
     bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     #[serde(default)]
@@ -1064,6 +1065,14 @@ mod tests {
 
     #[test]
     fn repository_oob_config_example_is_valid() {
+        let nico = parse_config_parts(
+            include_str!("../../../../config.nico.example.toml"),
+            "config.nico.example.toml",
+        )
+        .expect("local NICo proxy config example");
+        assert!(nico.settings.credentials_file.is_none());
+        assert!(nico.settings.bmc_proxy.is_some());
+        assert!(nico.into_source().is_ok());
         let credentials = write_credential(
             "example-json",
             include_str!("../../../../credentials.example.json"),

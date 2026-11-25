@@ -1,0 +1,24 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Local development example for NICo API discovery and BMC proxy access.
+# Production NICo integration targets Kubernetes through Helm, not Linux packages.
+# NICo supplies BMC identity and placement; omit [[targets]], [credentials],
+# and credentials_profile. Run only the OOB collector.
+[endpoint_source]
+type = "nico"
+api_url = "https://nico.example.com/v2"
+org = "example-org"
+token_url = "https://idp.example.com/token"
+client_id_file = "/run/secrets/nico-oauth2/client_id"
+client_secret_file = "/run/secrets/nico-oauth2/client_secret"
+scopes = ["nico"] # Use scopes configured by your identity-provider administrator.
+timeout_seconds = 30
+
+# The proxy owns BMC credentials. This identity needs permission to read
+# Redfish inventory and invoke/poll GPU attestation measurements.
+[bmc_proxy]
+url = "https://bmc-proxy.example.com:1079"
+ca_cert_path = "/run/secrets/nico-bmc-proxy/ca.crt"
+client_cert_path = "/run/secrets/nico-bmc-proxy/tls.crt"
+client_key_path = "/run/secrets/nico-bmc-proxy/tls.key"
