@@ -24,7 +24,6 @@ const MAX_PAGES: usize = 1000;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOKEN_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_ACCESS_TOKEN_BYTES: usize = 64 * 1024;
-const SKIP_EXAMPLES: usize = 3;
 const OAUTH2_FAILED: &str = "OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and configured scopes";
 
 /// NICo REST settings and paths to mounted OAuth2 client credential files.
@@ -274,7 +273,6 @@ impl NicoRestEndpointSource {
             candidates.push(candidate);
         }
         let endpoints = drop_identity_conflicts(candidates, &mut skips);
-        skips.log(endpoints.len(), ids.len());
         if endpoints.is_empty() {
             return Err("no usable BMC targets found in NICo endpoint source; check sites, metadata and provider permissions".into());
         }
@@ -316,48 +314,42 @@ impl SkipReason {
     }
 }
 
-/// Skipped machines grouped by reason, with a few example machine IDs each.
+/// Skipped-machine counts by reason. Each skip is logged as it happens.
 #[derive(Default)]
-struct Skips(std::collections::BTreeMap<SkipReason, (usize, Vec<String>)>);
+struct Skips(std::collections::BTreeMap<SkipReason, usize>);
 
 impl Skips {
-    fn add(&mut self, reason: SkipReason, machine_id: String) {
-        tracing::debug!(%machine_id, reason = reason.as_str(), "skipping NICo machine");
-        let (count, examples) = self.0.entry(reason).or_default();
-        *count += 1;
-        if examples.len() < SKIP_EXAMPLES {
-            examples.push(machine_id);
+    /// Log one line for the machine and count it. Decommissioning is expected
+    /// lifecycle state, so it is logged at debug level; every other reason is a
+    /// NICo record to fix. `shared_bmc` names the MAC or IP of a conflict.
+    fn add(&mut self, reason: SkipReason, machine_id: &str, shared_bmc: Option<String>) {
+        let reason_text = reason.as_str();
+        match (reason, shared_bmc) {
+            (SkipReason::Decommissioned, _) => {
+                tracing::debug!(machine_id, reason = reason_text, "skipping NICo machine");
+            }
+            (_, Some(shared_bmc)) => {
+                tracing::warn!(
+                    machine_id,
+                    reason = reason_text,
+                    shared_bmc,
+                    "skipping NICo machine"
+                );
+            }
+            (_, None) => {
+                tracing::warn!(machine_id, reason = reason_text, "skipping NICo machine");
+            }
         }
+        *self.0.entry(reason).or_default() += 1;
     }
 
     fn total(&self) -> usize {
-        self.0.values().map(|(count, _)| count).sum()
+        self.0.values().sum()
     }
 
     #[cfg(test)]
     fn count(&self, reason: SkipReason) -> usize {
-        self.0.get(&reason).map_or(0, |(count, _)| *count)
-    }
-
-    /// One warning per reason, then a summary, so large fleets get a bounded
-    /// number of lines. Per-machine detail is logged at debug level.
-    fn log(&self, usable: usize, total: usize) {
-        for (reason, (count, examples)) in &self.0 {
-            tracing::warn!(
-                reason = reason.as_str(),
-                skipped_machines = count,
-                example_machine_ids = %examples.join(", "),
-                "skipping NICo machines"
-            );
-        }
-        if !self.0.is_empty() {
-            tracing::warn!(
-                skipped_machines = self.total(),
-                usable_machines = usable,
-                total_machines = total,
-                "NICo discovery omitted machines; inspect their BMC metadata, hostnames, and lifecycle status in NICo"
-            );
-        }
+        self.0.get(&reason).copied().unwrap_or_default()
     }
 }
 
@@ -367,44 +359,40 @@ impl Skips {
 fn drop_identity_conflicts(candidates: Vec<Candidate>, skips: &mut Skips) -> Vec<Endpoint> {
     // Claims include machines that fail a later field check: a record with a
     // bad hostname or MAC still makes its BMC IP or MAC ambiguous.
-    let mut macs: HashMap<MacAddress, Vec<&str>> = HashMap::new();
-    let mut ips: HashMap<IpAddr, Vec<&str>> = HashMap::new();
+    let mut macs: HashMap<MacAddress, usize> = HashMap::new();
+    let mut ips: HashMap<IpAddr, usize> = HashMap::new();
     for candidate in &candidates {
         if let Some(mac) = candidate.mac {
-            macs.entry(mac).or_default().push(&candidate.machine_id);
+            *macs.entry(mac).or_default() += 1;
         }
         if let Some(ip) = candidate.ip {
-            ips.entry(ip).or_default().push(&candidate.machine_id);
+            *ips.entry(ip).or_default() += 1;
         }
     }
-    for (mac, machine_ids) in macs.iter().filter(|(_, ids)| ids.len() > 1) {
-        tracing::warn!(bmc_mac = %mac, machine_ids = %machine_ids.join(", "), "skipping NICo machines that share a BMC MAC");
-    }
-    // The address itself is not logged; the machine IDs locate the records.
-    for machine_ids in ips.values().filter(|ids| ids.len() > 1) {
-        tracing::warn!(machine_ids = %machine_ids.join(", "), "skipping NICo machines that share a BMC IP");
-    }
+    // The shared value is logged so the other record can be found in NICo.
     let conflict = |endpoint: &Endpoint| {
-        if macs[&endpoint.mac].len() > 1 {
-            Some(SkipReason::DuplicateBmcMac)
-        } else if ips[&endpoint.ip].len() > 1 {
-            Some(SkipReason::DuplicateBmcIp)
+        if macs[&endpoint.mac] > 1 {
+            Some((SkipReason::DuplicateBmcMac, Some(endpoint.mac.to_string())))
+        } else if ips[&endpoint.ip] > 1 {
+            Some((SkipReason::DuplicateBmcIp, Some(endpoint.ip.to_string())))
         } else {
             None
         }
     };
     // A field-check reason takes precedence, so each machine is counted once.
-    let reasons: Vec<_> = candidates
+    let skipped: Vec<_> = candidates
         .iter()
         .map(|candidate| match &candidate.endpoint {
             Ok(endpoint) => conflict(endpoint),
-            Err(reason) => Some(*reason),
+            Err(reason) => Some((*reason, None)),
         })
         .collect();
     let mut endpoints = Vec::with_capacity(candidates.len());
-    for (candidate, reason) in candidates.into_iter().zip(reasons) {
-        match (reason, candidate.endpoint) {
-            (Some(reason), _) => skips.add(reason, candidate.machine_id),
+    for (candidate, skipped) in candidates.into_iter().zip(skipped) {
+        match (skipped, candidate.endpoint) {
+            (Some((reason, shared_bmc)), _) => {
+                skips.add(reason, &candidate.machine_id, shared_bmc);
+            }
             (None, Ok(endpoint)) => endpoints.push(endpoint),
             (None, Err(_)) => unreachable!("a skipped candidate always has a reason"),
         }
@@ -1521,10 +1509,14 @@ mod tests {
     }
 
     #[test]
-    fn skips_are_counted_once_per_machine_by_reason_with_bounded_examples() {
+    fn skips_are_counted_once_per_machine_by_reason() {
         let mut skips = Skips::default();
         for index in 0..5 {
-            skips.add(SkipReason::MissingBmcMetadata, format!("missing-{index}"));
+            skips.add(
+                SkipReason::MissingBmcMetadata,
+                &format!("missing-{index}"),
+                None,
+            );
         }
         // machine-0 and machine-1 share a MAC and an IP; machine-2 and machine-3
         // share only an IP; machine-4 is unique.
@@ -1560,10 +1552,6 @@ mod tests {
         assert_eq!(skips.count(SkipReason::DuplicateBmcMac), 3);
         assert_eq!(skips.count(SkipReason::DuplicateBmcIp), 3);
         assert_eq!(skips.total(), 13);
-        assert_eq!(
-            skips.0[&SkipReason::MissingBmcMetadata].1.len(),
-            SKIP_EXAMPLES
-        );
     }
 
     #[test]
