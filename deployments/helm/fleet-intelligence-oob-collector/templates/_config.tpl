@@ -18,8 +18,6 @@ validation checks them, so a whitespace-only value is omitted, never empty. */}}
 {{ end }}{{ with trim (.Values.inventory.nodeGroup | default "") }}node_group = {{ toJson . }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" .Values.inventory.labels }}
 
-[credentials]
-file = "/run/secrets/bmc/credentials.json"
 {{- if eq (default dict .Values.endpointSource).type "nico" }}
 [endpoint_source]
 type = "nico"
@@ -30,8 +28,17 @@ client_id_file = "/run/secrets/nico-oauth2/client_id"
 client_secret_file = "/run/secrets/nico-oauth2/client_secret"
 scopes = {{ .Values.endpointSource.nico.scopes | default list | toJson }}
 timeout_seconds = {{ .Values.endpointSource.nico.timeoutSeconds | default 30 }}
-credentials_profile = {{ .Values.endpointSource.nico.credentialsProfile | default "" | trim | required "endpointSource.nico.credentialsProfile is required for NICo discovery" | toJson }}
-{{ end }}
+
+[bmc_proxy]
+url = {{ required "endpointSource.nico.bmcProxy.url is required" .Values.endpointSource.nico.bmcProxy.url | toJson }}
+ca_cert_path = "/run/secrets/nico-bmc-proxy/ca.crt"
+client_cert_path = "/run/secrets/nico-bmc-proxy/tls.crt"
+client_key_path = "/run/secrets/nico-bmc-proxy/tls.key"
+{{- else }}
+
+[credentials]
+file = "/run/secrets/bmc/credentials.json"
+{{- end }}
 {{- $nico := dict -}}
 {{- $config := default dict .Values.nicoHardwareHealth.config -}}
 {{- range $key := list

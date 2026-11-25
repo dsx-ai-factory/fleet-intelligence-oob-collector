@@ -29,13 +29,23 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "bmcProxy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "pattern": "^$|^https://[^/?#@]+/?$"
+                },
+                "tlsSecretName": {
+                  "type": "string"
+                }
+              }
+            },
             "apiUrl": {
               "type": "string"
             },
             "org": {
-              "type": "string"
-            },
-            "credentialsProfile": {
               "type": "string"
             },
             "oauth2CredentialsSecretName": {

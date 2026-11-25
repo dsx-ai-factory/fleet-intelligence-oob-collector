@@ -75,7 +75,8 @@ pub async fn collect(
         settings.redfish_timeout,
         settings.task_timeout,
         settings.task_poll_interval,
-    )?;
+    )?
+    .with_proxy(settings.bmc_proxy.as_ref(), settings.redfish_timeout)?;
     let mapper = RedfishMapper;
     let measurement = MeasurementRequest {
         measurement_indices: settings.measurement_indices.clone(),

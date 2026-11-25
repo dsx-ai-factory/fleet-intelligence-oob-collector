@@ -16,6 +16,8 @@ Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleeti
 
 Use `sudoedit` to edit root-owned files. See [rotation and ownership](credentials.md#rotation-and-ownership) for credential reload behavior and restart requirements.
 
+For NICo discovery and BMC proxy access, use the [NICo TOML example](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml) and [endpoint source guide](configuration.md#endpoint-source). The target and BMC password settings below apply to static mode. Run only the collector service in NICo mode; disable the bundled NICo health and gateway services.
+
 ## Targets and placement
 
 A minimal shared configuration is:

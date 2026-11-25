@@ -31,6 +31,7 @@ const USER_AGENT: &str = "fleet-intelligence-oob-collector";
 
 #[derive(Clone)]
 pub struct RedfishAttestationSource {
+    proxy_url: Option<Url>,
     port: u16,
     task_timeout: Duration,
     task_poll_interval: Duration,
@@ -119,6 +120,7 @@ struct BmcSession<'a> {
     gate: RequestGate,
     reload_credentials: &'a CredentialReloader<'a>,
     credentials_reloaded: bool,
+    proxy: bool,
 }
 
 /// Whether a request may be sent again after a transient failure.
@@ -136,37 +138,55 @@ impl BmcSession<'_> {
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T, Box<dyn Error>> {
         loop {
-            let credentials = bmc_dispatch::BmcCredentials::new(
-                self.target.username.clone(),
-                self.target.password.clone(),
-            );
+            let credentials = if self.proxy {
+                bmc_dispatch::BmcCredentials::Anonymous
+            } else {
+                bmc_dispatch::BmcCredentials::new(
+                    self.target.username.clone(),
+                    self.target.password.clone(),
+                )
+            };
+            let forwarded = if self.proxy {
+                Some(bmc_dispatch::proxy::forwarded_header(&self.target.bmc_mac)?)
+            } else {
+                None
+            };
             let send = || async {
-                request()
-                    .basic_auth(&self.target.username, Some(&self.target.password))
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json::<T>()
-                    .await
+                let request = match &forwarded {
+                    Some(header) => request().header(reqwest::header::FORWARDED, header.clone()),
+                    None => {
+                        request().basic_auth(&self.target.username, Some(&self.target.password))
+                    }
+                };
+                request.send().await?.error_for_status()?.json::<T>().await
+            };
+            let classify = |error: &reqwest::Error| {
+                if self.proxy && classify_error(error) == FailureKind::CredentialsRejected {
+                    FailureKind::Permanent
+                } else {
+                    classify_error(error)
+                }
             };
             let result = match idempotency {
                 Idempotency::Retry => {
                     self.gate
-                        .execute_idempotent(&credentials, send, classify_error)
+                        .execute_idempotent(&credentials, send, classify)
                         .await
                 }
                 Idempotency::SendOnce => {
                     self.gate
-                        .execute_classified(&credentials, send(), classify_error)
+                        .execute_classified(&credentials, send(), classify)
                         .await
                 }
             };
             match result {
                 Ok(value) => return Ok(value),
                 // Inventory may have latched these credentials already.
-                Err(DispatchError::CredentialsRejected) if !self.credentials_reloaded => {}
+                Err(DispatchError::CredentialsRejected)
+                    if !self.proxy && !self.credentials_reloaded => {}
                 Err(DispatchError::Transport(err))
                     if classify_error(&err) == FailureKind::CredentialsRejected
+                        && !self.proxy
                         && !self.credentials_reloaded => {}
                 Err(err) => return Err(err.into()),
             }
@@ -208,11 +228,24 @@ impl RedfishAttestationSource {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
+            proxy_url: None,
             port,
             task_timeout,
             task_poll_interval,
             client,
         })
+    }
+
+    pub fn with_proxy(
+        mut self,
+        proxy: Option<&bmc_dispatch::proxy::BmcProxyConfig>,
+        timeout: Duration,
+    ) -> Result<Self, Box<dyn Error>> {
+        if let Some(proxy) = proxy {
+            self.client = proxy.client(timeout)?;
+            self.proxy_url = Some(proxy.endpoint()?);
+        }
+        Ok(self)
     }
 
     pub async fn collect(
@@ -254,10 +287,14 @@ impl RedfishAttestationSource {
     ) -> Result<(RedfishAttestationReport, bool), Box<dyn Error>> {
         let mut session = BmcSession {
             target: target.clone(),
-            base_url: bmc_url(&target.address, self.port)?,
+            base_url: match &self.proxy_url {
+                Some(url) => url.clone(),
+                None => bmc_url(&target.address, self.port)?,
+            },
             gate,
             reload_credentials,
             credentials_reloaded: false,
+            proxy: self.proxy_url.is_some(),
         };
         self.collect_session_report(&mut session, nonce, request)
             .await
@@ -763,6 +800,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn proxy_routes_the_attestation_exchange_without_passwords_or_direct_fallback() {
+        use tokio::io::AsyncWriteExt;
+
+        let direct = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_url: Url = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move {
+            for (method, path, status, body) in [
+                (
+                    "GET",
+                    "/redfish/v1/ComponentIntegrity",
+                    200,
+                    r#"{"Members":[{"@odata.id":"/redfish/v1/ComponentIntegrity/GPU0"}]}"#,
+                ),
+                (
+                    "GET",
+                    "/redfish/v1/ComponentIntegrity/GPU0",
+                    200,
+                    r##"{"Id":"GPU0","Name":"GPU IRoT","Actions":{"#ComponentIntegrity.SPDMGetSignedMeasurements":{"target":"/measurements"}}}"##,
+                ),
+                ("POST", "/measurements", 200, r#"{"@odata.id":"/task"}"#),
+                ("GET", "/task", 200, r#"{"TaskState":"Completed"}"#),
+                (
+                    "GET",
+                    "/measurements/data",
+                    200,
+                    r#"{"SignedMeasurements":"signed","Version":"1"}"#,
+                ),
+                (
+                    "GET",
+                    "/redfish/v1/Chassis/GPU0/Certificates/CertChain",
+                    200,
+                    r#"{"CertificateString":"certificate"}"#,
+                ),
+                (
+                    "GET",
+                    "/redfish/v1/Chassis/GPU0",
+                    200,
+                    r#"{"Model":"NVIDIA B200"}"#,
+                ),
+                ("GET", "/redfish/v1/ComponentIntegrity", 401, "{}"),
+                ("GET", "/redfish/v1/ComponentIntegrity", 307, "{}"),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                assert!(
+                    request.starts_with(&format!("{method} {path} ")),
+                    "{request}"
+                );
+                let headers = request.split("\r\n\r\n").next().unwrap().to_lowercase();
+                assert!(headers.contains("forwarded: mac=\"00:11:22:33:44:55\""));
+                assert!(!headers.contains("authorization:"));
+                assert!(!headers.contains("x-auth-token:"));
+                if method == "POST" {
+                    assert!(request.contains(r#""Nonce":"same-nonce""#));
+                }
+                socket.write_all(format!("HTTP/1.1 {status} Test\r\nLocation: https://127.0.0.1/redfish/v1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let mac = "00:11:22:33:44:55";
+        let dispatcher = Dispatcher::start(
+            DispatcherConfig {
+                global_max_in_flight: 1,
+                bmc_max_in_flight: 1,
+                bmc_requests_per_second: 100,
+                bmc_burst: 100,
+                workflow_queue_capacity: 8,
+            },
+            [mac.to_string()],
+        )
+        .unwrap();
+        let mut source = RedfishAttestationSource::new(
+            443,
+            false,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+        // Only the fixture injects HTTP. Production uses the HTTPS mTLS builder.
+        source.proxy_url = Some(proxy_url);
+        let target = crate::config::Target {
+            name: mac.into(),
+            bmc_mac: mac.into(),
+            address: format!("https://{}", direct.local_addr().unwrap()),
+            credentials_profile: None,
+            username: "must-not-send".into(),
+            password: "must-not-send".into(),
+        };
+        let nonce = NonceData {
+            nonce: "same-nonce".into(),
+            nonce_refresh_timestamp: None,
+        };
+        let request = MeasurementRequest {
+            measurement_indices: vec![255],
+        };
+        let reload = |_: &crate::config::Target| -> Result<(String, String), Box<dyn Error>> {
+            panic!("proxy mode must never reload BMC credentials")
+        };
+        let first = source
+            .collect(
+                target.clone(),
+                nonce.clone(),
+                request.clone(),
+                dispatcher.attestation_gate(mac).unwrap(),
+                &reload,
+            )
+            .await;
+        let report = first.result.unwrap();
+        assert_eq!(report.evidences.len(), 1);
+        assert_eq!(report.evidences[0].evidence, "signed");
+        assert!(report.errors.is_empty());
+        for _ in 0..2 {
+            let failed = source
+                .collect(
+                    target.clone(),
+                    nonce.clone(),
+                    request.clone(),
+                    dispatcher.attestation_gate(mac).unwrap(),
+                    &reload,
+                )
+                .await;
+            assert!(failed.result.is_err());
+            assert!(!dispatcher.credentials_rejected(mac));
+        }
+        server.await.unwrap();
+        assert!(
+            source
+                .collect(
+                    target,
+                    nonce,
+                    request,
+                    dispatcher.attestation_gate(mac).unwrap(),
+                    &reload
+                )
+                .await
+                .result
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), direct.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn rotated_credentials_retry_measurement_with_same_nonce_only_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::AsyncWriteExt;
@@ -837,6 +1023,7 @@ mod tests {
             gate: dispatcher.attestation_gate("bmc-1").unwrap(),
             reload_credentials: &reload,
             credentials_reloaded: false,
+            proxy: false,
         };
         let mut source = RedfishAttestationSource::new(
             443,
@@ -936,6 +1123,7 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: false,
             };
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -1051,6 +1239,7 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: false,
             };
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -1120,6 +1309,7 @@ mod tests {
                 gate: dispatcher.attestation_gate("bmc-1").unwrap(),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: false,
             };
             let mut source = RedfishAttestationSource::new(
                 443,
@@ -1207,6 +1397,7 @@ mod tests {
                     .expect("attestation gate"),
                 reload_credentials: &reload,
                 credentials_reloaded: false,
+                proxy: false,
             };
 
             let error = source
@@ -1276,6 +1467,7 @@ mod tests {
             gate: poll_gate,
             reload_credentials: &|_| panic!("no HTTP request should start"),
             credentials_reloaded: false,
+            proxy: false,
         };
         let started_at = std::time::Instant::now();
         let error = source

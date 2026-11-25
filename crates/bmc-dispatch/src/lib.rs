@@ -16,6 +16,8 @@
 
 //! Collector-owned admission control for BMC HTTP requests.
 
+pub mod proxy;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::error::Error as StdError;
@@ -709,13 +711,39 @@ impl<E: RequestError> RequestError for DispatchError<E> {
 pub struct DispatchingHttpClient<C> {
     inner: C,
     gate: RequestGate,
+    proxy_url: Option<Url>,
 }
 
 impl<C> DispatchingHttpClient<C> {
     /// Wrap an existing HTTP client with dispatcher admission.
     #[must_use]
     pub const fn new(inner: C, gate: RequestGate) -> Self {
-        Self { inner, gate }
+        Self {
+            inner,
+            gate,
+            proxy_url: None,
+        }
+    }
+
+    /// Route HTTP traffic through this proxy while keeping the logical BMC
+    /// origin for Redfish reference validation. Callers supply anonymous BMC
+    /// credentials, the Forwarded header, and an mTLS-authenticated inner client.
+    #[must_use]
+    pub fn with_proxy_url(mut self, proxy_url: Option<Url>) -> Self {
+        self.proxy_url = proxy_url;
+        self
+    }
+
+    fn transport_url(&self, url: Url) -> Url {
+        match &self.proxy_url {
+            Some(proxy) => {
+                let mut routed = proxy.clone();
+                routed.set_path(url.path());
+                routed.set_query(url.query());
+                routed
+            }
+            None => url,
+        }
     }
 }
 
@@ -728,7 +756,9 @@ impl<C: HttpClient> DispatchingHttpClient<C> {
         request: impl Future<Output = Result<T, C::Error>>,
     ) -> Result<T, DispatchError<C::Error>> {
         self.gate
-            .admit(request, credentials, classify_bmc_error)
+            .admit(request, credentials, |error| {
+                classify_transport_error(error, credentials)
+            })
             .await
     }
 
@@ -743,8 +773,26 @@ impl<C: HttpClient> DispatchingHttpClient<C> {
         Fut: Future<Output = Result<T, C::Error>>,
     {
         self.gate
-            .execute_idempotent(credentials, request, classify_bmc_error)
+            .execute_idempotent(credentials, request, |error| {
+                classify_transport_error(error, Some(credentials))
+            })
             .await
+    }
+}
+
+// Anonymous Redfish requests authenticate at the proxy with mTLS. An HTTP 401
+// from that hop must not latch or reload local BMC passwords.
+fn classify_transport_error<E: BmcError>(
+    error: &E,
+    credentials: Option<&BmcCredentials>,
+) -> FailureKind {
+    match classify_bmc_error(error) {
+        FailureKind::CredentialsRejected
+            if matches!(credentials, Some(BmcCredentials::Anonymous)) =>
+        {
+            FailureKind::Permanent
+        }
+        kind => kind,
     }
 }
 
@@ -765,6 +813,7 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch_read(credentials, || {
             self.inner.get(
                 url.clone(),
@@ -786,6 +835,7 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch_read(credentials, || {
             self.inner.poll(url.clone(), credentials, custom_headers)
         })
@@ -803,6 +853,7 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(
             Some(credentials),
             self.inner.post(url, body, credentials, custom_headers),
@@ -820,6 +871,7 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(None, self.inner.post_session(url, body, custom_headers))
             .await
     }
@@ -836,6 +888,7 @@ where
         T: DeserializeOwned + Send + Sync,
         V: Serialize + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(
             Some(credentials),
             self.inner
@@ -855,6 +908,7 @@ where
         U: UploadReader,
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(
             Some(credentials),
             self.inner
@@ -875,6 +929,7 @@ where
         B: Serialize + Send + Sync,
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(
             Some(credentials),
             self.inner
@@ -892,6 +947,7 @@ where
     where
         T: DeserializeOwned + Send + Sync,
     {
+        let url = self.transport_url(url);
         self.dispatch(
             Some(credentials),
             self.inner.delete(url, credentials, custom_headers),

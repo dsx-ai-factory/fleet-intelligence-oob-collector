@@ -75,7 +75,8 @@ const RESERVED_NICO_LABELS: &[&str] = &[
 #[derive(Clone, Debug)]
 pub struct CollectorConfig {
     pub targets: Vec<Target>,
-    pub credentials_file: PathBuf,
+    pub credentials_file: Option<PathBuf>,
+    pub bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     pub nico_health: NicoHealthSettings,
 }
 
@@ -124,7 +125,8 @@ struct StaticConfig {
 pub struct EndpointConfig {
     // Absolute and rooted at the config directory. Private so a relative path
     // cannot be substituted and accidentally resolved from the working directory.
-    credentials_file: PathBuf,
+    credentials_file: Option<PathBuf>,
+    bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     pub nico_health: NicoHealthSettings,
     defaults: EndpointDefaults,
 }
@@ -184,18 +186,22 @@ impl EndpointConfig {
             .await
             .map_err(|error| error as Box<dyn Error>)?;
         require_endpoints(&endpoints)?;
-        let credentials = SharedCredentials::load_async(&self.credentials_file).await?;
-        self.resolve_endpoints(&endpoints, &credentials)
+        let credentials = match &self.credentials_file {
+            Some(file) => Some(SharedCredentials::load_async(file).await?),
+            None => None,
+        };
+        self.resolve_endpoints(&endpoints, credentials.as_ref())
     }
 
     fn resolve_endpoints(
         &self,
         endpoints: &[Endpoint],
-        credentials: &SharedCredentials,
+        credentials: Option<&SharedCredentials>,
     ) -> Result<CollectorConfig, Box<dyn Error>> {
         Ok(CollectorConfig {
             targets: resolve_endpoints(endpoints, credentials, &self.defaults)?,
             credentials_file: self.credentials_file.clone(),
+            bmc_proxy: self.bmc_proxy.clone(),
             nico_health: self.nico_health.clone(),
         })
     }
@@ -245,7 +251,10 @@ struct Config {
     node_group: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
-    credentials: CredentialsConfig,
+    #[serde(default)]
+    credentials: Option<CredentialsConfig>,
+    #[serde(default)]
+    bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     #[serde(default)]
     targets: Vec<RawTargetConfig>,
     #[serde(default)]
@@ -326,23 +335,39 @@ pub async fn load_config_async(path: &str) -> Result<CollectorConfig, Box<dyn Er
     }
     require_static_targets(&raw, path)?;
     let parsed = prepare_config(raw, path)?;
-    let credentials = SharedCredentials::load_async(&parsed.settings.credentials_file).await?;
+    let credentials = SharedCredentials::load_async(
+        parsed
+            .settings
+            .credentials_file
+            .as_deref()
+            .ok_or("static targets require [credentials].file")?,
+    )
+    .await?;
     let config = parsed.into_static()?;
     let endpoints = config
         .source
         .discover()
         .await
         .map_err(|error| error as Box<dyn Error>)?;
-    config.settings.resolve_endpoints(&endpoints, &credentials)
+    config
+        .settings
+        .resolve_endpoints(&endpoints, Some(&credentials))
 }
 
 pub(super) fn parse_config(contents: &str, path: &str) -> Result<CollectorConfig, Box<dyn Error>> {
     let parsed = parse_static_parts(contents, path)?;
-    let credentials = SharedCredentials::load(&parsed.settings.credentials_file, Path::new("."))?;
+    let credentials = SharedCredentials::load(
+        parsed
+            .settings
+            .credentials_file
+            .as_deref()
+            .ok_or("static targets require [credentials].file")?,
+        Path::new("."),
+    )?;
     let config = parsed.into_static()?;
     config
         .settings
-        .resolve_endpoints(config.source.endpoints(), &credentials)
+        .resolve_endpoints(config.source.endpoints(), Some(&credentials))
 }
 
 struct ParsedConfig {
@@ -411,7 +436,7 @@ fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>
     toml::from_str(contents).map_err(|error: toml::de::Error| {
         // Invalid input may contain secrets; never echo TOML input.
         let offset = error.span().map(|span| span.start).unwrap_or_default();
-        format!("invalid TOML config {path} at byte {offset}; expected [credentials].file and optional [[targets]]").into()
+        format!("invalid TOML config {path} at byte {offset}; expected static targets with [credentials].file or a NICo endpoint_source with [bmc_proxy]").into()
     })
 }
 
@@ -424,6 +449,24 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
         // configured value would put every site in one group.
         if config.compute_zone.is_some() || config.node_group.is_some() {
             return Err("NICo REST endpoint_source takes compute_zone and node_group from NICo sites; remove the top-level compute_zone and node_group".into());
+        }
+    }
+    match &config.endpoint_source {
+        SourceSelection::Nico(_) => {
+            if config.credentials.is_some() {
+                return Err("NICo mode uses bmc_proxy mTLS; remove [credentials]".into());
+            }
+            if config.bmc_proxy.is_none() {
+                return Err("NICo mode requires [bmc_proxy]".into());
+            }
+        }
+        SourceSelection::Static => {
+            if config.bmc_proxy.is_some() {
+                return Err("bmc_proxy requires NICo endpoint_source".into());
+            }
+            if config.credentials.is_none() {
+                return Err("static targets require [credentials].file".into());
+            }
         }
     }
     config.nico_health.validate()?;
@@ -443,12 +486,19 @@ fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dy
         }
     }
     // Keep symlinks intact so atomic credential-file replacement still works.
-    let credentials_file = std::path::absolute(config_dir.join(&config.credentials.file))?;
+    let credentials_file = config
+        .credentials
+        .map(|credentials| std::path::absolute(config_dir.join(credentials.file)))
+        .transpose()?;
+    if let Some(proxy) = &mut config.bmc_proxy {
+        proxy.resolve_paths(config_dir)?;
+    }
     Ok(ParsedConfig {
         targets: config.targets,
         source: config.endpoint_source,
         settings: EndpointConfig {
             credentials_file,
+            bmc_proxy: config.bmc_proxy,
             nico_health: config.nico_health,
             defaults,
         },
@@ -466,7 +516,7 @@ fn require_endpoints(endpoints: &[Endpoint]) -> Result<(), Box<dyn Error>> {
 // only raw/user labels; normalized fields and derived labels exist on Target.
 fn resolve_endpoints(
     endpoints: &[Endpoint],
-    credentials: &SharedCredentials,
+    credentials: Option<&SharedCredentials>,
     defaults: &EndpointDefaults,
 ) -> Result<Vec<Target>, Box<dyn Error>> {
     require_endpoints(endpoints)?;
@@ -475,9 +525,17 @@ fn resolve_endpoints(
     for (index, endpoint) in endpoints.iter().enumerate() {
         let context = format!("targets[{index}]");
         let identity = format!("{context} (BMC {})", endpoint.mac);
-        let resolved = credentials
-            .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
-            .map_err(|error| format!("{identity}: {error}"))?;
+        let (username, password) = if let Some(credentials) = credentials {
+            let resolved = credentials
+                .resolve(endpoint.mac, endpoint.credentials_profile.as_deref())
+                .map_err(|error| format!("{identity}: {error}"))?;
+            (resolved.username, resolved.password)
+        } else {
+            if endpoint.credentials_profile.is_some() {
+                return Err("NICo proxy targets cannot specify credentials_profile".into());
+            }
+            (String::new(), String::new())
+        };
         let (name, compute_zone, node_group) = defaults.effective(endpoint, &context)?;
         let mut labels = defaults.labels.clone();
         labels.extend(endpoint.labels.clone());
@@ -515,8 +573,8 @@ fn resolve_endpoints(
             mac: endpoint.mac,
             address: endpoint.address(),
             credentials_profile: endpoint.credentials_profile.clone(),
-            username: resolved.username,
-            password: resolved.password,
+            username,
+            password,
             labels,
         });
     }
@@ -1006,6 +1064,14 @@ mod tests {
 
     #[test]
     fn repository_oob_config_example_is_valid() {
+        let nico = parse_config_parts(
+            include_str!("../../../../config.nico.example.toml"),
+            "config.nico.example.toml",
+        )
+        .expect("NICo proxy config example");
+        assert!(nico.settings.credentials_file.is_none());
+        assert!(nico.settings.bmc_proxy.is_some());
+        assert!(nico.into_source().is_ok());
         let credentials = write_credential(
             "example-json",
             include_str!("../../../../credentials.example.json"),
@@ -1342,7 +1408,6 @@ mod tests {
         for input in [
             "[credentials]\nfile = 'unused.json'\nusername_file = 'sensitive-value'\npassword_file = 'sensitive-value'",
             "[credentials]\nfile = 'unused.json'\n[[machines]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'",
-            "[[targets]]\nip = '192.0.2.1'\nmac = '00:11:22:33:44:55'\ncredentials_profile = 'bmc'",
         ] {
             let error = parse_config(input, "test.toml").unwrap_err().to_string();
             assert!(error.contains("invalid TOML config"), "{error}");
@@ -1627,7 +1692,7 @@ mod tests {
         let path = path.to_str().unwrap();
         // Shared settings load with no [[targets]]; the static tools still need them.
         let config = parse_config_parts(&contents, path).unwrap().settings;
-        assert!(config.credentials_file.is_absolute());
+        assert!(config.credentials_file.as_ref().unwrap().is_absolute());
         assert!(
             load_config(path)
                 .unwrap_err()
@@ -1779,7 +1844,14 @@ mod tests {
         std::fs::write(&path, "[credentials]\nfile='credentials.json'\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'\ncredentials_profile='bmc'").unwrap();
         let path = path.to_str().unwrap();
         let parsed = parse_static_config(&std::fs::read_to_string(path).unwrap(), path).unwrap();
-        assert!(parsed.settings.credentials_file.is_absolute());
+        assert!(
+            parsed
+                .settings
+                .credentials_file
+                .as_ref()
+                .unwrap()
+                .is_absolute()
+        );
         let provider = ProviderSource(parsed.source.discover().await.unwrap());
         for config in [
             load_config_async(path).await.unwrap(),
@@ -1787,7 +1859,10 @@ mod tests {
         ] {
             assert_eq!(config.targets[0].username, "user");
             assert_eq!(config.targets[0].password, "secret");
-            assert_eq!(config.credentials_file, directory.join("credentials.json"));
+            assert_eq!(
+                config.credentials_file,
+                Some(directory.join("credentials.json"))
+            );
         }
     }
 
@@ -1826,8 +1901,11 @@ mod tests {
         let _cleanup = TestDirectoryCleanup(directory.clone());
         let path = directory.join("config.toml");
         let input = r#"
-            [credentials]
-            file = "missing-bmc-credentials.json"
+            [bmc_proxy]
+            url = "https://proxy.example.com"
+            ca_cert_path = "proxy-ca.pem"
+            client_cert_path = "client.pem"
+            client_key_path = "client.key"
             [endpoint_source]
             type = "nico"
             api_url = "https://nico.example.com/v2"
@@ -1835,7 +1913,6 @@ mod tests {
             token_url = "https://idp.example.com/token"
             client_id_file = "client_id"
             client_secret_file = "client_secret"
-            credentials_profile = "bmc"
         "#;
         std::fs::write(&path, input).unwrap();
         // An invalid client ID proves the rooted credential file was read. No request is
@@ -1862,6 +1939,97 @@ mod tests {
         );
     }
 
+    const NICO_PROXY_CONFIG: &str = r#"
+        [endpoint_source]
+        type = "nico"
+        api_url = "https://nico.example.com/v2"
+        org = "example"
+        token_url = "https://idp.example.com/token"
+        client_id_file = "oauth-id"
+        client_secret_file = "oauth-secret"
+        [bmc_proxy]
+        url = "https://proxy.example.com:1079"
+        ca_cert_path = "proxy-ca.pem"
+        client_cert_path = "client.pem"
+        client_key_path = "client.key"
+    "#;
+
+    #[tokio::test]
+    async fn nico_proxy_resolution_needs_no_bmc_credentials() {
+        let path = std::env::temp_dir().join("fleetint-proxy-config/config.toml");
+        let parsed = parse_config_parts(NICO_PROXY_CONFIG, path.to_str().unwrap()).unwrap();
+        assert!(parsed.settings.credentials_file.is_none());
+        let proxy = parsed.settings.bmc_proxy.as_ref().unwrap();
+        assert_eq!(
+            proxy.client_key_path,
+            path.parent().unwrap().join("client.key")
+        );
+        let mut endpoint = provider_endpoint();
+        endpoint.credentials_profile = None;
+        let resolved = parsed
+            .settings
+            .resolve_from(&ProviderSource(vec![endpoint.clone()].into()))
+            .await
+            .unwrap();
+        assert!(resolved.targets[0].username.is_empty());
+        assert!(resolved.targets[0].password.is_empty());
+        assert!(resolved.targets[0].credentials_profile.is_none());
+        assert!(resolved.credentials_file.is_none());
+        assert!(resolved.bmc_proxy.is_some());
+        endpoint.credentials_profile = Some("bmc".into());
+        assert!(
+            parsed
+                .settings
+                .resolve_from(&ProviderSource(vec![endpoint].into()))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("cannot specify credentials_profile")
+        );
+    }
+
+    #[test]
+    fn nico_requires_proxy_and_rejects_local_bmc_credentials() {
+        for (input, expected) in [
+            (
+                NICO_PROXY_CONFIG
+                    .split("[bmc_proxy]")
+                    .next()
+                    .unwrap()
+                    .to_string(),
+                "requires [bmc_proxy]",
+            ),
+            (
+                format!("{NICO_PROXY_CONFIG}\n[credentials]\nfile='never-read.json'"),
+                "remove [credentials]",
+            ),
+            (
+                NICO_PROXY_CONFIG.replace(
+                    "org = \"example\"",
+                    "org = \"example\"\ncredentials_profile = \"bmc\"",
+                ),
+                "invalid TOML",
+            ),
+            (
+                "[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'".into(),
+                "require [credentials].file",
+            ),
+            (
+                format!(
+                    "[credentials]\nfile='unused.json'\n[bmc_proxy]{}",
+                    NICO_PROXY_CONFIG.split("[bmc_proxy]").nth(1).unwrap()
+                ),
+                "requires NICo endpoint_source",
+            ),
+        ] {
+            let error = parse_config_parts(&input, "config.toml")
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
     #[tokio::test]
     async fn source_selection_keeps_static_default_and_rejects_ambiguous_or_unknown_config() {
         let contents = with_test_credentials(
@@ -1885,7 +2053,7 @@ mod tests {
                 .len(),
             1
         );
-        let nico = "[credentials]\nfile='missing.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
+        let nico = "[bmc_proxy]\nurl='https://proxy.example.com'\nca_cert_path='ca.pem'\nclient_cert_path='client.pem'\nclient_key_path='client.key'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='client_id'\nclient_secret_file='client_secret'\n";
         let mixed = format!("{nico}\n[[targets]]\nip='192.0.2.1'\nmac='00:11:22:33:44:55'");
         assert!(
             parse_config_parts(&mixed, "config.toml")

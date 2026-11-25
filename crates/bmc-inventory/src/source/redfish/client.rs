@@ -43,6 +43,7 @@ pub struct RedfishSource {
     client: nv_redfish::bmc_http::reqwest::Client,
     dispatcher: Arc<Dispatcher>,
     latency_probe: LatencyProbe,
+    proxy_url: Option<Url>,
 }
 
 impl RedfishSource {
@@ -70,7 +71,21 @@ impl RedfishSource {
             client,
             dispatcher,
             latency_probe: LatencyProbe::Disabled,
+            proxy_url: None,
         })
+    }
+
+    pub fn with_proxy(
+        mut self,
+        proxy: Option<&bmc_dispatch::proxy::BmcProxyConfig>,
+        timeout: Duration,
+    ) -> Result<Self, Box<dyn Error>> {
+        if let Some(proxy) = proxy {
+            self.client =
+                nv_redfish::bmc_http::reqwest::Client::with_client(proxy.client(timeout)?);
+            self.proxy_url = Some(proxy.endpoint()?);
+        }
+        Ok(self)
     }
 
     /// Measure collector-to-BMC latency after each target's Redfish
@@ -117,16 +132,30 @@ impl RedfishSource {
         &self,
         target: &Target,
     ) -> Result<(ServiceRoot<RedfishBmc>, Arc<RedfishBmc>), Box<dyn Error>> {
-        let url = bmc_url(&target.address)?;
+        let (credentials, headers) = if self.proxy_url.is_some() {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::FORWARDED,
+                bmc_dispatch::proxy::forwarded_header(&target.mac.to_string())?,
+            );
+            (BmcCredentials::Anonymous, headers)
+        } else {
+            (
+                BmcCredentials::new(target.username.clone(), target.password.clone()),
+                reqwest::header::HeaderMap::new(),
+            )
+        };
         let gate = self
             .dispatcher
             .inventory_gate(&target.mac.to_string())
             .ok_or_else(|| format!("no dispatcher endpoint for target {:?}", target.mac))?;
-        let bmc = Arc::new(HttpBmc::new(
-            DispatchingHttpClient::new(self.client.clone(), gate),
-            url,
-            BmcCredentials::new(target.username.clone(), target.password.clone()),
+        let bmc = Arc::new(HttpBmc::with_custom_headers(
+            DispatchingHttpClient::new(self.client.clone(), gate)
+                .with_proxy_url(self.proxy_url.clone()),
+            bmc_url(&target.address)?,
+            credentials,
             CacheSettings::with_capacity(32),
+            headers,
         ));
         Ok((ServiceRoot::new(bmc.clone()).await?, bmc))
     }
@@ -225,6 +254,118 @@ mod tests {
         "UpdateService": {"@odata.id": "/redfish/v1/UpdateService"},
         "Fabrics": {"@odata.id": "/redfish/v1/Fabrics"}
     }"##;
+
+    #[tokio::test]
+    async fn proxy_routes_redfish_while_tcp_probes_still_reach_the_bmc() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let bmc = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let bmc_port = bmc.local_addr().unwrap().port();
+        // Exactly one direct connection is admitted for the latency probe. It
+        // carries no HTTP or TLS payload, even with successful proxy collection.
+        let probe_listener = Arc::clone(&bmc);
+        let probe = tokio::spawn(async move {
+            let (mut stream, _) = probe_listener.accept().await.unwrap();
+            let mut byte = [0];
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
+        });
+        let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_url: Url = format!("http://{}", proxy.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let logical_origin = format!("http://127.0.0.1:{bmc_port}");
+        let root = PUBLIC_SERVICE_ROOT;
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = proxy.accept().await {
+                let mut request = Vec::new();
+                let mut buffer = [0; 2048];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(
+                    request
+                        .to_lowercase()
+                        .contains("forwarded: mac=\"00:11:22:33:44:55\"")
+                );
+                assert!(!request.contains("authorization:"));
+                assert!(!request.contains("x-auth-token:"));
+                let path = request.split_whitespace().nth(1).unwrap().to_string();
+                recorded.lock().unwrap().push(path.clone());
+                let (status, body) = if path.trim_end_matches('/') == "/redfish/v1" {
+                    (200, root)
+                } else {
+                    (401, "{}")
+                };
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let dispatcher = Arc::new(test_dispatcher());
+        let mut source = RedfishSource::new(false, Duration::from_secs(5), Arc::clone(&dispatcher))
+            .unwrap()
+            .with_latency_probe(LatencyProbe::Enabled(tcp_probe::TcpProbeConfig {
+                attempts: 1,
+                min_successes: 1,
+                ..Default::default()
+            }));
+        // Plain HTTP is only injected here; production config requires HTTPS.
+        source.proxy_url = Some(proxy_url);
+        let target = Target {
+            kind: crate::models::TargetKind::Compute,
+            name: None,
+            compute_zone: None,
+            node_group: None,
+            ip: "127.0.0.1".parse().unwrap(),
+            port: Some(bmc_port),
+            mac: "00:11:22:33:44:55".parse().unwrap(),
+            address: logical_origin,
+            credentials_profile: None,
+            username: "must-not-send".into(),
+            password: "must-not-send".into(),
+            labels: Default::default(),
+        };
+        let inventory = source.collect(target.clone()).await;
+        assert!(
+            inventory.target_error.is_none(),
+            "{:?}",
+            inventory.target_error
+        );
+        assert!(!inventory.domain_errors.is_empty());
+        assert_eq!(
+            inventory.latency[0].status,
+            crate::models::LatencyStatus::Ok
+        );
+        assert_eq!(inventory.source.mac, target.mac.to_string());
+        assert!(!dispatcher.credentials_rejected(&target.mac.to_string()));
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path == "/redfish/v1/Systems"),
+            "requests={:?}, errors={:?}",
+            requests.lock().unwrap(),
+            inventory.domain_errors
+        );
+        tokio::time::timeout(Duration::from_secs(2), probe)
+            .await
+            .unwrap()
+            .unwrap();
+        server.abort();
+        // A dead proxy cannot cause a direct Redfish connection to the BMC.
+        assert!(source.collect_report(&target).await.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), bmc.accept())
+                .await
+                .is_err()
+        );
+    }
 
     /// A BMC whose service root is public and which rejects every
     /// authenticated request. Returns its port and the rejected request count.

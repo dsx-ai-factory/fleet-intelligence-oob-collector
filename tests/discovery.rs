@@ -19,7 +19,7 @@ impl ConfigDirectory {
     }
     fn nico_config(&self) -> PathBuf {
         let config = self.0.join("config.toml");
-        std::fs::write(&config, "[credentials]\nfile='missing-credentials.json'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='missing-id'\nclient_secret_file='missing-secret'\n").unwrap();
+        std::fs::write(&config, "[bmc_proxy]\nurl='https://proxy.example.com'\nca_cert_path='ca.pem'\nclient_cert_path='client.pem'\nclient_key_path='client.key'\n[endpoint_source]\ntype='nico'\napi_url='https://nico.example.com/v2'\norg='example'\ntoken_url='https://idp.example.com/token'\nclient_id_file='missing-id'\nclient_secret_file='missing-secret'\n").unwrap();
         config
     }
 }

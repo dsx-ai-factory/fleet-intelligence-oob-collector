@@ -56,4 +56,4 @@ After you change values, run `helm upgrade`. See [rotation and ownership](../../
 
 ## NICo REST target discovery
 
-Set `endpointSource.type=nico` and configure REST access through `endpointSource.nico`. Omit `inventory.targets` and disable the bundled health and gateway workloads. See [endpoint source configuration](../../../docs/configuration.md#endpoint-source) for the values and Secret requirements.
+Set `endpointSource.type=nico` and configure REST access through `endpointSource.nico`. Set `endpointSource.nico.bmcProxy.url` and `endpointSource.nico.bmcProxy.tlsSecretName` (keys `ca.crt`, `tls.crt`, `tls.key`). NICo mode mounts the OAuth2 and proxy TLS Secrets instead of BMC credentials. Omit `inventory.targets` and disable the bundled health and gateway workloads. See [endpoint source configuration](../../../docs/configuration.md#endpoint-source) for the values and Secret requirements.

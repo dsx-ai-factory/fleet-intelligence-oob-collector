@@ -35,6 +35,7 @@ pub const DEFAULT_MEASUREMENT_INDICES: &[u8] = &[255];
 
 pub fn attestation_config() -> AttestationConfig {
     AttestationConfig {
+        bmc_proxy: None,
         port: DEFAULT_PORT,
         insecure_tls: DEFAULT_INSECURE_TLS,
         concurrency: DEFAULT_CONCURRENCY,

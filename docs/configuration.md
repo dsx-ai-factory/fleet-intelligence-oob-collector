@@ -19,7 +19,9 @@ endpointSource:
     tokenUrl: https://idp.example.com/token
     oauth2CredentialsSecretName: fi-nico-oauth2-credentials
     scopes: [nico] # Use scopes configured by your identity-provider administrator.
-    credentialsProfile: compute
+    bmcProxy:
+      url: https://bmc-proxy.example.com:1079
+      tlsSecretName: fi-nico-bmc-proxy-client
     timeoutSeconds: 30
 nicoHardwareHealth:
   enabled: false
@@ -27,7 +29,11 @@ otelGateway:
   enabled: false
 ```
 
-Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your Fleet Intelligence backend settings, service key, and BMC credentials. Set `credentialsProfile` to an existing shared BMC profile, such as `compute` in the example credentials file. Newly discovered MACs use that profile, with per-MAC overrides where configured.
+Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your Fleet Intelligence backend settings and service key. NICo mode requires the authenticated BMC proxy for inventory and attestation and uses no local BMC credential file or profile.
+
+Provide the proxy client identity and CA bundle in `endpointSource.nico.bmcProxy.tlsSecretName`, using the keys `tls.crt`, `tls.key`, and `ca.crt`. NICo must trust and authorize that client identity for the inventory GET requests and attestation measurement POST, data GET, and task-poll GET requests. The collector identifies each BMC with its MAC in a `Forwarded` header; the proxy resolves the target and supplies BMC credentials. The collector verifies the proxy certificate against this CA bundle even when `bmcCollector.redfish.insecureTls` is enabled. Proxy traffic bypasses environment HTTP/SOCKS proxies, and neither redirects nor proxy failures cause a direct Redfish connection to a BMC. The proxy must support MAC target selection and follow any required same-origin BMC redirects itself.
+
+TCP latency probes still connect directly to each discovered BMC IP on port 443 for geolocation tracking. Keep network access to these BMC ports as well as to the NICo API, identity provider, BMC proxy, and Fleet Intelligence backend. The existing probe settings and per-BMC limits apply.
 
 Each machine takes its placement from its NICo site: the site's name is its node group, and its lowercased, hyphen-separated country/state/city is its compute zone, such as `usa-az-phoenix`. Leave `inventory.nodeGroup` and `inventory.computeZone` empty; the chart rejects them with NICo discovery, because one value would put every site in the same group. Missing location components are omitted; no usable location leaves compute zone unset. NICo machine labels are ignored.
 
@@ -47,7 +53,7 @@ If a site's name or location can't be used as a node group or compute zone, the 
 
 All site and machine pages must succeed before BMC collection begins. A failed discovery skips that cycle instead of using a partial list, and the next cycle discovers again. If discovery fails when the collector starts, for example because NICo or the identity provider isn't reachable yet, the collector exits and Kubernetes restarts it with its usual backoff.
 
-For TOML, use the optional `[endpoint_source]` section in [config.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.example.toml) and remove the static `[[targets]]` blocks. Run `bmc-collector discover --config config.toml` to inspect discovered IPs, MACs, names, and placement without reading BMC passwords or querying hardware.
+For TOML, start with [config.nico.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.nico.example.toml). Configure `[endpoint_source]` and `[bmc_proxy]`; omit `[[targets]]`, `[credentials]`, and top-level placement overrides. Relative OAuth2 and proxy TLS file paths resolve beside the TOML file. Run only the OOB collector; operators disable bundled NICo health and the telemetry gateway as shown above. See [rotation and ownership](credentials.md#rotation-and-ownership) for certificate renewal. Run `bmc-collector discover --config config.toml` to inspect discovered IPs, MACs, names, and placement without reading BMC passwords or querying hardware.
 
 ## Targets
 
@@ -330,6 +336,6 @@ proxy:
   noProxy: localhost,127.0.0.1,.svc,.cluster.local
 ```
 
-`proxy` also accepts `httpProxy` and `allProxy`. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
+`proxy` also accepts `httpProxy` and `allProxy`. NICo BMC proxy requests connect directly to the configured proxy and ignore these environment proxy settings. The default `noProxy` keeps local and in-cluster traffic off the proxy; if you change it, keep those entries.
 
-`bmcCollector.redfish.insecureTls` defaults to `true`, turning off BMC certificate checks for the collector. Set it to `false` to verify BMC certificates. It doesn't change how the collector verifies the Fleet Intelligence backend. NICo doesn't verify BMC certificates, whatever this setting is.
+`bmcCollector.redfish.insecureTls` defaults to `true`, turning off BMC certificate checks for the collector. Set it to `false` to verify BMC certificates. It doesn't change how the collector verifies the Fleet Intelligence backend or the NICo BMC proxy. Bundled NICo health doesn't verify BMC certificates, whatever this setting is.

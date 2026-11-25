@@ -39,9 +39,6 @@ pub struct NicoRestConfig {
     /// Scopes requested from the identity provider; empty omits the scope parameter.
     #[serde(default)]
     pub scopes: Vec<String>,
-    /// Required shared BMC credential profile applied to every discovered machine.
-    #[serde(default)]
-    pub credentials_profile: Option<String>,
     /// Whole-discovery budget, including credential loading, OAuth2, and all pages.
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
@@ -73,12 +70,8 @@ impl NicoRestEndpointSource {
             || !config.client_id_file.is_absolute()
             || !config.client_secret_file.is_absolute()
             || !(1..=3600).contains(&config.timeout_seconds)
-            || config
-                .credentials_profile
-                .as_ref()
-                .is_none_or(|name| name.trim().is_empty())
         {
-            return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600; a nonblank shared credentials_profile is required".into());
+            return Err("NICo requires organization, absolute OAuth2 client credential paths, timeout_seconds in 1..=3600".into());
         }
         url.path_segments_mut()
             .map_err(|_| "invalid NICo REST API prefix")?
@@ -264,8 +257,7 @@ impl NicoRestEndpointSource {
                 .get(machine.site_id.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let mut candidate =
-                machine.into_candidate(machine_id, self.config.credentials_profile.clone());
+            let mut candidate = machine.into_candidate(machine_id);
             if let Ok(endpoint) = &mut candidate.endpoint {
                 endpoint.compute_zone = compute_zone;
                 endpoint.node_group = node_group;
@@ -648,7 +640,7 @@ impl Machine {
     /// Decommissioned machines and machines without BMC metadata claim nothing;
     /// otherwise each BMC IP and MAC that parses is claimed, even when another
     /// field makes the machine unusable.
-    fn into_candidate(self, machine_id: String, credentials_profile: Option<String>) -> Candidate {
+    fn into_candidate(self, machine_id: String) -> Candidate {
         let mut candidate = Candidate {
             machine_id,
             mac: None,
@@ -691,7 +683,7 @@ impl Machine {
                 ip,
                 port: None,
                 mac,
-                credentials_profile,
+                credentials_profile: None,
                 compute_zone: None,
                 node_group: None,
                 labels: BTreeMap::new(),
@@ -736,7 +728,6 @@ mod tests {
             client_id_file: path.with_extension("id"),
             client_secret_file: path,
             scopes: vec!["test-scope".into()],
-            credentials_profile: Some("bmc".into()),
             timeout_seconds: 2,
         }
     }
@@ -953,7 +944,7 @@ mod tests {
         assert_eq!(endpoints[100].mac.to_string(), "02:00:00:00:00:64");
         assert_eq!(endpoints[0].kind, TargetKind::Compute);
         assert_eq!(endpoints[0].port, None);
-        assert_eq!(endpoints[0].credentials_profile.as_deref(), Some("bmc"));
+        assert!(endpoints[0].credentials_profile.is_none());
         assert!(endpoints[0].labels.is_empty());
         let requests = server.await.unwrap();
         assert!(requests[0].starts_with("GET /v2/org/example/nico/site?"));
@@ -1582,17 +1573,6 @@ mod tests {
         assert!(NicoRestEndpointSource::new(cfg).is_err());
         cfg = config(PathBuf::from("relative-token"));
         assert!(NicoRestEndpointSource::new(cfg).is_err());
-    }
-
-    #[test]
-    fn requires_a_shared_bmc_profile_before_discovery() {
-        let files = CredentialFiles::new("fixture-secret");
-        for profile in [None, Some("".into()), Some("   ".into())] {
-            let mut cfg = config(files.0.clone());
-            cfg.credentials_profile = profile;
-            let error = NicoRestEndpointSource::new(cfg).err().unwrap().to_string();
-            assert!(error.contains("credentials_profile is required"), "{error}");
-        }
     }
 
     #[tokio::test]

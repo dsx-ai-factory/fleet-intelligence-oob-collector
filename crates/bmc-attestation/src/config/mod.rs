@@ -21,6 +21,7 @@ pub mod defaults;
 
 #[derive(Clone, Debug)]
 pub struct AttestationConfig {
+    pub bmc_proxy: Option<bmc_dispatch::proxy::BmcProxyConfig>,
     pub port: u16,
     pub insecure_tls: bool,
     pub concurrency: usize,

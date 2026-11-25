@@ -55,7 +55,8 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             "endpointSource.nico.org": "example-org",
             "endpointSource.nico.oauth2CredentialsSecretName": "nico-oauth2-credentials",
             "endpointSource.nico.tokenUrl": "https://idp.example.com/token",
-            "endpointSource.nico.credentialsProfile": "bmc",
+            "endpointSource.nico.bmcProxy.url": "https://proxy.example.com:1079",
+            "endpointSource.nico.bmcProxy.tlsSecretName": "nico-bmc-proxy-client",
             "nicoHardwareHealth.enabled": False,
             "otelGateway.enabled": False,
         } | overrides
@@ -78,14 +79,22 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         self.assertNotIn("targets", config)
         self.assertEqual(config["endpoint_source"], {
             "type": "nico", "api_url": "https://nico.example.com/v2", "org": "example-org",
-            "credentials_profile": "bmc", "token_url": "https://idp.example.com/token",
+            "token_url": "https://idp.example.com/token",
             "client_id_file": "/run/secrets/nico-oauth2/client_id",
             "client_secret_file": "/run/secrets/nico-oauth2/client_secret",
             "scopes": [],
             "timeout_seconds": 30,
         })
-        # Discovery changes no Redfish authentication or transport settings.
-        self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
+        self.assertNotIn("credentials", config)
+        self.assertNotIn("name: bmc-credentials", result.stdout)
+        self.assertIn('secretName: "nico-bmc-proxy-client"', result.stdout)
+        self.assertIn("mountPath: /run/secrets/nico-bmc-proxy", result.stdout)
+        self.assertEqual(config["bmc_proxy"], {
+            "url": "https://proxy.example.com:1079",
+            "ca_cert_path": "/run/secrets/nico-bmc-proxy/ca.crt",
+            "client_cert_path": "/run/secrets/nico-bmc-proxy/tls.crt",
+            "client_key_path": "/run/secrets/nico-bmc-proxy/tls.key",
+        })
 
     def test_configured_oauth2_scopes_are_rendered(self):
         result = self.render(**{"endpointSource.nico.scopes": ["inventory.read", "site.read"]})
@@ -123,9 +132,11 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
                     self.assertNotIn("node_group", config)
 
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
-        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "credentialsProfile")]
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "bmcProxy.url", "bmcProxy.tlsSecretName")]
         cases.extend([
-            {"endpointSource.nico.credentialsProfile": "   "},
+            {"endpointSource.nico.credentialsProfile": "bmc"},
+            {"endpointSource.nico.bmcProxy.url": "http://proxy.example.com"},
+            {"endpointSource.nico.bmcProxy.tlsSecretName": "   "},
             {"endpointSource.nico.apiName": "carbide"},
             {"endpointSource.nico.siteId": "obsolete-site"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
