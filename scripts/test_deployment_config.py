@@ -47,7 +47,100 @@ def render(settings, template="configmap.yaml", workload=None, *, use_ci_values=
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
+class NicoDiscoveryHelmTests(unittest.TestCase):
+    def render(self, **overrides):
+        settings = {
+            "endpointSource.type": "nico",
+            "endpointSource.nico.apiUrl": "https://nico.example.com/v2",
+            "endpointSource.nico.org": "example-org",
+            "endpointSource.nico.oauth2CredentialsSecretName": "nico-oauth2-credentials",
+            "endpointSource.nico.tokenUrl": "https://idp.example.com/token",
+            "endpointSource.nico.credentialsProfile": "bmc",
+            "nicoHardwareHealth.enabled": False,
+            "otelGateway.enabled": False,
+        } | overrides
+        command = ["helm", "template", "test", str(CHART)]
+        for key, value in settings.items():
+            command.extend(["--set-json", f"{key}={json.dumps(value)}"])
+        return subprocess.run(command, capture_output=True, text=True)
+
+    def test_discovery_mounts_oauth2_credentials_and_generates_collector_config(self):
+        result = self.render()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("kind: Deployment"), 1)
+        self.assertIn('secretName: "nico-oauth2-credentials"', result.stdout)
+        self.assertRegex(result.stdout, r'key: client_id\s+path: client_id')
+        self.assertRegex(result.stdout, r'key: client_secret\s+path: client_secret')
+        self.assertIn("mountPath: /run/secrets/nico-oauth2", result.stdout)
+        self.assertNotIn("subPath:", result.stdout)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertNotIn("targets", config)
+        self.assertEqual(config["endpoint_source"], {
+            "type": "nico", "api_url": "https://nico.example.com/v2", "org": "example-org",
+            "credentials_profile": "bmc", "token_url": "https://idp.example.com/token",
+            "client_id_file": "/run/secrets/nico-oauth2/client_id",
+            "client_secret_file": "/run/secrets/nico-oauth2/client_secret",
+            "scopes": [],
+            "timeout_seconds": 30,
+        })
+        # Discovery changes no Redfish authentication or transport settings.
+        self.assertEqual(config["credentials"]["file"], "/run/secrets/bmc/credentials.json")
+
+    def test_configured_oauth2_scopes_are_rendered(self):
+        result = self.render(**{"endpointSource.nico.scopes": ["inventory.read", "site.read"]})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["scopes"], ["inventory.read", "site.read"])
+
+    def test_null_oauth2_scopes_render_as_an_empty_toml_array(self):
+        result = self.render(**{"endpointSource.nico.scopes": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["scopes"], [])
+
+    def test_missing_timeout_renders_the_default(self):
+        # --reuse-values upgrades omit defaults added after the original install.
+        result = self.render(**{"endpointSource.nico.timeoutSeconds": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+        config = tomllib.loads(textwrap.dedent(contents))
+        self.assertEqual(config["endpoint_source"]["timeout_seconds"], 30)
+
+    def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
+        cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "credentialsProfile")]
+        cases.extend([
+            {"endpointSource.nico.credentialsProfile": "   "},
+            {"endpointSource.nico.apiName": "carbide"},
+            {"endpointSource.nico.siteId": "obsolete-site"},
+            {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
+            {"nicoHardwareHealth.enabled": True},
+            {"otelGateway.enabled": True},
+            {"bmcCollector.enabled": False},
+        ])
+        for settings in cases:
+            with self.subTest(settings=settings):
+                self.assertNotEqual(self.render(**settings).returncode, 0)
+
+
 class NicoHelmTests(unittest.TestCase):
+    def test_legacy_static_values_allow_missing_endpoint_source_settings(self):
+        # --reuse-values can omit defaults introduced after the original install.
+        # Helm removes null keys during coalescing, reproducing those value shapes.
+        expected = (CHART / "ci/expected-configmap.yaml").read_text()
+        for missing in ["endpointSource", "endpointSource.type", "endpointSource.nico"]:
+            with self.subTest(missing=missing):
+                result = subprocess.run([
+                    "helm", "template", "test", str(CHART),
+                    "--values", str(CHART / "ci/test-values.yaml"),
+                    "--set-json", f"{missing}=null",
+                    "--show-only", "templates/configmap.yaml",
+                ], capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+
     def test_bundle_defaults_without_collection_overrides(self):
         result = render({}, use_ci_values=False)
         self.assertEqual(result.returncode, 0, result.stderr)

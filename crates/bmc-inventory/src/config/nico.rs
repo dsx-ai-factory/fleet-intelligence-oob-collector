@@ -28,7 +28,6 @@ use super::CollectorConfig;
 pub struct NicoConfigOptions {
     pub otlp_endpoint: String,
     pub metrics_endpoint: String,
-    pub metrics_prefix: String,
     pub resource_status_collection: bool,
     pub resource_status_firmware_poll_interval_seconds: u64,
 }
@@ -38,7 +37,6 @@ impl Default for NicoConfigOptions {
         Self {
             otlp_endpoint: "http://localhost:4317".to_string(),
             metrics_endpoint: "0.0.0.0:9009".to_string(),
-            metrics_prefix: "fleetint".to_string(),
             resource_status_collection: true,
             resource_status_firmware_poll_interval_seconds: 1_800,
         }
@@ -53,15 +51,11 @@ pub fn render_nico_config(
     config.nico_health.validate()?;
     let otlp_endpoint = options.otlp_endpoint.trim();
     let metrics_endpoint = options.metrics_endpoint.trim();
-    let metrics_prefix = options.metrics_prefix.trim();
     if otlp_endpoint.is_empty() {
         return Err("NICo OTLP endpoint cannot be empty".into());
     }
     if metrics_endpoint.is_empty() {
         return Err("NICo metrics endpoint cannot be empty".into());
-    }
-    if metrics_prefix.is_empty() {
-        return Err("NICo metrics prefix cannot be empty".into());
     }
     if options.resource_status_firmware_poll_interval_seconds == 0 {
         return Err("NICo resource status firmware poll interval must be greater than zero".into());
@@ -141,7 +135,6 @@ pub fn render_nico_config(
         },
         metrics: NicoMetrics {
             endpoint: metrics_endpoint,
-            prefix: metrics_prefix,
         },
     };
 
@@ -255,7 +248,6 @@ struct NicoOtlpTarget<'a> {
 #[derive(Serialize)]
 struct NicoMetrics<'a> {
     endpoint: &'a str,
-    prefix: &'a str,
 }
 
 #[cfg(test)]
@@ -305,6 +297,8 @@ mod tests {
         let rendered =
             render_nico_config(&collector, &NicoConfigOptions::default()).expect("NICo config");
         let rendered: toml::Value = toml::from_str(&rendered).expect("rendered TOML");
+        // Leave the prefix unset so NICo applies its own default.
+        assert!(rendered["metrics"].get("prefix").is_none());
         let endpoint = &rendered["endpoint_sources"]["static_bmc_endpoints"][0];
 
         assert_eq!(endpoint["ip"].as_str(), Some("10.0.0.1"));
@@ -727,7 +721,6 @@ mod tests {
             &NicoConfigOptions {
                 otlp_endpoint: "  http://localhost:4317  ".to_string(),
                 metrics_endpoint: "  0.0.0.0:9009  ".to_string(),
-                metrics_prefix: "  fleetint  ".to_string(),
                 ..NicoConfigOptions::default()
             },
         )
@@ -742,7 +735,7 @@ mod tests {
             rendered["metrics"]["endpoint"].as_str(),
             Some("0.0.0.0:9009")
         );
-        assert_eq!(rendered["metrics"]["prefix"].as_str(), Some("fleetint"));
+        assert!(rendered["metrics"].get("prefix").is_none());
     }
 
     #[test]

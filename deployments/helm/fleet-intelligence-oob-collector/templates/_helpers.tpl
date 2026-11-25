@@ -92,6 +92,15 @@ affinity:
 {{- end }}
 
 {{- define "fleet-intelligence-oob-collector.validate" -}}
+{{- if eq (default dict .Values.endpointSource).type "nico" -}}
+{{- if not .Values.bmcCollector.enabled -}}{{- fail "NICo discovery requires bmcCollector.enabled=true" -}}{{- end -}}
+{{- if .Values.inventory.targets -}}{{- fail "NICo discovery requires inventory.targets to be empty" -}}{{- end -}}
+{{- if or .Values.nicoHardwareHealth.enabled .Values.otelGateway.enabled -}}
+{{- fail "NICo discovery requires nicoHardwareHealth.enabled=false and otelGateway.enabled=false; use the existing site services" -}}
+{{- end -}}
+{{- else -}}
+{{- if not .Values.inventory.targets -}}{{- fail "inventory.targets must contain at least one BMC for the static source" -}}{{- end -}}
+{{- end -}}
 {{- if not (or .Values.bmcCollector.enabled .Values.nicoHardwareHealth.enabled) -}}
 {{- fail "enable at least one of bmcCollector or nicoHardwareHealth" -}}
 {{- end -}}

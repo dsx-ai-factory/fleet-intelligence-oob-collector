@@ -42,6 +42,7 @@ curl --fail --silent --show-error \
 ```
 
 - For Kubernetes, follow [Installation](docs/installation.md) and [Configuration](docs/configuration.md). You can also [set installer defaults from environment variables](docs/installation.md#set-installer-defaults-from-environment-variables).
+- To discover BMC targets from NICo REST, follow [endpoint source configuration](docs/configuration.md#endpoint-source).
 - For DEB/RPM hosts, follow [Install on Linux](docs/host-installation.md) and [Configure Linux packages](docs/host-configuration.md).
 - See [Contributing](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/CONTRIBUTING.md#development-setup) to build and run from source.
 

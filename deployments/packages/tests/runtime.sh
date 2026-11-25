@@ -62,11 +62,17 @@ setpriv --reuid=fleetint-oob --regid=fleetint-oob --clear-groups -- \
     /usr/lib/fleetint-oob/run-nico > "$work/nico.log" 2>&1 &
 nico_pid=$!
 wait_for "$nico_pid" curl --fail --silent --max-time 1 http://127.0.0.1:9009/livez
-curl --fail --silent --max-time 5 http://127.0.0.1:9009/metrics > /dev/null
+curl --fail --silent --max-time 5 http://127.0.0.1:9009/metrics > "$work/nico-metrics.txt"
+# An omitted prefix must resolve to NICo's native default in the running binary.
+grep -Eq '^carbide_hardware_health_active_endpoints[[:space:]]' "$work/nico-metrics.txt"
 directory=/run/fleetint-nico-health
 [[ $(stat -c %a "$directory") == 700 ]]
 configs=("$directory"/config.*/config.toml)
 [[ ${#configs[@]} == 1 ]]
+if grep -Eq '^[[:space:]]*prefix[[:space:]]*=' "${configs[0]}"; then
+    echo 'Generated NICo configuration must omit the metrics prefix' >&2
+    exit 1
+fi
 # The real NICo binary must accept the overrides produced by the shared renderer.
 grep -Fxq 'bmc_request_concurrency = 2' "${configs[0]}"
 grep -Fxq '[collectors.sensors]' "${configs[0]}"

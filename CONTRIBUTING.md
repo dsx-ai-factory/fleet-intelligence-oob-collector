@@ -135,6 +135,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 
 | Command | What it does |
 | --- | --- |
+| `discover` | Lists endpoints from the configured source without reading BMC passwords or querying hardware. |
 | `inventory` | Collects once and prints a table. Add `--format json` for JSON or `--detail` for more columns. |
 | `run` | Enrolls with Fleet Intelligence, then collects and uploads inventory and attestation on a schedule. |
 | `render-nico-config --output nico.toml` | Generates NICo configuration that references the credentials file without copying passwords. The Helm chart runs it in NICo's init container. |
@@ -162,7 +163,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 
 `RUST_LOG` sets the log level and defaults to `info`.
 
-`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), `--metrics-prefix` (default `fleetint`), `--resource-status-firmware-poll-interval-seconds` (default `1800`), and `--disable-resource-status-collection`. These options only configure NICo; they don't start a gateway. The interval controls FirmwareInventory status; System and Chassis use NICo's discovery cadence, and Manager uses NICo's manager cadence.
+`render-nico-config` also accepts `--otlp-endpoint` (default `http://localhost:4317`), `--metrics-endpoint` (default `0.0.0.0:9009`), `--resource-status-firmware-poll-interval-seconds` (default `1800`), and `--disable-resource-status-collection`. The generated configuration omits `metrics.prefix` so NICo uses its own default. These options only configure NICo; they don't start a gateway. The interval controls FirmwareInventory status; System and Chassis use NICo's discovery cadence, and Manager uses NICo's manager cadence.
 
 Do not commit real BMC credentials, customer data, private backend URLs, or raw hardware dumps. The repository ignores the documented local configuration and environment files by default.
 
@@ -179,10 +180,12 @@ These notes describe how the collector works internally. Read them before changi
 | `src/` | Runtime orchestration, enrollment, and backend session lifecycle |
 | `crates/backend-client` | Backend URL validation, HTTP policy, enrollment transport, and typed HTTP errors |
 | `crates/bmc-dispatch` | Shared per-BMC concurrency, rate limiting, and fair scheduling |
-| `crates/bmc-inventory` | Redfish inventory collection, mapping, and output |
+| `crates/bmc-inventory` | Endpoint discovery, Redfish inventory collection, mapping, and output |
 | `crates/bmc-attestation` | Nonce retrieval, GPU evidence collection, and upload |
 
 **Inventory pipeline.** Inventory flows source → model → sink. The Redfish source builds Fleet Intelligence models directly and keeps vendor-specific Redfish structures inside the source. Inventory node identity resolution is independent of attestation.
+
+**Endpoint discovery.** `bmc_inventory::endpoint::EndpointSource` lists BMC endpoints for a collection cycle. A source returns a complete, credential-free listing or an error; an unavailable source must never become an empty listing. Endpoints carry only user labels and a credential profile reference. A shared finalizer applies placement defaults, validates labels, adds the generated labels, resolves credentials, and rejects empty or duplicate-MAC listings, so every source produces the same `Target` values. `StaticEndpointSource` reads the existing `[[targets]]`. Provider authentication, filtering, and pagination belong in each source, not in the interface. The BMC MAC remains the Fleet Intelligence identity; provider IDs are not identities.
 
 **Configuration snapshot.** Each cycle loads one resolved target and credential snapshot and synchronizes the dispatcher's BMC endpoints before collecting; inventory and attestation share it. Startup validation supplies the first snapshot. During attestation, a target gets at most one credential reload per attempt. The retry pass reloads credentials for the targets it retries.
 

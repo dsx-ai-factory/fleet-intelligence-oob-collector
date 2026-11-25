@@ -245,7 +245,7 @@ async fn run_runtime_until_shutdown(
         "starting OOB collector"
     );
     let collector_config = options.collector_config_from_env(|name| std::env::var(name))?;
-    let target_config = config::load_config(&options.inventory.config)?;
+    let target_config = config::load_config_async(&options.inventory.config).await?;
     let dispatcher = Arc::new(start_dispatcher(
         &options.inventory,
         &target_config.targets,
@@ -278,7 +278,7 @@ async fn run_runtime_until_shutdown(
         let cycle = async {
             let target_config = match initial_config.take() {
                 Some(config) => config,
-                None => config::load_config(&options.inventory.config)?,
+                None => config::load_config_async(&options.inventory.config).await?,
             };
             run_collection_cycle(
                 &options,
@@ -821,7 +821,7 @@ async fn upload_attestation(
 }
 
 pub async fn run_inventory(options: InventoryOptions) -> Result<(), Box<dyn Error>> {
-    let collector_config = config::load_config(&options.config)?;
+    let collector_config = config::load_config_async(&options.config).await?;
     let dispatcher = Arc::new(start_dispatcher(&options, &collector_config.targets)?);
     let inventories =
         collect_inventory_targets(&options, collector_config.targets, dispatcher).await?;
@@ -1641,8 +1641,9 @@ mod tests {
             ),
         )
         .expect("write config");
-        let snapshot = config::load_targets(config_path.to_str().expect("UTF-8 config path"))
-            .expect("target snapshot");
+        let snapshot = config::load_config(config_path.to_str().expect("UTF-8 config path"))
+            .expect("target snapshot")
+            .targets;
         // The phase conversion must not read files that may have rotated.
         std::fs::remove_file(&config_path).expect("remove config before conversion");
         let targets = build_attestation_targets(&snapshot);

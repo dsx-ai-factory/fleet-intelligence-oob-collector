@@ -4,6 +4,8 @@ Install the collector on Kubernetes with its Helm chart. By default, the chart r
 
 For DEB/RPM installations, use the [Linux package guide](host-installation.md).
 
+For a NICo-managed site, use [endpoint source configuration](configuration.md#endpoint-source) to configure the target source and mount its OAuth2 client credential files.
+
 ## Prerequisites
 
 - A Kubernetes context with permission to deploy the chart and read the two Secrets in your chosen namespace. The installer applies the namespace and can create Secrets from files. Its verification checks need access to Deployments, pods, and pod logs. Read access to ReplicaSets and events helps diagnose failures. If your administrator provisions the namespace and Secrets for you, the manual Helm path can use them directly.

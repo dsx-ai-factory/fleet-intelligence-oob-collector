@@ -14,6 +14,7 @@ bmc-dispatch.workspace = true
 bmc-error.workspace = true
 mac_address.workspace = true
 nv-redfish.workspace = true
+oauth2.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
