@@ -109,6 +109,19 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
         config = tomllib.loads(textwrap.dedent(contents))
         self.assertEqual(config["endpoint_source"]["timeout_seconds"], 30)
 
+    def test_unicode_blank_placement_is_omitted_not_rendered_empty(self):
+        # The schema pattern treats only ASCII as blank, while Helm's trim also
+        # removes Unicode spaces; the collector rejects an empty placement.
+        for key in ("inventory.computeZone", "inventory.nodeGroup"):
+            for value in ("\u00a0", "\u2003"):
+                with self.subTest(key=key, value=repr(value)):
+                    result = self.render(**{key: value})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    contents = result.stdout.split("  collector.toml: |\n", 1)[1].split("\n---", 1)[0]
+                    config = tomllib.loads(textwrap.dedent(contents))
+                    self.assertNotIn("compute_zone", config)
+                    self.assertNotIn("node_group", config)
+
     def test_discovery_rejects_missing_access_and_ambiguous_deployments(self):
         cases = [{f"endpointSource.nico.{key}": ""} for key in ("apiUrl", "org", "tokenUrl", "oauth2CredentialsSecretName", "credentialsProfile")]
         cases.extend([
@@ -116,6 +129,8 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             {"endpointSource.nico.apiName": "carbide"},
             {"endpointSource.nico.siteId": "obsolete-site"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
+            {"inventory.computeZone": "zone-a"},
+            {"inventory.nodeGroup": "group-a"},
             {"nicoHardwareHealth.enabled": True},
             {"otelGateway.enabled": True},
             {"bmcCollector.enabled": False},

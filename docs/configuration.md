@@ -27,11 +27,25 @@ otelGateway:
   enabled: false
 ```
 
-Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization, 100 per request; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your Fleet Intelligence backend settings, service key, and BMC credentials. Set `credentialsProfile` to an existing shared BMC profile, such as `compute` in the example credentials file. Newly discovered MACs use that profile, with per-MAC overrides where configured.
+Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your Fleet Intelligence backend settings, service key, and BMC credentials. Set `credentialsProfile` to an existing shared BMC profile, such as `compute` in the example credentials file. Newly discovered MACs use that profile, with per-MAC overrides where configured.
 
-Configured `inventory.nodeGroup` and `inventory.computeZone` take precedence independently. Otherwise, each machine uses its site's name as node group and its lowercased, hyphen-separated country/state/city as compute zone, such as `usa-az-phoenix`. Missing location components are omitted; no usable location leaves compute zone unset. NICo machine labels are ignored.
+Each machine takes its placement from its NICo site: the site's name is its node group, and its lowercased, hyphen-separated country/state/city is its compute zone, such as `usa-az-phoenix`. Leave `inventory.nodeGroup` and `inventory.computeZone` empty; the chart rejects them with NICo discovery, because one value would put every site in the same group. Missing location components are omitted; no usable location leaves compute zone unset. NICo machine labels are ignored.
 
-The collector lists sites for placement, then lists every machine your service identity can see in the organization, without site, lifecycle-status, or missing-on-site query filters, and matches each machine to its site. A site the identity can see but whose machines it can't list doesn't block discovery. Decommissioning/decommissioned machines and machines with invalid BMC metadata, an unspecified BMC address such as `0.0.0.0`, or an oversized hostname are skipped with warnings and counts. If a site's name or location can't be used as a node group or compute zone, the collector logs a warning and leaves that value unset for the site's machines, so your configured `inventory.nodeGroup` or `inventory.computeZone` still applies. All site and machine pages must succeed before BMC collection begins; a failed discovery, including a listing that changes while it is read, skips that cycle instead of using a partial list, and the next cycle discovers again. If discovery fails when the collector starts, for example because NICo or the identity provider isn't reachable yet, the collector exits and Kubernetes restarts it with its usual backoff. Each successful discovery logs one `NICo discovery completed` line with site, machine, target, and skipped-machine counts.
+The collector lists the sites and machines your service identity can see in the organization and matches each machine to its site. A site whose machines the identity can't list doesn't block discovery. Machines that can't be collected safely are skipped, and the rest of the organization is still collected. Each skipped machine logs one `skipping NICo machine` warning with its `machine_id` and `reason`; decommissioned machines are logged only at debug level:
+
+| `reason` in the log | What to check in NICo |
+| --- | --- |
+| `decommissioned or decommissioning` | Nothing; retired machines aren't collected. |
+| `missing BMC metadata` | That the service identity can read machine BMC metadata. If every machine reports this, discovery fails with `no usable BMC targets`. |
+| `missing, invalid, or unspecified BMC IP` | The machine's BMC IP; a placeholder such as `0.0.0.0` counts as unspecified. |
+| `missing or invalid BMC MAC` | The machine's BMC MAC. |
+| `unusable hostname` | The hostname, which must be at most 1024 bytes. |
+| `BMC MAC shared with another machine` | The record that reports the same MAC, given as `shared_bmc`. Neither machine is collected until one record is corrected, because either could be wrong. |
+| `BMC IP shared with another machine` | The record that reports the same IP, given as `shared_bmc`. Neither machine is collected until one record is corrected. |
+
+If a site's name or location can't be used as a node group or compute zone, the collector logs a warning and leaves that value unset for the site's machines. Each successful discovery logs one `NICo discovery completed` line with site, machine, target, and skipped-machine counts.
+
+All site and machine pages must succeed before BMC collection begins. A failed discovery skips that cycle instead of using a partial list, and the next cycle discovers again. If discovery fails when the collector starts, for example because NICo or the identity provider isn't reachable yet, the collector exits and Kubernetes restarts it with its usual backoff.
 
 For TOML, use the optional `[endpoint_source]` section in [config.example.toml](https://github.com/dsx-ai-factory/fleet-intelligence-oob-collector/blob/main/config.example.toml) and remove the static `[[targets]]` blocks. Run `bmc-collector discover --config config.toml` to inspect discovered IPs, MACs, names, and placement without reading BMC passwords or querying hardware.
 
@@ -84,8 +98,8 @@ These settings apply to every target unless the target overrides them:
 
 | Field | Description |
 | --- | --- |
-| `inventory.computeZone` | Default compute zone. |
-| `inventory.nodeGroup` | Default node group. |
+| `inventory.computeZone` | Default compute zone for static targets. Leave empty with NICo discovery. |
+| `inventory.nodeGroup` | Default node group for static targets. Leave empty with NICo discovery. |
 | `inventory.labels` | Labels for every target. A target label with the same key wins. |
 
 ### Target identity
@@ -117,7 +131,7 @@ inventory:
       nodeGroup: gb200-inference
 ```
 
-Here `node-01` uses the shared values, while `node-02` is in `us-west-dc2` and `gb200-inference`. If neither place sets a value, the machine is sent without it.
+Here `node-01` uses the shared values, while `node-02` is in `us-west-dc2` and `gb200-inference`. If neither place sets a value, the machine is sent without it. With [NICo discovery](#endpoint-source), each machine takes its placement from its NICo site instead.
 
 The collector sends placement with the inventory and adds it to telemetry as the `compute_zone` and `node_group` labels. Custom labels such as `site` stay labels; they don't set placement.
 

@@ -10,8 +10,8 @@ inventory:
   #   address: 192.0.2.10
   #   mac: "00:11:22:33:44:55"
   #   credentialsProfile: compute # Profile name in the credentials file.
-  computeZone: "" # Default compute zone for every target.
-  nodeGroup: "" # Default node group for every target.
+  computeZone: "" # Default compute zone for every static target; leave empty for NICo.
+  nodeGroup: "" # Default node group for every static target; leave empty for NICo.
   labels: {} # Default labels applied to every target.
 
 # Target source; NICo REST uses mounted OAuth2 client credentials.

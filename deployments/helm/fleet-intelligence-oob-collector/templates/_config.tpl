@@ -2,7 +2,9 @@
 Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 */}}
-{{/* Keep generated TOML limited to validated inventory and NICo values. */}}
+{{/* Keep generated TOML limited to validated inventory and NICo values.
+Optional strings are rendered only when nonblank after trimming, as chart
+validation checks them, so a whitespace-only value is omitted, never empty. */}}
 {{- define "fleet-intelligence-oob-collector.tomlLabels" -}}
 {{- $entries := list -}}
 {{- range $name, $value := . -}}
@@ -12,8 +14,8 @@ SPDX-License-Identifier: Apache-2.0
 {{- end -}}
 
 {{- define "fleet-intelligence-oob-collector.collectorConfig" -}}
-{{ with .Values.inventory.computeZone }}compute_zone = {{ trim . | toJson }}
-{{ end }}{{ with .Values.inventory.nodeGroup }}node_group = {{ trim . | toJson }}
+{{ with trim (.Values.inventory.computeZone | default "") }}compute_zone = {{ toJson . }}
+{{ end }}{{ with trim (.Values.inventory.nodeGroup | default "") }}node_group = {{ toJson . }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" .Values.inventory.labels }}
 
 [credentials]
@@ -87,10 +89,10 @@ kind = {{ default "unknown" .kind | toJson }}
 ip = {{ .address | toJson }}
 mac = {{ .mac | toJson }}
 {{ with .port }}port = {{ . }}
-{{ end }}{{ with .name }}name = {{ trim . | toJson }}
-{{ end }}{{ with .computeZone }}compute_zone = {{ trim . | toJson }}
-{{ end }}{{ with .nodeGroup }}node_group = {{ trim . | toJson }}
-{{ end }}{{ with .credentialsProfile }}credentials_profile = {{ trim . | toJson }}
+{{ end }}{{ with trim (.name | default "") }}name = {{ toJson . }}
+{{ end }}{{ with trim (.computeZone | default "") }}compute_zone = {{ toJson . }}
+{{ end }}{{ with trim (.nodeGroup | default "") }}node_group = {{ toJson . }}
+{{ end }}{{ with trim (.credentialsProfile | default "") }}credentials_profile = {{ toJson . }}
 {{ end }}{{ include "fleet-intelligence-oob-collector.tomlLabels" (default dict .labels) }}
 {{ end }}
 {{- end -}}

@@ -11,21 +11,20 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use mac_address::MacAddress;
-use oauth2::{
-    AsyncHttpClient, AuthType, ClientId, ClientSecret, Scope, TokenResponse, TokenUrl,
-    basic::BasicClient,
-};
-use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, de::DeserializeOwned};
 use url::Url;
 
-use super::{Endpoint, EndpointSnapshot, EndpointSource, EndpointSourceError, PlacementOrigin};
+use super::{Endpoint, EndpointSnapshot, EndpointSource, EndpointSourceError};
 use crate::models::TargetKind;
 
 type Result<T> = std::result::Result<T, EndpointSourceError>;
 const PAGE_SIZE: usize = 100;
 const MAX_PAGES: usize = 1000;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOKEN_RESPONSE_BYTES: usize = 128 * 1024;
+const MAX_ACCESS_TOKEN_BYTES: usize = 64 * 1024;
+const OAUTH2_FAILED: &str = "OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and configured scopes";
 
 /// NICo REST settings and paths to mounted OAuth2 client credential files.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -107,32 +106,55 @@ impl NicoRestEndpointSource {
         // reuses credentials or a bearer token across a Vault/VSO rotation.
         let client_id = read_client_credential(&self.config.client_id_file).await?;
         let client_secret = read_client_credential(&self.config.client_secret_file).await?;
-        let oauth = BasicClient::new(ClientId::new(client_id))
-            .set_client_secret(ClientSecret::new(client_secret))
-            .set_auth_type(AuthType::BasicAuth)
-            .set_token_uri(TokenUrl::from_url(self.token_url.clone()));
-        let transport = OAuth2HttpClient(self.client.clone());
-        let token = oauth.exchange_client_credentials()
-            .add_scopes(self.config.scopes.iter().cloned().map(Scope::new))
-            .request_async(&transport).await
-            // OAuth errors may contain the response body or URLs. Never expose
-            // provider diagnostics that could echo credentials or access tokens.
-            .map_err(|_| "OAuth2 client-credentials exchange failed; check client credentials, token URL, CA trust, and configured scopes")?;
-        if token.token_type() != &oauth2::basic::BasicTokenType::Bearer {
-            return Err("OAuth2 token endpoint must issue a Bearer access token".into());
-        }
-        let access_token = token.access_token().secret();
-        if access_token.is_empty() || access_token.len() > 65536 {
-            return Err(
-                "OAuth2 response must contain a nonempty access_token of at most 64 KiB".into(),
-            );
-        }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .map_err(|_| "invalid OAuth2 access token header")?;
-        authorization.set_sensitive(true);
+        let authorization = self
+            .request_access_token(&client_id, &client_secret)
+            .await?;
         // A failed listing is not retried here: every collection cycle
         // rediscovers, so the next cycle is the retry.
         self.discover_pages(&authorization, started).await
+    }
+
+    /// OAuth2 client-credentials token request (RFC 6749 section 4.4) with
+    /// HTTP Basic client authentication.
+    fn token_request(&self, client_id: &str, client_secret: &str) -> reqwest::RequestBuilder {
+        let mut form = vec![("grant_type", "client_credentials".to_string())];
+        if !self.config.scopes.is_empty() {
+            form.push(("scope", self.config.scopes.join(" ")));
+        }
+        // RFC 6749 section 2.3.1 form-encodes both values before Basic
+        // encoding, so a `:` in the client ID cannot split the pair.
+        // `basic_auth` marks the header sensitive.
+        self.client
+            .post(self.token_url.clone())
+            .basic_auth(form_encode(client_id), Some(form_encode(client_secret)))
+            .header(ACCEPT, "application/json")
+            .form(&form)
+    }
+
+    /// Exchange the client credentials for a Bearer authorization header.
+    async fn request_access_token(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<HeaderValue> {
+        let response = self
+            .token_request(client_id, client_secret)
+            .send()
+            .await
+            .map_err(|_| OAUTH2_FAILED)?;
+        // A response arrived, so later errors keep its status; a send failure
+        // above has none.
+        let status = response.status();
+        let body = read_bounded(response, MAX_TOKEN_RESPONSE_BYTES)
+            .await
+            .map_err(|error| match error {
+                BodyError::TooLarge => format!(
+                    "OAuth2 token response exceeds 128 KiB (HTTP {})",
+                    status.as_u16()
+                ),
+                BodyError::Read => format!("{OAUTH2_FAILED} (HTTP {})", status.as_u16()),
+            })?;
+        token_authorization(status, &body)
     }
 
     async fn list_pages<T: DeserializeOwned>(
@@ -226,11 +248,9 @@ impl NicoRestEndpointSource {
                 ],
             )
             .await?;
-        let mut endpoints = Vec::new();
+        let mut candidates = Vec::new();
         let mut ids = HashSet::new();
-        let mut skipped = 0usize;
-        let mut macs = HashMap::new();
-        let mut addresses = HashMap::new();
+        let mut skips = Skips::default();
         for machine in machines {
             let machine_id = super::safe_source_reference(&machine.id);
             if machine.id.trim().is_empty() {
@@ -239,56 +259,20 @@ impl NicoRestEndpointSource {
             if !ids.insert(machine.id.clone()) {
                 return Err(LISTING_CHANGED.into());
             }
-            // A machine on a site outside the site list keeps no site placement;
-            // configured defaults can still fill it.
+            // A machine on a site outside the site list has no placement.
             let (compute_zone, node_group) = placements
                 .get(machine.site_id.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let endpoint = machine
-                .into_endpoint(self.config.credentials_profile.clone())
-                .and_then(|mut endpoint| {
-                    // An unusable hostname skips only this machine, before the
-                    // record reaches the shared finalizer.
-                    endpoint.name = super::normalize_value("name", endpoint.name.take())
-                        .map_err(|error| error.to_string())?;
-                    endpoint.compute_zone = compute_zone;
-                    endpoint.node_group = node_group;
-                    Ok(endpoint)
-                });
-            let endpoint = match endpoint {
-                Ok(endpoint) => endpoint,
-                Err(error) => {
-                    skipped += 1;
-                    if skipped <= 20 {
-                        tracing::warn!(%machine_id, reason = %error, "skipping NICo machine");
-                    }
-                    continue;
-                }
-            };
-            if let Some(previous) = macs.insert(endpoint.mac, machine_id.clone()) {
-                return Err(format!(
-                    "NICo machines {previous} and {machine_id}: duplicate BMC MAC {}",
-                    endpoint.mac
-                )
-                .into());
+            let mut candidate =
+                machine.into_candidate(machine_id, self.config.credentials_profile.clone());
+            if let Ok(endpoint) = &mut candidate.endpoint {
+                endpoint.compute_zone = compute_zone;
+                endpoint.node_group = node_group;
             }
-            if let Some(previous) = addresses.insert(endpoint.ip, machine_id.clone()) {
-                return Err(format!(
-                    "NICo machines {previous} and {machine_id}: duplicate BMC address"
-                )
-                .into());
-            }
-            endpoints.push(endpoint);
+            candidates.push(candidate);
         }
-        if skipped > 0 {
-            tracing::warn!(
-                skipped_machines = skipped,
-                usable_machines = endpoints.len(),
-                total_machines = ids.len(),
-                "NICo discovery omitted machines; inspect metadata, names, and permissions (first 20 reasons logged)"
-            );
-        }
+        let endpoints = drop_identity_conflicts(candidates, &mut skips);
         if endpoints.is_empty() {
             return Err("no usable BMC targets found in NICo endpoint source; check sites, metadata and provider permissions".into());
         }
@@ -296,7 +280,7 @@ impl NicoRestEndpointSource {
             sites = sites.len(),
             machines = ids.len(),
             targets = endpoints.len(),
-            skipped_machines = skipped,
+            skipped_machines = skips.total(),
             elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "NICo discovery completed"
         );
@@ -304,42 +288,205 @@ impl NicoRestEndpointSource {
     }
 }
 
-// Keep OAuth protocol handling in oauth2, while applying the same bounded,
-// secret-safe HTTP policy as the discovery client.
-struct OAuth2HttpClient(reqwest::Client);
-impl<'a> AsyncHttpClient<'a> for OAuth2HttpClient {
-    type Error = std::io::Error;
-    type Future = std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = std::result::Result<oauth2::HttpResponse, Self::Error>>
-                + Send
-                + 'a,
-        >,
-    >;
+/// Why a listed NICo machine is left out of the snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SkipReason {
+    Decommissioned,
+    MissingBmcMetadata,
+    InvalidBmcIp,
+    InvalidBmcMac,
+    InvalidHostname,
+    DuplicateBmcMac,
+    DuplicateBmcIp,
+}
 
-    fn call(&'a self, mut request: oauth2::HttpRequest) -> Self::Future {
-        Box::pin(async move {
-            if let Some(header) = request.headers_mut().get_mut(AUTHORIZATION) {
-                header.set_sensitive(true);
-            }
-            let request = reqwest::Request::try_from(request).map_err(std::io::Error::other)?;
-            let mut response = self
-                .0
-                .execute(request)
-                .await
-                .map_err(std::io::Error::other)?;
-            let mut builder = oauth2::http::Response::builder().status(response.status());
-            *builder.headers_mut().expect("response builder headers") = response.headers().clone();
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(std::io::Error::other)? {
-                if chunk.len() > (128 * 1024usize).saturating_sub(body.len()) {
-                    return Err(std::io::Error::other("OAuth2 response exceeds 128 KiB"));
-                }
-                body.extend_from_slice(&chunk);
-            }
-            builder.body(body).map_err(std::io::Error::other)
-        })
+impl SkipReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Decommissioned => "decommissioned or decommissioning",
+            Self::MissingBmcMetadata => "missing BMC metadata",
+            Self::InvalidBmcIp => "missing, invalid, or unspecified BMC IP",
+            Self::InvalidBmcMac => "missing or invalid BMC MAC",
+            Self::InvalidHostname => "unusable hostname",
+            Self::DuplicateBmcMac => "BMC MAC shared with another machine",
+            Self::DuplicateBmcIp => "BMC IP shared with another machine",
+        }
     }
+}
+
+/// Skipped-machine counts by reason. Each skip is logged as it happens.
+#[derive(Default)]
+struct Skips(std::collections::BTreeMap<SkipReason, usize>);
+
+impl Skips {
+    /// Log one line for the machine and count it. Decommissioning is expected
+    /// lifecycle state, so it is logged at debug level; every other reason is a
+    /// NICo record to fix. `shared_bmc` names the MAC or IP of a conflict.
+    fn add(&mut self, reason: SkipReason, machine_id: &str, shared_bmc: Option<String>) {
+        let reason_text = reason.as_str();
+        match (reason, shared_bmc) {
+            (SkipReason::Decommissioned, _) => {
+                tracing::debug!(machine_id, reason = reason_text, "skipping NICo machine");
+            }
+            (_, Some(shared_bmc)) => {
+                tracing::warn!(
+                    machine_id,
+                    reason = reason_text,
+                    shared_bmc,
+                    "skipping NICo machine"
+                );
+            }
+            (_, None) => {
+                tracing::warn!(machine_id, reason = reason_text, "skipping NICo machine");
+            }
+        }
+        *self.0.entry(reason).or_default() += 1;
+    }
+
+    fn total(&self) -> usize {
+        self.0.values().sum()
+    }
+
+    #[cfg(test)]
+    fn count(&self, reason: SkipReason) -> usize {
+        self.0.get(&reason).copied().unwrap_or_default()
+    }
+}
+
+/// Drop every machine whose BMC MAC or IP is also claimed by another machine.
+/// The MAC is the machine's identity, so neither record of a conflict can be
+/// trusted; the rest of the fleet is still collected.
+fn drop_identity_conflicts(candidates: Vec<Candidate>, skips: &mut Skips) -> Vec<Endpoint> {
+    // Claims include machines that fail a later field check: a record with a
+    // bad hostname or MAC still makes its BMC IP or MAC ambiguous.
+    let mut macs: HashMap<MacAddress, usize> = HashMap::new();
+    let mut ips: HashMap<IpAddr, usize> = HashMap::new();
+    for candidate in &candidates {
+        if let Some(mac) = candidate.mac {
+            *macs.entry(mac).or_default() += 1;
+        }
+        if let Some(ip) = candidate.ip {
+            *ips.entry(ip).or_default() += 1;
+        }
+    }
+    // The shared value is logged so the other record can be found in NICo.
+    let conflict = |endpoint: &Endpoint| {
+        if macs[&endpoint.mac] > 1 {
+            Some((SkipReason::DuplicateBmcMac, Some(endpoint.mac.to_string())))
+        } else if ips[&endpoint.ip] > 1 {
+            Some((SkipReason::DuplicateBmcIp, Some(endpoint.ip.to_string())))
+        } else {
+            None
+        }
+    };
+    // A field-check reason takes precedence, so each machine is counted once.
+    let skipped: Vec<_> = candidates
+        .iter()
+        .map(|candidate| match &candidate.endpoint {
+            Ok(endpoint) => conflict(endpoint),
+            Err(reason) => Some((*reason, None)),
+        })
+        .collect();
+    let mut endpoints = Vec::with_capacity(candidates.len());
+    for (candidate, skipped) in candidates.into_iter().zip(skipped) {
+        match (skipped, candidate.endpoint) {
+            (Some((reason, shared_bmc)), _) => {
+                skips.add(reason, &candidate.machine_id, shared_bmc);
+            }
+            (None, Ok(endpoint)) => endpoints.push(endpoint),
+            (None, Err(_)) => unreachable!("a skipped candidate always has a reason"),
+        }
+    }
+    endpoints
+}
+
+/// One listed machine: the BMC identity it claims, and its endpoint or the
+/// reason it is skipped.
+struct Candidate {
+    machine_id: String,
+    mac: Option<MacAddress>,
+    ip: Option<IpAddr>,
+    endpoint: std::result::Result<Endpoint, SkipReason>,
+}
+
+/// Turn a token endpoint response into a Bearer authorization header. Errors
+/// never include provider text, which could echo credentials.
+fn token_authorization(status: reqwest::StatusCode, body: &[u8]) -> Result<HeaderValue> {
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        token_type: String,
+    }
+    #[derive(Deserialize)]
+    struct ErrorResponse {
+        error: String,
+    }
+    // RFC 6749 section 5.1: a successful token response is HTTP 200 exactly.
+    if status != reqwest::StatusCode::OK {
+        // Name only an error code registered by RFC 6749 section 5.2; anything
+        // else could be provider text.
+        let code = serde_json::from_slice::<ErrorResponse>(body)
+            .ok()
+            .and_then(|response| registered_oauth2_error(&response.error));
+        return Err(match code {
+            Some(code) => format!("{OAUTH2_FAILED} (HTTP {}, {code})", status.as_u16()),
+            None => format!("{OAUTH2_FAILED} (HTTP {})", status.as_u16()),
+        }
+        .into());
+    }
+    let token: TokenResponse = serde_json::from_slice(body)
+        .map_err(|_| "OAuth2 token response is not valid JSON with access_token and token_type")?;
+    // RFC 6749 section 5.1: token_type is case-insensitive.
+    if !token.token_type.eq_ignore_ascii_case("bearer") {
+        return Err("OAuth2 token endpoint must issue a Bearer access token".into());
+    }
+    if token.access_token.is_empty() || token.access_token.len() > MAX_ACCESS_TOKEN_BYTES {
+        return Err(
+            "OAuth2 response must contain a nonempty access_token of at most 64 KiB".into(),
+        );
+    }
+    let mut authorization = HeaderValue::from_str(&format!("Bearer {}", token.access_token))
+        .map_err(|_| "invalid OAuth2 access token header")?;
+    authorization.set_sensitive(true);
+    Ok(authorization)
+}
+
+fn form_encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+/// RFC 6749 section 5.2 error codes for a token request. Only these fixed
+/// values are surfaced; any other provider text is dropped.
+fn registered_oauth2_error(code: &str) -> Option<&'static str> {
+    [
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "invalid_scope",
+    ]
+    .into_iter()
+    .find(|registered| *registered == code)
+}
+
+enum BodyError {
+    Read,
+    TooLarge,
+}
+
+async fn read_bounded(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> std::result::Result<Vec<u8>, BodyError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| BodyError::Read)? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
+            return Err(BodyError::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 async fn read_client_credential(path: &std::path::Path) -> Result<String> {
@@ -394,18 +541,13 @@ impl EndpointSource for NicoRestEndpointSource {
     }
 }
 
-async fn read_json<T: DeserializeOwned>(mut response: reqwest::Response) -> Result<T> {
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+async fn read_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    let bytes = read_bounded(response, MAX_BODY_BYTES)
         .await
-        .map_err(|_| "cannot read NICo response")?
-    {
-        if chunk.len() > MAX_BODY_BYTES.saturating_sub(bytes.len()) {
-            return Err("NICo response exceeds 8 MiB per page".into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+        .map_err(|error| match error {
+            BodyError::TooLarge => "NICo response exceeds 8 MiB per page",
+            BodyError::Read => "cannot read NICo response",
+        })?;
     serde_json::from_slice(&bytes)
         .map_err(|_| "NICo response does not match the site/machine JSON contract".into())
 }
@@ -437,9 +579,9 @@ struct SiteLocation {
 }
 
 impl Site {
-    /// Site-derived compute zone and node group. Configured defaults override
-    /// these during finalization. An unusable value is dropped with one warning,
-    /// so it never removes this site's machines from the snapshot.
+    /// Site-derived compute zone and node group, the only placement source for
+    /// discovered machines. An unusable value is dropped with one warning, so
+    /// it never removes this site's machines from the snapshot.
     fn placement(&self) -> (Option<String>, Option<String>) {
         let site_id = super::safe_source_reference(&self.id);
         let usable = |field, value| {
@@ -502,42 +644,60 @@ struct BmcInfo {
 }
 
 impl Machine {
-    fn into_endpoint(self, credentials_profile: Option<String>) -> Result<Endpoint> {
+    /// Record the BMC identity this machine claims, then check its fields.
+    /// Decommissioned machines and machines without BMC metadata claim nothing;
+    /// otherwise each BMC IP and MAC that parses is claimed, even when another
+    /// field makes the machine unusable.
+    fn into_candidate(self, machine_id: String, credentials_profile: Option<String>) -> Candidate {
+        let mut candidate = Candidate {
+            machine_id,
+            mac: None,
+            ip: None,
+            endpoint: Err(SkipReason::Decommissioned),
+        };
         if self
             .status
             .as_deref()
             .is_some_and(|status| matches!(status, "Decommissioned" | "Decommissioning"))
         {
-            return Err("machine is decommissioned or decommissioning".into());
+            return candidate;
         }
-        let bmc = self.metadata.and_then(|metadata| metadata.bmc_info).ok_or(
-            "NICo machine has no BMC metadata; provider access and includeMetadata are required",
-        )?;
-        let ip = bmc
+        // Missing metadata usually means the identity lacks provider access.
+        let Some(bmc) = self.metadata.and_then(|metadata| metadata.bmc_info) else {
+            candidate.endpoint = Err(SkipReason::MissingBmcMetadata);
+            return candidate;
+        };
+        candidate.ip = bmc
             .ip
             .and_then(|ip| ip.parse::<IpAddr>().ok())
             // `::ffff:a.b.c.d` is the IPv4 peer `a.b.c.d`. Canonicalize once so the
             // duplicate and placeholder checks and the Redfish address agree.
             .map(|ip| ip.to_canonical())
             // An unspecified address is a placeholder, never a reachable BMC.
-            .filter(|ip| !ip.is_unspecified())
-            .ok_or("NICo machine has no valid BMC IP")?;
-        let mac = bmc
-            .mac
-            .and_then(|mac| mac.parse::<MacAddress>().ok())
-            .ok_or("NICo machine has no valid BMC MAC")?;
-        Ok(Endpoint {
-            kind: TargetKind::Compute,
-            name: self.hostname.filter(|name| !name.trim().is_empty()),
-            ip,
-            port: None,
-            mac,
-            credentials_profile,
-            compute_zone: None,
-            node_group: None,
-            labels: BTreeMap::new(),
-            placement_origin: PlacementOrigin::Discovered,
-        })
+            .filter(|ip| !ip.is_unspecified());
+        candidate.mac = bmc.mac.and_then(|mac| mac.parse::<MacAddress>().ok());
+        let (ip, mac, hostname) = (candidate.ip, candidate.mac, self.hostname);
+        candidate.endpoint = (|| {
+            let ip = ip.ok_or(SkipReason::InvalidBmcIp)?;
+            let mac = mac.ok_or(SkipReason::InvalidBmcMac)?;
+            // An unusable hostname skips only this machine, before the record
+            // reaches the shared finalizer.
+            let name =
+                super::normalize_value("name", hostname.filter(|name| !name.trim().is_empty()))
+                    .map_err(|_| SkipReason::InvalidHostname)?;
+            Ok(Endpoint {
+                kind: TargetKind::Compute,
+                name,
+                ip,
+                port: None,
+                mac,
+                credentials_profile,
+                compute_zone: None,
+                node_group: None,
+                labels: BTreeMap::new(),
+            })
+        })();
+        candidate
     }
 }
 
@@ -821,15 +981,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn site_placement_is_marked_as_discovered_so_configured_defaults_win() {
-        // Precedence itself is applied by the shared finalizer; see
-        // config::targets tests for configured-over-discovered placement.
+    async fn site_placement_comes_from_the_machine_site() {
         let (source, _files, server) = fixture(vec![page(1, 1, vec![machine(0)])]).await;
         let endpoints = source.discover().await.unwrap();
         assert_eq!(endpoints[0].compute_zone.as_deref(), Some("usa-az-phoenix"));
         assert_eq!(endpoints[0].node_group.as_deref(), Some("test-cluster"));
-        assert_eq!(endpoints[0].placement_origin, PlacementOrigin::Discovered);
         server.await.unwrap();
+    }
+
+    #[test]
+    fn token_request_form_encodes_basic_credentials_and_sends_scopes() {
+        let files = CredentialFiles::new("fixture-secret");
+        let mut source = NicoRestEndpointSource::new(config(files.0.clone())).unwrap();
+        // RFC 6749 section 2.3.1: `:`, `%`, space, and non-ASCII are
+        // form-encoded before Basic encoding.
+        let request = source
+            .token_request("client:a%b c", "s:\u{e9}")
+            .build()
+            .unwrap();
+        let authorization = request.headers().get(AUTHORIZATION).unwrap();
+        assert!(authorization.is_sensitive());
+        assert_eq!(
+            authorization.to_str().unwrap(),
+            "Basic Y2xpZW50JTNBYSUyNWIrYzpzJTNBJUMzJUE5"
+        );
+        assert_eq!(request.headers()[ACCEPT], "application/json");
+        let body = |request: &reqwest::Request| {
+            String::from_utf8(request.body().unwrap().as_bytes().unwrap().to_vec()).unwrap()
+        };
+        assert_eq!(
+            body(&request),
+            "grant_type=client_credentials&scope=test-scope"
+        );
+        source.config.scopes = vec![];
+        let request = source.token_request("id", "secret").build().unwrap();
+        assert_eq!(body(&request), "grant_type=client_credentials");
+    }
+
+    #[test]
+    fn token_errors_name_only_registered_codes_and_bearer_is_case_insensitive() {
+        use reqwest::StatusCode;
+        for (status, body, expected) in [
+            (
+                StatusCode::UNAUTHORIZED,
+                r#"{"error":"invalid_client","error_description":"sensitive"}"#,
+                "(HTTP 401, invalid_client)",
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"sensitive_custom_code"}"#,
+                "(HTTP 400)",
+            ),
+            (StatusCode::BAD_GATEWAY, "sensitive", "(HTTP 502)"),
+            (
+                StatusCode::PARTIAL_CONTENT,
+                r#"{"access_token":"sensitive","token_type":"Bearer"}"#,
+                "(HTTP 206)",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"access_token":"sensitive"}"#,
+                "not valid JSON",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"access_token":"sensitive","token_type":"mac"}"#,
+                "must issue a Bearer",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"access_token":"","token_type":"Bearer"}"#,
+                "nonempty access_token",
+            ),
+            (
+                StatusCode::OK,
+                r#"{"access_token":"bad\nsensitive","token_type":"Bearer"}"#,
+                "invalid OAuth2 access token header",
+            ),
+        ] {
+            let error = token_authorization(status, body.as_bytes())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("sensitive"), "{error}");
+        }
+        // Lowercase `bearer` is accepted, and a string `expires_in` (sent by
+        // some providers) is ignored rather than rejected.
+        let header = token_authorization(
+            StatusCode::OK,
+            br#"{"access_token":"fixture-token","token_type":"bearer","expires_in":"900"}"#,
+        )
+        .unwrap();
+        assert_eq!(header.to_str().unwrap(), "Bearer fixture-token");
+        assert!(header.is_sensitive());
     }
 
     #[tokio::test]
@@ -897,6 +1141,7 @@ mod tests {
                 r#"{"access_token":"sensitive","token_type":"MAC"}"#.into(),
             ),
             (200, "x".repeat(128 * 1024 + 1)),
+            (502, "x".repeat(128 * 1024 + 1)),
         ] {
             let reply = Reply {
                 status,
@@ -912,6 +1157,10 @@ mod tests {
             .await;
             let error = source.discover().await.unwrap_err().to_string();
             assert!(error.contains("OAuth2"), "{error}");
+            // A failing status is kept even when its body cannot be used.
+            if status != 200 {
+                assert!(error.contains(&format!("HTTP {status}")), "{error}");
+            }
             for sensitive in ["fixture-secret", "fixture-client", "sensitive", "http://"] {
                 assert!(!error.contains(sensitive), "{error}");
             }
@@ -1188,22 +1437,121 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_conflicts_name_both_machines_and_never_return_a_partial_list() {
-        // The second machine repeats the first's MAC, IP, or IPv4-mapped IP.
-        for (key, value) in [
-            ("mac", "02:00:00:00:00:00"),
-            ("ip", "192.0.2.1"),
-            ("ip", "::ffff:192.0.2.1"),
+    async fn identity_conflicts_skip_only_the_conflicting_machines() {
+        // The second machine repeats the first's MAC, IP, or IPv4-mapped IP;
+        // a third, unrelated machine is still collected.
+        for (key, value, reason) in [
+            ("mac", "02:00:00:00:00:00", SkipReason::DuplicateBmcMac),
+            ("ip", "192.0.2.1", SkipReason::DuplicateBmcIp),
+            ("ip", "::ffff:192.0.2.1", SkipReason::DuplicateBmcIp),
         ] {
             let first = machine(0);
             let mut second = machine(1);
             second["metadata"]["bmcInfo"][key] = value.into();
-            let (source, _token, server) = fixture(vec![page(1, 2, vec![first, second])]).await;
-            let error = source.discover().await.unwrap_err().to_string();
-            assert!(error.contains("machine-0") && error.contains("machine-1"));
-            assert!(!error.contains("fixture-token"));
+            let rows = vec![first, second, machine(2)];
+            let (source, _token, server) = fixture(vec![page(1, 3, rows)]).await;
+            let endpoints = source.discover().await.unwrap();
+            let names: Vec<_> = endpoints.iter().map(|e| e.name.as_deref()).collect();
+            assert_eq!(names, [Some("host-2")], "{reason:?}");
             server.await.unwrap();
         }
+        // When every machine conflicts, nothing usable remains.
+        let mut second = machine(1);
+        second["metadata"]["bmcInfo"]["mac"] = "02:00:00:00:00:00".into();
+        let (source, _token, server) = fixture(vec![page(1, 2, vec![machine(0), second])]).await;
+        let error = source.discover().await.unwrap_err().to_string();
+        assert!(error.contains("no usable BMC targets"), "{error}");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn machines_failing_field_checks_still_claim_their_bmc_identity() {
+        // Machine 1 has an unusable hostname and repeats machine 0's MAC or IP.
+        // Neither claimant is collected; the unrelated machine 2 still is.
+        for (key, value) in [("mac", "02:00:00:00:00:00"), ("ip", "192.0.2.1")] {
+            let mut second = machine(1);
+            second["hostname"] = "é".repeat(513).into();
+            second["metadata"]["bmcInfo"][key] = value.into();
+            let rows = vec![machine(0), second, machine(2)];
+            let (source, _token, server) = fixture(vec![page(1, 3, rows)]).await;
+            let endpoints = source.discover().await.unwrap();
+            let names: Vec<_> = endpoints.iter().map(|e| e.name.as_deref()).collect();
+            assert_eq!(names, [Some("host-2")], "{key}");
+            server.await.unwrap();
+        }
+    }
+
+    fn endpoint(index: usize, mac: &str, ip: &str) -> Candidate {
+        let endpoint = Endpoint {
+            kind: TargetKind::Compute,
+            name: None,
+            ip: ip.parse().unwrap(),
+            port: None,
+            mac: mac.parse().unwrap(),
+            credentials_profile: None,
+            compute_zone: None,
+            node_group: None,
+            labels: BTreeMap::new(),
+        };
+        Candidate {
+            machine_id: format!("machine-{index}"),
+            mac: Some(endpoint.mac),
+            ip: Some(endpoint.ip),
+            endpoint: Ok(endpoint),
+        }
+    }
+
+    fn failed(candidate: Candidate, reason: SkipReason) -> Candidate {
+        Candidate {
+            endpoint: Err(reason),
+            ..candidate
+        }
+    }
+
+    #[test]
+    fn skips_are_counted_once_per_machine_by_reason() {
+        let mut skips = Skips::default();
+        for index in 0..5 {
+            skips.add(
+                SkipReason::MissingBmcMetadata,
+                &format!("missing-{index}"),
+                None,
+            );
+        }
+        // machine-0 and machine-1 share a MAC and an IP; machine-2 and machine-3
+        // share only an IP; machine-4 is unique.
+        let candidates = vec![
+            endpoint(0, "02:00:00:00:00:01", "192.0.2.1"),
+            endpoint(1, "02:00:00:00:00:01", "192.0.2.1"),
+            endpoint(2, "02:00:00:00:00:02", "192.0.2.2"),
+            endpoint(3, "02:00:00:00:00:03", "192.0.2.2"),
+            endpoint(4, "02:00:00:00:00:04", "192.0.2.4"),
+            // machine-5 has a bad hostname and claims machine-6's MAC;
+            // machine-7 has a bad MAC and claims machine-8's IP. Each failed
+            // machine keeps its own reason; its partner is dropped as a conflict.
+            failed(
+                endpoint(5, "02:00:00:00:00:06", "192.0.2.5"),
+                SkipReason::InvalidHostname,
+            ),
+            endpoint(6, "02:00:00:00:00:06", "192.0.2.6"),
+            Candidate {
+                mac: None,
+                ..failed(
+                    endpoint(7, "02:00:00:00:00:07", "192.0.2.8"),
+                    SkipReason::InvalidBmcMac,
+                )
+            },
+            endpoint(8, "02:00:00:00:00:08", "192.0.2.8"),
+        ];
+        let kept = drop_identity_conflicts(candidates, &mut skips);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].mac.to_string(), "02:00:00:00:00:04");
+        assert_eq!(skips.count(SkipReason::MissingBmcMetadata), 5);
+        assert_eq!(skips.count(SkipReason::InvalidHostname), 1);
+        assert_eq!(skips.count(SkipReason::InvalidBmcMac), 1);
+        assert_eq!(skips.count(SkipReason::DuplicateBmcMac), 3);
+        assert_eq!(skips.count(SkipReason::DuplicateBmcIp), 3);
+        assert_eq!(skips.total(), 13);
     }
 
     #[test]
@@ -1275,7 +1623,7 @@ mod tests {
         let (source, _files, server) = fixture_with_sites(replies, None, vec![], false).await;
         let endpoints = source.discover().await.unwrap();
         // The long hostname skips only machine 1. Unusable site names leave the
-        // node group unset, which configured defaults can still fill.
+        // node group unset.
         let names: Vec<_> = endpoints.iter().map(|e| e.name.as_deref()).collect();
         assert_eq!(names, [Some("host-0"), Some("host-2"), Some("host-3")]);
         let groups: Vec<_> = endpoints.iter().map(|e| e.node_group.as_deref()).collect();
