@@ -65,6 +65,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s/api/v1/health" (trimSuffix "/" .Values.backend.url) -}}
 {{- end }}
 
+{{- define "fleet-intelligence-oob-collector.serviceKeySecretRef" -}}
+{{- with .Values.backend.serviceKey -}}
+name: {{ required "backend.serviceKey.existingSecret is required" .existingSecret | quote }}
+key: {{ required "backend.serviceKey.secretKey is required" .secretKey | quote }}
+{{- else -}}
+{{- $legacy := .Values.backend.agentToken | default dict -}}
+name: {{ $legacy.existingSecret | default "fleet-intelligence-oob-collector-agent-token" | quote }}
+key: {{ $legacy.secretKey | default "agent-token" | quote }}
+{{- end -}}
+{{- end }}
+
 {{- define "fleet-intelligence-oob-collector.scheduling" -}}
 {{- with .nodeSelector }}
 nodeSelector:

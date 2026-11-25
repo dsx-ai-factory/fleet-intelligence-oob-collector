@@ -85,7 +85,7 @@ pub struct InventoryOptions {
 pub struct RuntimeOptions {
     pub inventory: InventoryOptions,
     pub backend_url: Option<String>,
-    pub enrollment_token: Option<String>,
+    pub service_key: Option<String>,
     pub interval_seconds: u64,
     /// Delay before the retry pass at targets that failed as a whole; `None`
     /// skips the retry pass.
@@ -252,8 +252,7 @@ async fn run_runtime_until_shutdown(
     )?);
     let backend_url = required_backend_option(options.backend_url.take(), "backend URL")?;
     let endpoints = BackendEndpoints::resolve(&backend_url)?;
-    let enrollment_token =
-        required_backend_option(options.enrollment_token.take(), "enrollment token")?;
+    let service_key = required_backend_option(options.service_key.take(), "service key")?;
     tracing::info!(
         target_count = target_config.targets.len(),
         "collector configuration validated"
@@ -264,7 +263,7 @@ async fn run_runtime_until_shutdown(
     let mut session = tokio::select! {
         biased;
         () = shutdown.wait() => return Ok(()),
-        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), enrollment_token) => session?,
+        session = BackendSession::enroll(endpoints.enroll_endpoint.clone(), service_key) => session?,
     };
     tracing::info!("backend enrollment succeeded");
     let interval = std::time::Duration::from_secs(options.interval_seconds.max(1));
@@ -1674,7 +1673,7 @@ mod tests {
                 latency_probe: false,
             },
             backend_url: Some("https://private.example.com".to_string()),
-            enrollment_token: Some("must-not-be-reported".into()),
+            service_key: Some("must-not-be-reported".into()),
             interval_seconds: 0,
             target_retry_delay: None,
             log_level: "info".to_string(),

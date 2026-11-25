@@ -12,20 +12,22 @@ inventory:
     - kind: compute
       address: 192.0.2.10
       mac: "00:11:22:33:44:55"
-      credentialsProfile: bmc
+      credentialsProfile: compute
 credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  enrollmentToken:
-    existingSecret: fleet-intelligence-enrollment-token
-    secretKey: enrollment-token
+  serviceKey:
+    existingSecret: fleet-intelligence-service-key
+    secretKey: service-key
 ```
 
 Each target needs a unique BMC MAC and an IP address in `address`. Set `port` separately if the BMC doesn't use the HTTPS default. `kind` is `compute`, `nvswitch`, `power_shelf`, or `unknown` (the default).
 
-The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the enrollment token. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
+The two Secrets hold the [BMC credentials file](../../../credentials.example.json) and the service key for Fleet Intelligence with the **Enroll Machines** scope. Create them by hand, or sync them from Vault or OpenBao with the [examples](../examples/) and the [credentials guide](../../../docs/credentials.md).
+
+See [Fleet Intelligence connection](../../../docs/configuration.md#fleet-intelligence-connection) for how the chart selects the service key Secret, including compatibility with existing deployments.
 
 ## Choosing components
 

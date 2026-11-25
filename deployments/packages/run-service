@@ -9,16 +9,16 @@ number() {
         case "$2" in *[1-9]*) ;; *) echo "$1 must be positive" >&2; exit 2 ;; esac
     fi
 }
-# Preserve existing EnvironmentFile tokens while supporting a protected file.
-if [ -n "${FLEETINT_ENROLLMENT_TOKEN_FILE:-}" ]; then
-    if ! FLEETINT_ENROLLMENT_TOKEN=$(cat -- "$FLEETINT_ENROLLMENT_TOKEN_FILE"); then
-        echo 'Could not read FLEETINT_ENROLLMENT_TOKEN_FILE' >&2
+# Prefer the protected service key file over an inline key.
+if [ -n "${FLEETINT_SERVICE_KEY_FILE:-}" ]; then
+    if ! FLEETINT_SERVICE_KEY=$(cat -- "$FLEETINT_SERVICE_KEY_FILE"); then
+        echo 'Could not read FLEETINT_SERVICE_KEY_FILE' >&2
         exit 2
     fi
-    export FLEETINT_ENROLLMENT_TOKEN
+    export FLEETINT_SERVICE_KEY
 fi
-if [ -z "${FLEETINT_ENROLLMENT_TOKEN:-}" ]; then
-    echo 'Configure FLEETINT_ENROLLMENT_TOKEN_FILE or FLEETINT_ENROLLMENT_TOKEN' >&2
+if [ -z "${FLEETINT_SERVICE_KEY:-}" ]; then
+    echo 'Configure FLEETINT_SERVICE_KEY_FILE or FLEETINT_SERVICE_KEY' >&2
     exit 2
 fi
 case "${1:-}" in

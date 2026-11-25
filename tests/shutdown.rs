@@ -100,7 +100,7 @@ impl Runtime {
                 "FLEETINT_BACKEND_URL",
                 format!("http://127.0.0.1:{backend_port}"),
             )
-            .env("FLEETINT_ENROLLMENT_TOKEN", "example-token")
+            .env("FLEETINT_SERVICE_KEY", "example-service-key")
             .env("FLEETINT_NICO_ENABLED", "true")
             .env("NO_PROXY", "*")
             .env("NO_COLOR", "1")
@@ -335,7 +335,7 @@ async fn startup_and_collection_failure_are_visible_before_retry_and_upload() {
         "{logs}"
     );
     for secret in [
-        "example-token",
+        "example-service-key",
         "example-jwt",
         "example-user",
         "example-password",
@@ -994,7 +994,7 @@ async fn shared_transport_recovers_jwt_and_accepts_inventory_without_uuid() {
     assert!(
         request
             .to_ascii_lowercase()
-            .contains("authorization: bearer example-token")
+            .contains("authorization: bearer example-service-key")
     );
     reply(&mut enrollment, r#"{"jwtAssertion":"second-jwt"}"#).await;
     let (mut inventory, request) = accept_request(&backend).await;
@@ -1048,15 +1048,15 @@ async fn shared_transport_recovers_jwt_and_accepts_inventory_without_uuid() {
 }
 
 #[test]
-fn runtime_help_shows_token_environment_name_without_its_value() {
+fn runtime_help_shows_service_key_environment_name_without_its_value() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_bmc-collector"))
         .args(["run", "--help"])
-        .env("FLEETINT_ENROLLMENT_TOKEN", "example-private-token")
+        .env("FLEETINT_SERVICE_KEY", "example-private-service-key")
         .output()
         .expect("CLI help");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("--enrollment-token"));
-    assert!(help.contains("FLEETINT_ENROLLMENT_TOKEN"));
-    assert!(!help.contains("example-private-token"));
+    assert!(help.contains("--service-key"));
+    assert!(help.contains("FLEETINT_SERVICE_KEY"));
+    assert!(!help.contains("example-private-service-key"));
 }

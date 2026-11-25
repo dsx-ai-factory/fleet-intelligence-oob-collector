@@ -70,11 +70,10 @@ spec:
               value: {{ include "fleet-intelligence-oob-collector.otelGatewayBackendEndpoint" . | quote }}
             - name: ENROLL_ENDPOINT
               value: {{ include "fleet-intelligence-oob-collector.otelGatewayEnrollEndpoint" . | quote }}
-            - name: FLEETINT_ENROLLMENT_TOKEN
+            - name: FLEETINT_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.backend.enrollmentToken.existingSecret | quote }}
-                  key: {{ .Values.backend.enrollmentToken.secretKey | quote }}
+                  {{- include "fleet-intelligence-oob-collector.serviceKeySecretRef" . | nindent 18 }}
             {{- include "fleet-intelligence-oob-collector.proxyEnv" . | nindent 12 }}
           ports:
             - name: otlp-grpc

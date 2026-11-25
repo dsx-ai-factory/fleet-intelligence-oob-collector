@@ -94,10 +94,11 @@
     "backend": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "enrollmentToken"],
+      "required": ["url"],
       "properties": {
         "url": {"$ref": "#/definitions/httpUrl"},
-        "enrollmentToken": {"$ref": "#/definitions/secretRef"}
+        "serviceKey": {"$ref": "#/definitions/secretRef"},
+        "agentToken": {"$ref": "#/definitions/secretRefFields"}
       }
     },
     "telemetry": {
@@ -285,9 +286,12 @@
   },
   "definitions": {
     "secretRef": {
+      "allOf": [{"$ref": "#/definitions/secretRefFields"}],
+      "required": ["existingSecret", "secretKey"]
+    },
+    "secretRefFields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["existingSecret", "secretKey"],
       "properties": {
         "existingSecret": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", "maxLength": 253},
         "secretKey": {"type": "string", "pattern": "^[a-zA-Z0-9._-]+$", "maxLength": 253}

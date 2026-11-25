@@ -20,10 +20,10 @@ reply() {
     local body=$1
     printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body"
 }
-if [[ "$request" == 'POST /v1/agent/enroll HTTP/1.1' && "$authorization" == 'Bearer test-token' ]]; then
+if [[ "$request" == 'POST /v1/agent/enroll HTTP/1.1' && "$authorization" == 'Bearer test-service-key' ]]; then
     reply '{"jwtAssertion":"test-runtime-jwt"}'
     touch "$PACKAGE_TEST_DIRECTORY/collector-enrolled"
-elif [[ "$request" == 'POST /api/v1/health/enroll HTTP/1.1' && "$authorization" == 'Bearer test-token' ]]; then
+elif [[ "$request" == 'POST /api/v1/health/enroll HTTP/1.1' && "$authorization" == 'Bearer test-service-key' ]]; then
     reply '{"jwtAssertion":"test-runtime-jwt"}'
 elif [[ "$request" == 'PUT /v1/agent/oob_nodes HTTP/1.1' && "$authorization" == 'Bearer test-runtime-jwt' ]]; then
     reply '{"results":[{"status":"OK"}]}'

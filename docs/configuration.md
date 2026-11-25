@@ -19,7 +19,7 @@ endpointSource:
     tokenUrl: https://idp.example.com/token
     oauth2CredentialsSecretName: fi-nico-oauth2-credentials
     scopes: [nico] # Use scopes configured by your identity-provider administrator.
-    credentialsProfile: bmc
+    credentialsProfile: compute
     timeoutSeconds: 30
 nicoHardwareHealth:
   enabled: false
@@ -27,7 +27,7 @@ otelGateway:
   enabled: false
 ```
 
-Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization, 100 per request; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your existing FI backend, enrollment, and BMC credentials settings; `credentialsProfile` is required and must name an existing shared BMC profile, separate from REST authentication. Newly discovered MACs use that profile; per-MAC credential overrides still apply.
+Your platform supplies the OAuth2 client and a Secret with `client_id` and `client_secret` keys. The identity needs permission to list sites and read machine BMC metadata. The collector rereads the mounted files and obtains a fresh token for each discovery; `scopes` defaults to `[]`. `timeoutSeconds` bounds the whole discovery, defaults to 30, and accepts 1–3600 seconds. Discovery reads up to 100,000 machines per organization, 100 per request; raise `timeoutSeconds` for large organizations so every page fits in the budget. A shutdown waits for a discovery in progress. If that takes longer than the pod's 30-second termination grace period, Kubernetes stops the collector before it exits on its own; no collected data is lost, because discovery finishes before collection starts. Keep your Fleet Intelligence backend settings, service key, and BMC credentials. Set `credentialsProfile` to an existing shared BMC profile, such as `compute` in the example credentials file. Newly discovered MACs use that profile, with per-MAC overrides where configured.
 
 Configured `inventory.nodeGroup` and `inventory.computeZone` take precedence independently. Otherwise, each machine uses its site's name as node group and its lowercased, hyphen-separated country/state/city as compute zone, such as `usa-az-phoenix`. Missing location components are omitted; no usable location leaves compute zone unset. NICo machine labels are ignored.
 
@@ -50,20 +50,20 @@ inventory:
       name: node-01
       address: 192.0.2.10
       mac: "00:11:22:33:44:55"
-      credentialsProfile: bmc
+      credentialsProfile: compute
       labels:
         rack: rack-12
     - kind: nvswitch
       name: switch-tray-01
       address: 192.0.2.11
       mac: "02:00:0a:00:00:0b"
-      credentialsProfile: switch
+      credentialsProfile: nvswitch
     - kind: power_shelf
       name: power-shelf-01
       address: 192.0.2.12
       port: 8443
       mac: "02:00:0a:00:00:0c"
-      credentialsProfile: bmc
+      credentialsProfile: power_shelf
 ```
 
 You need at least one target. The chart rejects fields it doesn't recognize, so a typo fails the install instead of being ignored.
@@ -108,11 +108,11 @@ inventory:
     - name: node-01
       address: 192.0.2.10
       mac: "02:00:0a:00:00:0a"
-      credentialsProfile: bmc
+      credentialsProfile: compute
     - name: node-02
       address: 192.0.2.11
       mac: "02:00:0a:00:00:0b"
-      credentialsProfile: bmc
+      credentialsProfile: compute
       computeZone: us-west-dc2
       nodeGroup: gb200-inference
 ```
@@ -139,8 +139,9 @@ The credentials file holds named `profiles` and per-BMC `overrides`, keyed by MA
 ```json
 {
   "profiles": {
-    "bmc": { "username": "admin", "password": "replace-with-bmc-password" },
-    "switch": { "username": "switch-admin", "password": "replace-with-switch-password" }
+    "compute": { "username": "admin", "password": "replace-with-compute-password" },
+    "nvswitch": { "username": "switch-admin", "password": "replace-with-nvswitch-password" },
+    "power_shelf": { "username": "admin", "password": "replace-with-power-shelf-password" }
   },
   "overrides": {
     "02:00:0a:00:00:0b": { "password": "replace-with-target-password" }
@@ -182,14 +183,14 @@ You can change passwords without restarting anything: the collector and NICo bot
 ```yaml
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  enrollmentToken:
-    existingSecret: fleet-intelligence-enrollment-token
-    secretKey: enrollment-token
+  serviceKey:
+    existingSecret: fleet-intelligence-service-key
+    secretKey: service-key
 ```
 
 `backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
 
-`backend.enrollmentToken` points to the Secret that holds the enrollment token. The collector and the bundled gateway both use it.
+The collector and bundled gateway use the same service key Secret. An explicit `backend.serviceKey` takes precedence over `backend.agentToken`, which is supported for existing deployments. If you set neither reference, the chart uses `fleet-intelligence-oob-collector-agent-token` with the data key `agent-token`.
 
 ## Components and telemetry
 

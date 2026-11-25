@@ -7,9 +7,9 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 | File | Purpose | Ownership and mode |
 | --- | --- | --- |
 | `/etc/fleetint-oob/config.toml` | Shared targets, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/service.conf` | Backend/token settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
+| `/etc/fleetint-oob/service.conf` | Backend and service key settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
 | `/etc/fleetint-oob/credentials/credentials.json` | Operator-created BMC credentials | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/enrollment-token` | Optional operator-created enrollment token file | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/service-key` | Optional operator-created service key file | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/gateway.yaml` | OTLP receivers, backend export, and gateway processing | Installed root-owned, `0644` |
 
 Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Installation grants service access to standard configuration and credential paths. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
@@ -33,7 +33,7 @@ kind = "compute"
 name = "node-01"
 ip = "192.0.2.10"
 mac = "02:00:00:00:00:01"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 labels = { rack = "rack-12" }
 ```
 
@@ -57,12 +57,12 @@ The shared rules for [target identity](configuration.md#target-identity), [place
 
 ## BMC credentials
 
-For a target with `credentials_profile = "bmc"`, the credentials file can contain:
+For a target with `credentials_profile = "compute"`, the credentials file can contain:
 
 ```json
 {
   "profiles": {
-    "bmc": {
+    "compute": {
       "username": "replace-with-bmc-user",
       "password": "replace-with-bmc-password"
     }
@@ -81,12 +81,12 @@ Set these variables in `service.conf`:
 | `FLEETINT_BACKEND_URL` | `https://data.fleet-intelligence.nvidia.com` | Collector API origin, without an API path. |
 | `BACKEND_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health` | Gateway telemetry base; exports use `/metrics` and `/logs` beneath it. |
 | `ENROLL_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health/enroll` | Gateway enrollment URL. |
-| `FLEETINT_ENROLLMENT_TOKEN_FILE` | Empty | Protected enrollment token file used by the collector and gateway. |
-| `FLEETINT_ENROLLMENT_TOKEN` | Empty | Alternative inline environment-file token. Prefer the token file. |
+| `FLEETINT_SERVICE_KEY_FILE` | Empty | Protected service key file used by the collector and gateway. |
+| `FLEETINT_SERVICE_KEY` | Empty | Alternative setting for the service key in the environment file. Prefer the dedicated key file. |
 
 When using another backend, set all three URL variables explicitly. Systemd environment files do not expand variable references, so `BACKEND_ENDPOINT=${FLEETINT_BACKEND_URL}/api/v1/health` does not construct a URL.
 
-The token file takes precedence over `FLEETINT_ENROLLMENT_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline token. The launchers load the token into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
+The service key file takes precedence over `FLEETINT_SERVICE_KEY`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline service key. The launchers load the service key into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
 
 ## Collection settings
 
@@ -152,14 +152,14 @@ System and Chassis status follow discovery cadence; Manager status follows manag
 
 The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, OTLP HTTP at `127.0.0.1:4318`, and gateway health at `127.0.0.1:13133`. NICo's Prometheus endpoint is `http://127.0.0.1:9009/metrics`. Keep these local listeners private to the host.
 
-Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same enrollment token as the collector but enrolls separately.
+Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same service key as the collector but enrolls separately.
 
-Keep the gateway's token binding when editing its configuration so it reads the enrollment token from the service environment:
+Keep the gateway's `sak_token` binding when editing its configuration so it reads the service key from the service environment:
 
 ```yaml
 extensions:
   sakauth:
-    sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}
+    sak_token: ${env:FLEETINT_SERVICE_KEY}
 ```
 
 ### Component reporting
@@ -172,7 +172,7 @@ Systemd reads `service.conf` before starting each service and passes its values 
 | `collector.config.nicoHealth` | Component enablement, log level, telemetry destination, and explicitly configured `[nico_health]` controls in camelCase. |
 | `collector.config.otelGateway` | Component enablement and log level. |
 
-The runtime report describes the effective collector arguments. Component log levels are reported when their environment variables are present and non-empty; keep `FLEETINT_NICO_LOG_LEVEL` and `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` explicitly set in `service.conf` for complete reports. Only supported, non-sensitive settings are included; tokens and passwords are excluded. Restart affected services after changing their environment settings so the running configuration and subsequent reports use the new values.
+The runtime report describes the effective collector arguments. Component log levels are reported when their environment variables are present and non-empty; keep `FLEETINT_NICO_LOG_LEVEL` and `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` explicitly set in `service.conf` for complete reports. Only supported, non-sensitive settings are included; service keys and passwords are excluded. Restart affected services after changing their environment settings so the running configuration and subsequent reports use the new values.
 
 These environment variables describe the deployment in the collector's backend report:
 
@@ -201,14 +201,14 @@ When running the collector CLI directly, certificate verification is enabled unl
 
 Use `sudo systemctl restart fleetint-oob.target` after changing shared configuration or environment settings. For changes limited to NICo controls, restart only NICo with `sudo systemctl restart fleetint-nico-health.service`. Check the individual service states and logs afterward, as described in [installation verification](host-installation.md#start-and-verify-collection).
 
-For password and token rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
+For password and service key rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
 
 ## Troubleshooting
 
 | Problem | What to check |
 | --- | --- |
-| Service stops with exit status `2` | Invalid settings or an unreadable token file. Check the service log, correct the setting, and restart the affected service. |
-| Collector repeatedly fails to enroll | Enrollment token, backend addresses, host connectivity, proxy, and backend certificate trust. |
+| Service stops with exit status `2` | Invalid settings or an unreadable service key file. Check the service log, correct the setting, and restart the affected service. |
+| Collector repeatedly fails to enroll | Service key validity and scope, backend addresses, host connectivity, proxy, and backend certificate trust. |
 | Inventory cannot read a BMC | Target address/MAC, credential profile or MAC override, and BMC certificate trust if you enabled verification. See [proxy and TLS](host-configuration.md#proxy-and-tls). |
 | NICo fails before starting | TOML syntax, a readable credentials file, and valid `[nico_health]` settings. |
 | Services run but telemetry is absent | BMC credentials, NICo logs, the OTLP destination, all gateway URLs, and gateway enrollment/export errors. |

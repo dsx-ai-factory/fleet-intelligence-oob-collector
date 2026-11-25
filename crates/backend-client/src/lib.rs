@@ -102,19 +102,19 @@ pub async fn ensure_success(response: Response) -> Result<Response, Box<dyn Erro
 pub async fn enroll(
     client: &Client,
     endpoint: &Url,
-    token: &str,
+    service_key: &str,
 ) -> Result<String, Box<dyn Error>> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct EnrollResponse {
         jwt_assertion: String,
     }
-    let token = token.trim();
-    if token.is_empty() {
-        return Err("enrollment token cannot be empty".into());
+    let service_key = service_key.trim();
+    if service_key.is_empty() {
+        return Err("service key cannot be empty".into());
     }
     let response = request(client, Method::POST, endpoint)
-        .bearer_auth(token)
+        .bearer_auth(service_key)
         .send()
         .await?;
     let response: EnrollResponse = ensure_success(response).await?.json().await?;
@@ -342,12 +342,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrollment_trims_surrounding_token_whitespace() {
+    async fn enrollment_trims_surrounding_service_key_whitespace() {
         let cases = [
-            ("example-token", "example-token"),
-            ("example-token\n", "example-token"),
-            ("example-token\r\n", "example-token"),
-            (" \t\r\nexample-token \t\r\n", "example-token"),
+            ("example-service-key", "example-service-key"),
+            ("example-service-key\n", "example-service-key"),
+            ("example-service-key\r\n", "example-service-key"),
+            (" \t\r\nexample-service-key \t\r\n", "example-service-key"),
             ("first second", "first second"),
         ];
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -396,12 +396,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrollment_rejects_whitespace_only_tokens() {
+    async fn enrollment_rejects_whitespace_only_service_keys() {
         let endpoint = "http://127.0.0.1:9/enroll".parse().unwrap();
         let client = local_client(reqwest::redirect::Policy::none());
         for input in ["", "\n", " \t\r\n"] {
             let error = enroll(&client, &endpoint, input).await.unwrap_err();
-            assert_eq!(error.to_string(), "enrollment token cannot be empty");
+            assert_eq!(error.to_string(), "service key cannot be empty");
         }
     }
 
@@ -413,7 +413,7 @@ mod tests {
                 enroll(
                     &local_client(reqwest::redirect::Policy::default()),
                     &endpoint,
-                    "example-token"
+                    "example-service-key"
                 )
                 .await
                 .is_err()

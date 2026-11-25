@@ -9,7 +9,7 @@ inventory:
   #   name: node-01
   #   address: 192.0.2.10
   #   mac: "00:11:22:33:44:55"
-  #   credentialsProfile: bmc # Profile name in the credentials file.
+  #   credentialsProfile: compute # Profile name in the credentials file.
   computeZone: "" # Default compute zone for every target.
   nodeGroup: "" # Default node group for every target.
   labels: {} # Default labels applied to every target.
@@ -31,12 +31,14 @@ credentials:
   existingSecret: fleet-intelligence-bmc-credentials
   secretKey: credentials.json
 
-# Fleet Intelligence destination and shared enrollment token.
+# Fleet Intelligence destination and shared service key.
 backend:
   url: https://data.fleet-intelligence.nvidia.com
-  enrollmentToken:
-    existingSecret: fleet-intelligence-enrollment-token
-    secretKey: enrollment-token
+  # Set serviceKey when using the service key Secret from the installation guide.
+  # serviceKey:
+  #   existingSecret: fleet-intelligence-service-key
+  #   secretKey: service-key
+  # Without serviceKey, the chart honors a supplied agentToken reference or uses the 1.0.0 defaults.
 
 # External OTLP/gRPC endpoint; requires otelGateway.enabled=false.
 telemetry:

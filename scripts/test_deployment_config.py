@@ -312,7 +312,7 @@ printf '%s\\n' "$@"
 printf 'rust_log=%s\\n' "${RUST_LOG-}"
 printf 'gateway_log=%s\\n' "${FLEETINT_OTEL_GATEWAY_LOG_LEVEL-}"
 printf 'gateway_config=%s\\n' "${FLEETINT_GATEWAY_LOG_CONFIG-}"
-printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
+printf 'service_key=%s\\n' "${FLEETINT_SERVICE_KEY-}"
 ''')
         self.mock.chmod(0o755)
         self.launcher = self.directory / "run-service"
@@ -334,7 +334,7 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("FLEETINT_") and key != "RUST_LOG"}
         env.update(settings or {})
-        env.setdefault("FLEETINT_ENROLLMENT_TOKEN", "test-token")
+        env.setdefault("FLEETINT_SERVICE_KEY", "test-service-key")
         env["TEST_RENDER_ARGS"] = str(self.directory / "render-args")
         command = [shell, str(self.nico if nico else self.launcher)]
         if not nico:
@@ -364,7 +364,7 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
                 self.assertEqual(self.arguments(self.launch(settings, shell=shell)), expected)
 
     def test_packaged_defaults_match_helm(self):
-        settings = self.defaults | {"FLEETINT_ENROLLMENT_TOKEN": "test-token"}
+        settings = self.defaults | {"FLEETINT_SERVICE_KEY": "test-service-key"}
         self.compare_collector(settings)
         rendered = self.helm()
         for name, expected in (("RUST_LOG", self.defaults["RUST_LOG"]),
@@ -385,22 +385,30 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
             "bmcCollector.latencyProbe.enabled": "false",
         })
 
-    def test_enrollment_token_secret_is_shared_by_both_workloads(self):
-        for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
-            with self.subTest(default_secret=template):
-                rendered = self.helm(template=template)
-                self.assertRegex(rendered, r'secretKeyRef:\s+'
-                                 r'name: "fleet-intelligence-enrollment-token"\s+'
-                                 r'key: "enrollment-token"')
-        settings = {"backend.enrollmentToken.existingSecret": "collector-enrollment",
-                    "backend.enrollmentToken.secretKey": "credential"}
-        for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
-            with self.subTest(template=template):
-                rendered = self.helm(settings, template)
-                self.assertRegex(rendered, r'- name: FLEETINT_ENROLLMENT_TOKEN\s+valueFrom:\s+'
-                                 r'secretKeyRef:\s+name: "collector-enrollment"\s+key: "credential"')
-        config = self.helm(settings, "otel-gateway-configmap.yaml")
-        self.assertIn("sak_token: ${env:FLEETINT_ENROLLMENT_TOKEN}", config)
+    def test_service_key_secret_is_shared_by_both_workloads(self):
+        legacy = {"backend.agentToken.existingSecret": "custom-agent-token",
+                  "backend.agentToken.secretKey": "legacy-key"}
+        service_key = {"backend.serviceKey.existingSecret": "custom-service-key",
+                       "backend.serviceKey.secretKey": "credential"}
+        cases = (
+            ("1.0.0 defaults", {}, "fleet-intelligence-oob-collector-agent-token", "agent-token"),
+            ("1.0.0 name override", {"backend.agentToken.existingSecret": "custom-agent-token"},
+             "custom-agent-token", "agent-token"),
+            ("1.0.0 key override", {"backend.agentToken.secretKey": "legacy-key"},
+             "fleet-intelligence-oob-collector-agent-token", "legacy-key"),
+            ("1.0.0 explicit reference", legacy, "custom-agent-token", "legacy-key"),
+            ("service key reference", service_key, "custom-service-key", "credential"),
+            ("service key takes precedence", legacy | service_key, "custom-service-key", "credential"),
+        )
+        for case, settings, secret, key in cases:
+            for template in ("bmc-collector-deployment.yaml", "otel-gateway-deployment.yaml"):
+                with self.subTest(case=case, template=template):
+                    rendered = self.helm(settings, template)
+                    self.assertRegex(rendered,
+                                     r'- name: FLEETINT_SERVICE_KEY\s+valueFrom:\s+secretKeyRef:\s+'
+                                     rf'name: "{re.escape(secret)}"\s+key: "{re.escape(key)}"')
+        config = self.helm(service_key, "otel-gateway-configmap.yaml")
+        self.assertIn("sak_token: ${env:FLEETINT_SERVICE_KEY}", config)
 
     def test_empty_collector_settings_use_defaults(self):
         self.compare_collector({name: "" for name in (
@@ -431,14 +439,18 @@ printf 'token=%s\\n' "${FLEETINT_ENROLLMENT_TOKEN-}"
                         self.assertEqual(result.stdout, "")
                         self.assertIn(name, result.stderr)
 
-    def test_token_file_precedence_and_secret_stays_out_of_arguments(self):
-        token = self.directory / "token"
-        token.write_text("file-token\n")
-        result = self.launch({"FLEETINT_ENROLLMENT_TOKEN_FILE": str(token), "FLEETINT_ENROLLMENT_TOKEN": "environment-token"})
-        args = self.arguments(result)
-        self.assertNotIn("file-token", " ".join(args))
-        self.assertNotIn("environment-token", result.stdout)
-        self.assertIn("token=file-token", result.stdout)
+    def test_service_key_file_takes_precedence_for_both_services(self):
+        key_file = self.directory / "service-key"
+        key_file.write_text("file-key\n")
+        settings = {"FLEETINT_SERVICE_KEY_FILE": str(key_file), "FLEETINT_SERVICE_KEY": "environment-key"}
+        for service in ("collector", "gateway"):
+            with self.subTest(service=service):
+                result = self.launch(settings, service=service)
+                self.assertNotIn("file-key", " ".join(self.arguments(result)))
+                self.assertNotIn("environment-key", result.stdout)
+                self.assertIn("service_key=file-key", result.stdout)
+        gateway_config = (PACKAGE / "config/gateway.yaml").read_text()
+        self.assertIn("sak_token: ${env:FLEETINT_SERVICE_KEY}", gateway_config)
 
     def test_nico_log_default_and_override_are_independent(self):
         for shell in ("sh", "bash"):

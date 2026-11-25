@@ -17,17 +17,17 @@ getent passwd fleetint-oob
 bmc-collector --help >/dev/null
 bmc-collector run --help >/dev/null
 sh /startup.sh /usr/lib/fleetint-oob/run-service /usr/lib/systemd/system
-# An explicitly requested token file must never silently fall back to an env token.
+# An explicitly requested service key file must never silently fall back to an inline key.
 for shell in /bin/sh /bin/bash; do
     for service in collector gateway; do
         status=0
-        runuser -u fleetint-oob -- env FLEETINT_ENROLLMENT_TOKEN=test-token \
-            FLEETINT_ENROLLMENT_TOKEN_FILE=/etc/fleetint-oob/service.conf \
+        runuser -u fleetint-oob -- env FLEETINT_SERVICE_KEY=test-service-key \
+            FLEETINT_SERVICE_KEY_FILE=/etc/fleetint-oob/service.conf \
             "$shell" /usr/lib/fleetint-oob/run-service "$service" || status=$?
         [ "$status" = 2 ]
     done
 done
-if runuser -u fleetint-oob -- env -u FLEETINT_ENROLLMENT_TOKEN -u FLEETINT_ENROLLMENT_TOKEN_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
+if runuser -u fleetint-oob -- env -u FLEETINT_SERVICE_KEY -u FLEETINT_SERVICE_KEY_FILE /usr/lib/fleetint-oob/run-service gateway; then exit 1; fi
 cmp /expected-NOTICE /usr/share/doc/fleetint-oob/NOTICE
 # Execute the real hook against an alternate root without any executable tools.
 alternate_root="$work/alternate-root"

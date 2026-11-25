@@ -87,12 +87,12 @@ Use `--insecure-tls` only when the test BMC certificate cannot be validated.
 Run the long-running collector mode and submit to a backend:
 
 ```bash
-: "${FLEETINT_ENROLLMENT_TOKEN:?Set FLEETINT_ENROLLMENT_TOKEN before continuing}"
+: "${FLEETINT_SERVICE_KEY:?Set FLEETINT_SERVICE_KEY before continuing}"
 cargo run --locked -- run \
   --backend-url https://api.example.com
 ```
 
-The CLI reads the enrollment token from `FLEETINT_ENROLLMENT_TOKEN`, keeping it out of the process arguments.
+The CLI reads the service key from `FLEETINT_SERVICE_KEY`, keeping it out of the process arguments.
 
 ### Collector TOML
 
@@ -112,7 +112,7 @@ name = "node-01"
 ip = "192.0.2.10"
 port = 443
 mac = "00:11:22:33:44:55"
-credentials_profile = "bmc"
+credentials_profile = "compute"
 labels = { rack = "rack-12" }
 ```
 
@@ -158,7 +158,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 | Setting | Description |
 | --- | --- |
 | `FLEETINT_BACKEND_URL` or `--backend-url` | Fleet Intelligence API base address, without a path. |
-| `FLEETINT_ENROLLMENT_TOKEN` or `--enrollment-token` | Enrollment token. Prefer the environment variable. |
+| `FLEETINT_SERVICE_KEY` or `--service-key` | Service key for Fleet Intelligence with the **Enroll Machines** scope. Prefer the environment variable. |
 | `--interval-seconds` | Wait time after a cycle ends before the next starts. Defaults to `86400`; `0` is treated as one second. |
 
 `RUST_LOG` sets the log level and defaults to `info`.
@@ -191,7 +191,7 @@ These notes describe how the collector works internally. Read them before changi
 
 **Upload queue.** Completed inventories pass through a bounded channel holding at most twice the target concurrency. Inventory item results are matched to submissions by position. Attestation results are matched by normalized BMC MAC, regardless of response order or MAC formatting. A missing or duplicate result leaves only that target unconfirmed, and an unreadable response leaves its batch unconfirmed. Unexpected rows are reported separately, and accepted items are never retried because another item failed. Attestation finishes collection before uploading, which keeps nonce-driven JWT rotation and the authentication retry deterministic. Attestation upload batches are bounded by the target concurrency. Targets that fail as a whole are held for a retry pass about five minutes after the first pass, and only their final results are uploaded; on shutdown, held inventory is uploaded as it was and attestation is not uploaded. A probe round uses one inventory dispatcher admission, and an interception check against an unroutable address runs once per inventory phase.
 
-**Backend transport.** Enrollment, inventory, nonce, and attestation requests share `backend-client`. The session owns the enrollment credentials, the current JWT, and the enrollment HTTP client, and re-enrollment reuses that client. Only a typed HTTP `401` counts as a JWT rejection; a `403`, or an error message that merely contains `401`, does not trigger re-enrollment. Backend requests default to a 30-second timeout with a connect timeout of at most 10 seconds; nonce and attestation requests use `--timeout-seconds`. Enrollment and inventory follow redirects; nonce and attestation requests don't. Enrollment and inventory paths extend the configured base path, while attestation paths replace it, so the backend URL should be an API origin. CLI help shows the token environment variable's name, never its value.
+**Backend transport.** Enrollment, inventory, nonce, and attestation requests share `backend-client`. The session owns the enrollment credentials, the current JWT, and the enrollment HTTP client, and re-enrollment reuses that client. Only a typed HTTP `401` counts as a JWT rejection; a `403`, or an error message that merely contains `401`, does not trigger re-enrollment. Backend requests default to a 30-second timeout with a connect timeout of at most 10 seconds; nonce and attestation requests use `--timeout-seconds`. Enrollment and inventory follow redirects; nonce and attestation requests don't. Enrollment and inventory paths extend the configured base path, while attestation paths replace it, so the backend URL should be an API origin. CLI help shows the service key environment variable's name, never its value.
 
 **Sanitized types.** Product-model URI and error fields use transparent sanitized string types with private inner values, so every public construction path applies the same sanitization, including callers that build models without the Redfish source. They serialize as plain strings. Absolute and scheme-relative references keep only their path and fragment; relative paths stay relative with the query removed.
 

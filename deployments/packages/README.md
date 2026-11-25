@@ -59,7 +59,7 @@ Validate systemd startup, service sandboxing, reboot behavior, and shutdown duri
 
 ## Docker validation
 
-`make debian-test` builds the pinned native sources and nFPM manifest in Docker, installs the actual package in Debian 12, starts all three daemons under the service account, and verifies enrollment and authenticated gateway export against a loopback fixture. It checks upgrade/reinstall transactions, active-service restarts, visible service-management failures, removal and purge, retention of operator configuration and credentials, environment/file token selection, configuration-failure handling, and permission rules without following credential symlinks. No customer backend or BMC is contacted.
+`make debian-test` builds the pinned native sources and nFPM manifest in Docker, installs the actual package in Debian 12, starts all three daemons under the service account, and verifies enrollment and authenticated gateway export against a loopback fixture. It checks upgrade/reinstall transactions, active-service restarts, visible service-management failures, removal and purge, retention of operator configuration and credentials, service key file precedence, configuration-failure handling, and permission rules without following credential symlinks. No customer backend or BMC is contacted.
 
 `make package-snapshot` writes an unsigned snapshot to `dist/snapshot/`.
 `make debian-package PACKAGE_VERSION=1.2.3-rc.1` overrides the release version.
