@@ -143,12 +143,17 @@ impl NicoRestEndpointSource {
             .send()
             .await
             .map_err(|_| OAUTH2_FAILED)?;
+        // A response arrived, so later errors keep its status; a send failure
+        // above has none.
         let status = response.status();
         let body = read_bounded(response, MAX_TOKEN_RESPONSE_BYTES)
             .await
             .map_err(|error| match error {
-                BodyError::TooLarge => "OAuth2 token response exceeds 128 KiB",
-                BodyError::Read => OAUTH2_FAILED,
+                BodyError::TooLarge => format!(
+                    "OAuth2 token response exceeds 128 KiB (HTTP {})",
+                    status.as_u16()
+                ),
+                BodyError::Read => format!("{OAUTH2_FAILED} (HTTP {})", status.as_u16()),
             })?;
         token_authorization(status, &body)
     }
@@ -260,21 +265,13 @@ impl NicoRestEndpointSource {
                 .get(machine.site_id.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let endpoint = machine
-                .into_endpoint(self.config.credentials_profile.clone())
-                .and_then(|mut endpoint| {
-                    // An unusable hostname skips only this machine, before the
-                    // record reaches the shared finalizer.
-                    endpoint.name = super::normalize_value("name", endpoint.name.take())
-                        .map_err(|_| SkipReason::InvalidHostname)?;
-                    endpoint.compute_zone = compute_zone;
-                    endpoint.node_group = node_group;
-                    Ok(endpoint)
-                });
-            match endpoint {
-                Ok(endpoint) => candidates.push((machine_id, endpoint)),
-                Err(reason) => skips.add(reason, machine_id),
+            let mut candidate =
+                machine.into_candidate(machine_id, self.config.credentials_profile.clone());
+            if let Ok(endpoint) = &mut candidate.endpoint {
+                endpoint.compute_zone = compute_zone;
+                endpoint.node_group = node_group;
             }
+            candidates.push(candidate);
         }
         let endpoints = drop_identity_conflicts(candidates, &mut skips);
         skips.log(endpoints.len(), ids.len());
@@ -367,15 +364,18 @@ impl Skips {
 /// Drop every machine whose BMC MAC or IP is also claimed by another machine.
 /// The MAC is the machine's identity, so neither record of a conflict can be
 /// trusted; the rest of the fleet is still collected.
-fn drop_identity_conflicts(
-    candidates: Vec<(String, Endpoint)>,
-    skips: &mut Skips,
-) -> Vec<Endpoint> {
+fn drop_identity_conflicts(candidates: Vec<Candidate>, skips: &mut Skips) -> Vec<Endpoint> {
+    // Claims include machines that fail a later field check: a record with a
+    // bad hostname or MAC still makes its BMC IP or MAC ambiguous.
     let mut macs: HashMap<MacAddress, Vec<&str>> = HashMap::new();
     let mut ips: HashMap<IpAddr, Vec<&str>> = HashMap::new();
-    for (machine_id, endpoint) in &candidates {
-        macs.entry(endpoint.mac).or_default().push(machine_id);
-        ips.entry(endpoint.ip).or_default().push(machine_id);
+    for candidate in &candidates {
+        if let Some(mac) = candidate.mac {
+            macs.entry(mac).or_default().push(&candidate.machine_id);
+        }
+        if let Some(ip) = candidate.ip {
+            ips.entry(ip).or_default().push(&candidate.machine_id);
+        }
     }
     for (mac, machine_ids) in macs.iter().filter(|(_, ids)| ids.len() > 1) {
         tracing::warn!(bmc_mac = %mac, machine_ids = %machine_ids.join(", "), "skipping NICo machines that share a BMC MAC");
@@ -393,18 +393,32 @@ fn drop_identity_conflicts(
             None
         }
     };
+    // A field-check reason takes precedence, so each machine is counted once.
     let reasons: Vec<_> = candidates
         .iter()
-        .map(|(_, endpoint)| conflict(endpoint))
+        .map(|candidate| match &candidate.endpoint {
+            Ok(endpoint) => conflict(endpoint),
+            Err(reason) => Some(*reason),
+        })
         .collect();
     let mut endpoints = Vec::with_capacity(candidates.len());
-    for ((machine_id, endpoint), reason) in candidates.into_iter().zip(reasons) {
-        match reason {
-            Some(reason) => skips.add(reason, machine_id),
-            None => endpoints.push(endpoint),
+    for (candidate, reason) in candidates.into_iter().zip(reasons) {
+        match (reason, candidate.endpoint) {
+            (Some(reason), _) => skips.add(reason, candidate.machine_id),
+            (None, Ok(endpoint)) => endpoints.push(endpoint),
+            (None, Err(_)) => unreachable!("a skipped candidate always has a reason"),
         }
     }
     endpoints
+}
+
+/// One listed machine: the BMC identity it claims, and its endpoint or the
+/// reason it is skipped.
+struct Candidate {
+    machine_id: String,
+    mac: Option<MacAddress>,
+    ip: Option<IpAddr>,
+    endpoint: std::result::Result<Endpoint, SkipReason>,
 }
 
 /// Turn a token endpoint response into a Bearer authorization header. Errors
@@ -419,7 +433,8 @@ fn token_authorization(status: reqwest::StatusCode, body: &[u8]) -> Result<Heade
     struct ErrorResponse {
         error: String,
     }
-    if !status.is_success() {
+    // RFC 6749 section 5.1: a successful token response is HTTP 200 exactly.
+    if status != reqwest::StatusCode::OK {
         // Name only an error code registered by RFC 6749 section 5.2; anything
         // else could be provider text.
         let code = serde_json::from_slice::<ErrorResponse>(body)
@@ -641,46 +656,60 @@ struct BmcInfo {
 }
 
 impl Machine {
-    fn into_endpoint(
-        self,
-        credentials_profile: Option<String>,
-    ) -> std::result::Result<Endpoint, SkipReason> {
+    /// Record the BMC identity this machine claims, then check its fields.
+    /// Decommissioned machines and machines without BMC metadata claim nothing;
+    /// otherwise each BMC IP and MAC that parses is claimed, even when another
+    /// field makes the machine unusable.
+    fn into_candidate(self, machine_id: String, credentials_profile: Option<String>) -> Candidate {
+        let mut candidate = Candidate {
+            machine_id,
+            mac: None,
+            ip: None,
+            endpoint: Err(SkipReason::Decommissioned),
+        };
         if self
             .status
             .as_deref()
             .is_some_and(|status| matches!(status, "Decommissioned" | "Decommissioning"))
         {
-            return Err(SkipReason::Decommissioned);
+            return candidate;
         }
         // Missing metadata usually means the identity lacks provider access.
-        let bmc = self
-            .metadata
-            .and_then(|metadata| metadata.bmc_info)
-            .ok_or(SkipReason::MissingBmcMetadata)?;
-        let ip = bmc
+        let Some(bmc) = self.metadata.and_then(|metadata| metadata.bmc_info) else {
+            candidate.endpoint = Err(SkipReason::MissingBmcMetadata);
+            return candidate;
+        };
+        candidate.ip = bmc
             .ip
             .and_then(|ip| ip.parse::<IpAddr>().ok())
             // `::ffff:a.b.c.d` is the IPv4 peer `a.b.c.d`. Canonicalize once so the
             // duplicate and placeholder checks and the Redfish address agree.
             .map(|ip| ip.to_canonical())
             // An unspecified address is a placeholder, never a reachable BMC.
-            .filter(|ip| !ip.is_unspecified())
-            .ok_or(SkipReason::InvalidBmcIp)?;
-        let mac = bmc
-            .mac
-            .and_then(|mac| mac.parse::<MacAddress>().ok())
-            .ok_or(SkipReason::InvalidBmcMac)?;
-        Ok(Endpoint {
-            kind: TargetKind::Compute,
-            name: self.hostname.filter(|name| !name.trim().is_empty()),
-            ip,
-            port: None,
-            mac,
-            credentials_profile,
-            compute_zone: None,
-            node_group: None,
-            labels: BTreeMap::new(),
-        })
+            .filter(|ip| !ip.is_unspecified());
+        candidate.mac = bmc.mac.and_then(|mac| mac.parse::<MacAddress>().ok());
+        let (ip, mac, hostname) = (candidate.ip, candidate.mac, self.hostname);
+        candidate.endpoint = (|| {
+            let ip = ip.ok_or(SkipReason::InvalidBmcIp)?;
+            let mac = mac.ok_or(SkipReason::InvalidBmcMac)?;
+            // An unusable hostname skips only this machine, before the record
+            // reaches the shared finalizer.
+            let name =
+                super::normalize_value("name", hostname.filter(|name| !name.trim().is_empty()))
+                    .map_err(|_| SkipReason::InvalidHostname)?;
+            Ok(Endpoint {
+                kind: TargetKind::Compute,
+                name,
+                ip,
+                port: None,
+                mac,
+                credentials_profile,
+                compute_zone: None,
+                node_group: None,
+                labels: BTreeMap::new(),
+            })
+        })();
+        candidate
     }
 }
 
@@ -1017,6 +1046,11 @@ mod tests {
             ),
             (StatusCode::BAD_GATEWAY, "sensitive", "(HTTP 502)"),
             (
+                StatusCode::PARTIAL_CONTENT,
+                r#"{"access_token":"sensitive","token_type":"Bearer"}"#,
+                "(HTTP 206)",
+            ),
+            (
                 StatusCode::OK,
                 r#"{"access_token":"sensitive"}"#,
                 "not valid JSON",
@@ -1119,6 +1153,7 @@ mod tests {
                 r#"{"access_token":"sensitive","token_type":"MAC"}"#.into(),
             ),
             (200, "x".repeat(128 * 1024 + 1)),
+            (502, "x".repeat(128 * 1024 + 1)),
         ] {
             let reply = Reply {
                 status,
@@ -1134,6 +1169,10 @@ mod tests {
             .await;
             let error = source.discover().await.unwrap_err().to_string();
             assert!(error.contains("OAuth2"), "{error}");
+            // A failing status is kept even when its body cannot be used.
+            if status != 200 {
+                assert!(error.contains(&format!("HTTP {status}")), "{error}");
+            }
             for sensitive in ["fixture-secret", "fixture-client", "sensitive", "http://"] {
                 assert!(!error.contains(sensitive), "{error}");
             }
@@ -1437,7 +1476,24 @@ mod tests {
         server.await.unwrap();
     }
 
-    fn endpoint(index: usize, mac: &str, ip: &str) -> (String, Endpoint) {
+    #[tokio::test]
+    async fn machines_failing_field_checks_still_claim_their_bmc_identity() {
+        // Machine 1 has an unusable hostname and repeats machine 0's MAC or IP.
+        // Neither claimant is collected; the unrelated machine 2 still is.
+        for (key, value) in [("mac", "02:00:00:00:00:00"), ("ip", "192.0.2.1")] {
+            let mut second = machine(1);
+            second["hostname"] = "é".repeat(513).into();
+            second["metadata"]["bmcInfo"][key] = value.into();
+            let rows = vec![machine(0), second, machine(2)];
+            let (source, _token, server) = fixture(vec![page(1, 3, rows)]).await;
+            let endpoints = source.discover().await.unwrap();
+            let names: Vec<_> = endpoints.iter().map(|e| e.name.as_deref()).collect();
+            assert_eq!(names, [Some("host-2")], "{key}");
+            server.await.unwrap();
+        }
+    }
+
+    fn endpoint(index: usize, mac: &str, ip: &str) -> Candidate {
         let endpoint = Endpoint {
             kind: TargetKind::Compute,
             name: None,
@@ -1449,7 +1505,19 @@ mod tests {
             node_group: None,
             labels: BTreeMap::new(),
         };
-        (format!("machine-{index}"), endpoint)
+        Candidate {
+            machine_id: format!("machine-{index}"),
+            mac: Some(endpoint.mac),
+            ip: Some(endpoint.ip),
+            endpoint: Ok(endpoint),
+        }
+    }
+
+    fn failed(candidate: Candidate, reason: SkipReason) -> Candidate {
+        Candidate {
+            endpoint: Err(reason),
+            ..candidate
+        }
     }
 
     #[test]
@@ -1466,14 +1534,32 @@ mod tests {
             endpoint(2, "02:00:00:00:00:02", "192.0.2.2"),
             endpoint(3, "02:00:00:00:00:03", "192.0.2.2"),
             endpoint(4, "02:00:00:00:00:04", "192.0.2.4"),
+            // machine-5 has a bad hostname and claims machine-6's MAC;
+            // machine-7 has a bad MAC and claims machine-8's IP. Each failed
+            // machine keeps its own reason; its partner is dropped as a conflict.
+            failed(
+                endpoint(5, "02:00:00:00:00:06", "192.0.2.5"),
+                SkipReason::InvalidHostname,
+            ),
+            endpoint(6, "02:00:00:00:00:06", "192.0.2.6"),
+            Candidate {
+                mac: None,
+                ..failed(
+                    endpoint(7, "02:00:00:00:00:07", "192.0.2.8"),
+                    SkipReason::InvalidBmcMac,
+                )
+            },
+            endpoint(8, "02:00:00:00:00:08", "192.0.2.8"),
         ];
         let kept = drop_identity_conflicts(candidates, &mut skips);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].mac.to_string(), "02:00:00:00:00:04");
         assert_eq!(skips.count(SkipReason::MissingBmcMetadata), 5);
-        assert_eq!(skips.count(SkipReason::DuplicateBmcMac), 2);
-        assert_eq!(skips.count(SkipReason::DuplicateBmcIp), 2);
-        assert_eq!(skips.total(), 9);
+        assert_eq!(skips.count(SkipReason::InvalidHostname), 1);
+        assert_eq!(skips.count(SkipReason::InvalidBmcMac), 1);
+        assert_eq!(skips.count(SkipReason::DuplicateBmcMac), 3);
+        assert_eq!(skips.count(SkipReason::DuplicateBmcIp), 3);
+        assert_eq!(skips.total(), 13);
         assert_eq!(
             skips.0[&SkipReason::MissingBmcMetadata].1.len(),
             SKIP_EXAMPLES
