@@ -92,7 +92,7 @@ cargo run --locked -- run \
   --backend-url https://api.example.com
 ```
 
-The CLI reads the enrollment token from `FLEETINT_ENROLLMENT_TOKEN`, keeping it out of the process arguments.
+The CLI reads the Fleet Intelligence service key from `FLEETINT_ENROLLMENT_TOKEN`, keeping it out of the process arguments.
 
 ### Collector TOML
 
@@ -158,7 +158,7 @@ The executable is `bmc-collector`. Add `--help` to any command to list its optio
 | Setting | Description |
 | --- | --- |
 | `FLEETINT_BACKEND_URL` or `--backend-url` | Fleet Intelligence API base address, without a path. |
-| `FLEETINT_ENROLLMENT_TOKEN` or `--enrollment-token` | Enrollment token. Prefer the environment variable. |
+| `FLEETINT_ENROLLMENT_TOKEN` or `--enrollment-token` | Fleet Intelligence service key. Prefer the environment variable. |
 | `--interval-seconds` | Wait time after a cycle ends before the next starts. Defaults to `86400`; `0` is treated as one second. |
 
 `RUST_LOG` sets the log level and defaults to `info`.

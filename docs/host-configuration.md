@@ -7,9 +7,9 @@ Configure the DEB/RPM installation through files under `/etc/fleetint-oob/`. The
 | File | Purpose | Ownership and mode |
 | --- | --- | --- |
 | `/etc/fleetint-oob/config.toml` | Shared targets, placement, credential-file path, and NICo controls | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/service.conf` | Backend/token settings and service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
+| `/etc/fleetint-oob/service.conf` | Backend and service key settings, plus service environment variables | `root:root`, `0600`; systemd reads it before starting each service |
 | `/etc/fleetint-oob/credentials/credentials.json` | Operator-created BMC credentials | `root:fleetint-oob`, `0640` |
-| `/etc/fleetint-oob/enrollment-token` | Optional operator-created enrollment token file | `root:fleetint-oob`, `0640` |
+| `/etc/fleetint-oob/enrollment-token` | Optional operator-created service key file | `root:fleetint-oob`, `0640` |
 | `/etc/fleetint-oob/gateway.yaml` | OTLP receivers, backend export, and gateway processing | Installed root-owned, `0644` |
 
 Keep `/etc/fleetint-oob/` and its `credentials/` directory owned by `root:fleetint-oob` with mode `0750`. Installation grants service access to standard configuration and credential paths. Package hooks leave credential symlink targets unchanged. At custom paths or symlink targets, you provide read access for `fleetint-oob`, including access through parent directories. The service sandbox hides home directories and gives services private temporary directories; place persistent service credentials under `/etc`, not a user's home or `/tmp`.
@@ -81,12 +81,12 @@ Set these variables in `service.conf`:
 | `FLEETINT_BACKEND_URL` | `https://data.fleet-intelligence.nvidia.com` | Collector API origin, without an API path. |
 | `BACKEND_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health` | Gateway telemetry base; exports use `/metrics` and `/logs` beneath it. |
 | `ENROLL_ENDPOINT` | `https://data.fleet-intelligence.nvidia.com/api/v1/health/enroll` | Gateway enrollment URL. |
-| `FLEETINT_ENROLLMENT_TOKEN_FILE` | Empty | Protected enrollment token file used by the collector and gateway. |
-| `FLEETINT_ENROLLMENT_TOKEN` | Empty | Alternative inline environment-file token. Prefer the token file. |
+| `FLEETINT_ENROLLMENT_TOKEN_FILE` | Empty | Protected service key file used by the collector and gateway. |
+| `FLEETINT_ENROLLMENT_TOKEN` | Empty | Service key supplied directly in `service.conf`. Prefer a separate protected file. |
 
 When using another backend, set all three URL variables explicitly. Systemd environment files do not expand variable references, so `BACKEND_ENDPOINT=${FLEETINT_BACKEND_URL}/api/v1/health` does not construct a URL.
 
-The token file takes precedence over `FLEETINT_ENROLLMENT_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline token. The launchers load the token into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
+The service key file takes precedence over `FLEETINT_ENROLLMENT_TOKEN`. An explicitly configured file that is unreadable or empty stops collector/gateway startup; it does not fall back to the inline value. The launchers load the key into the process environment so it stays out of command-line arguments. Follow [rotation and ownership](credentials.md#rotation-and-ownership) when changing these credentials.
 
 ## Collection settings
 
@@ -132,7 +132,7 @@ logs_sse_max_backoff_seconds = 60
 
 The full [NICo collection controls](configuration.md#nico-collection-controls) table lists TOML names, defaults, and validation shared with Helm. Timing fields preserve a collector's enabled state; set its corresponding `*_enabled` field when enabling an otherwise disabled collector.
 
-NICo regenerates its private configuration from `config.toml` every time its service starts. Restart NICo after changing these controls. Files under `/run/fleetint-nico-health/` are temporary and replaced on startup; edit the source TOML under `/etc`.
+NICo regenerates its private configuration from `config.toml` every time its service starts. Restart NICo after changing these controls. Use the source TOML under `/etc` for edits and [rollback](#roll-back-nico-health-settings). Files under `/run/fleetint-nico-health/` are temporary.
 
 Resource-status settings live in `service.conf`:
 
@@ -152,9 +152,9 @@ System and Chassis status follow discovery cadence; Manager status follows manag
 
 The packaged `gateway.yaml` listens on loopback: OTLP gRPC at `127.0.0.1:4317`, OTLP HTTP at `127.0.0.1:4318`, and gateway health at `127.0.0.1:13133`. NICo's Prometheus endpoint is `http://127.0.0.1:9009/metrics`. Keep these local listeners private to the host.
 
-Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same enrollment token as the collector but enrolls separately.
+Edit `gateway.yaml` when changing the gateway's own listener addresses or processing/export configuration. Set its log level through `FLEETINT_OTEL_GATEWAY_LOG_LEVEL` in `service.conf`; this takes precedence over the log level in `gateway.yaml`. Changing `FLEETINT_OTLP_ENDPOINT` changes NICo's destination only; it does not change a gateway listener. The gateway uses the same service key as the collector but enrolls separately.
 
-Keep the gateway's token binding when editing its configuration so it reads the enrollment token from the service environment:
+Keep the gateway's `sak_token` binding when editing its configuration so it reads the service key from the service environment:
 
 ```yaml
 extensions:
@@ -199,16 +199,46 @@ When running the collector CLI directly, certificate verification is enabled unl
 
 ## Apply changes
 
-Use `sudo systemctl restart fleetint-oob.target` after changing shared configuration or environment settings. For changes limited to NICo controls, restart only NICo with `sudo systemctl restart fleetint-nico-health.service`. Check the individual service states and logs afterward, as described in [installation verification](host-installation.md#start-and-verify-collection).
+After editing configuration, apply the change to the affected services:
 
-For password and token rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
+1. For shared targets, placement, or settings used by several services, run `sudo systemctl restart fleetint-oob.target`. For a [collector-only installation](host-installation.md#keep-an-existing-nico-deployment), restart `fleetint-oob-collector.service` instead.
+2. For changes limited to `[nico_health]` controls or NICo environment settings, restart NICo with the commands below. Each start regenerates its private configuration; a failed generation prevents NICo from starting.
+
+   ```bash
+   sudo systemctl restart fleetint-nico-health.service
+   systemctl is-active fleetint-nico-health.service
+   sudo journalctl -u fleetint-nico-health.service -n 100 --no-pager
+   ```
+
+   If you changed a NICo environment setting that the collector reports, such as `FLEETINT_NICO_LOG_LEVEL`, also run `sudo systemctl restart fleetint-oob-collector.service` so the collector reports the new value.
+
+3. Confirm the affected services are active and address errors in their logs. Check fresh inventory and expected health telemetry in Fleet Intelligence, allowing for your selected polling intervals. Follow the full [installation verification](host-installation.md#start-and-verify-collection) when restarting the stack.
+
+The collector's configuration report describes configured values. It does not establish that a running NICo process has loaded your edits; complete the restart and telemetry checks.
+
+For password and service key rotation, follow [rotation and ownership](credentials.md#rotation-and-ownership). Changes to systemd unit files or drop-ins also require `sudo systemctl daemon-reload` before restarting the affected services.
+
+## Roll back NICo health settings
+
+1. Before editing, save a private copy of the working configuration and record the directory printed by the command.
+
+   ```bash
+   NICO_BACKUP_DIR="$(sudo mktemp -d /root/fleetint-nico-backup.XXXXXX)" &&
+     sudo install -m 0600 /etc/fleetint-oob/config.toml "$NICO_BACKUP_DIR/config.toml" &&
+     printf 'Saved working configuration in %s\n' "$NICO_BACKUP_DIR"
+   ```
+
+   If you also plan to edit NICo settings in `service.conf`, save it in the same protected directory. In the same terminal, run `sudo install -m 0600 /etc/fleetint-oob/service.conf "${NICO_BACKUP_DIR:?Set the backup directory}/service.conf"`.
+
+2. If the change causes problems, use `sudoedit /etc/fleetint-oob/config.toml` to restore the saved `[nico_health]` section. If you added the section and the saved file has none, remove it. If NICo settings were your only edits to that file, you can replace its entire contents with the backup. Restore any NICo settings you changed in `service.conf` too. Leave the current BMC targets, credential references, and enrollment settings in place.
+3. Use the NICo restart and log checks under [Apply changes](#apply-changes). Restarting regenerates NICo's configuration from the restored files. Run `sudo systemctl restart fleetint-oob-collector.service` to resume inventory and attestation immediately after restoring the shared configuration. Confirm the services are active and check fresh inventory and health telemetry for the affected BMCs in Fleet Intelligence.
 
 ## Troubleshooting
 
 | Problem | What to check |
 | --- | --- |
-| Service stops with exit status `2` | Invalid settings or an unreadable token file. Check the service log, correct the setting, and restart the affected service. |
-| Collector repeatedly fails to enroll | Enrollment token, backend addresses, host connectivity, proxy, and backend certificate trust. |
+| Service stops with exit status `2` | Invalid settings or an unreadable service key file. Check the service log, correct the setting, and restart the affected service. |
+| Collector repeatedly fails to enroll | Service key, backend addresses, host connectivity, proxy, and backend certificate trust. |
 | Inventory cannot read a BMC | Target address/MAC, credential profile or MAC override, and BMC certificate trust if you enabled verification. See [proxy and TLS](host-configuration.md#proxy-and-tls). |
 | NICo fails before starting | TOML syntax, a readable credentials file, and valid `[nico_health]` settings. |
 | Services run but telemetry is absent | BMC credentials, NICo logs, the OTLP destination, all gateway URLs, and gateway enrollment/export errors. |

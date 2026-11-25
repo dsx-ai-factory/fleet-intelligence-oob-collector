@@ -189,7 +189,7 @@ backend:
 
 `backend.url` defaults to the production endpoint shown above. Change it only if you use a different Fleet Intelligence endpoint. Use the API's base address, without a path such as `/v1/agent`. The URL can't contain a username, password, query string, or fragment.
 
-`backend.enrollmentToken` points to the Secret that holds the enrollment token. The collector and the bundled gateway both use it.
+`backend.enrollmentToken` points to the Secret that holds the Fleet Intelligence service key. The collector and the bundled gateway both use it.
 
 ## Components and telemetry
 
@@ -269,6 +269,8 @@ Controls apply to all NICo targets, independently of inventory and attestation. 
 Auto fallback uses the configured log-polling fields. Mode changes can replay or miss records when SSE and LogService histories differ; temporary checkpoints can be lost on pod replacement or native directory cleanup. Manager polling normally requires power-shelf metadata, but enabling resource-status logs broadens it to the renderer's generic Redfish endpoints.
 
 Apply with `helm upgrade`, or use flat snake_case fields under `[nico_health]` and restart `fleetint-nico-health.service` on native installations.
+
+Save a working copy before changing NICo settings. Follow the rollback steps for [Kubernetes](installation.md#roll-back-bundled-nico-health-settings) or [Linux packages](host-configuration.md#roll-back-nico-health-settings).
 
 ## Collection settings
 

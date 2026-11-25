@@ -103,7 +103,7 @@ struct RuntimeArgs {
     #[arg(long, env = "FLEETINT_BACKEND_URL")]
     backend_url: Option<String>,
 
-    /// Enrollment token used to enroll with Fleet Intelligence.
+    /// Fleet Intelligence service key.
     #[arg(long, env = "FLEETINT_ENROLLMENT_TOKEN", hide_env_values = true)]
     enrollment_token: Option<String>,
 
