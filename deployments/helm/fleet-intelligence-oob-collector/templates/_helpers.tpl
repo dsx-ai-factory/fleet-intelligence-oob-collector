@@ -106,6 +106,7 @@ affinity:
 {{- if eq (default dict .Values.endpointSource).type "nico" -}}
 {{- if not .Values.bmcCollector.enabled -}}{{- fail "NICo discovery requires bmcCollector.enabled=true" -}}{{- end -}}
 {{- if .Values.inventory.targets -}}{{- fail "NICo discovery requires inventory.targets to be empty" -}}{{- end -}}
+{{- if or (trim (.Values.inventory.computeZone | default "")) (trim (.Values.inventory.nodeGroup | default "")) -}}{{- fail "NICo discovery takes compute zone and node group from NICo sites; leave inventory.computeZone and inventory.nodeGroup empty" -}}{{- end -}}
 {{- if or .Values.nicoHardwareHealth.enabled .Values.otelGateway.enabled -}}
 {{- fail "NICo discovery requires nicoHardwareHealth.enabled=false and otelGateway.enabled=false; use the existing site services" -}}
 {{- end -}}

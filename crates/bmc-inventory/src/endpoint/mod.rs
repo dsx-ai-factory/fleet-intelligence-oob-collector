@@ -35,19 +35,6 @@ pub struct Endpoint {
     pub credentials_profile: Option<String>,
     /// Provider/user labels only. Derived labels are built during finalization.
     pub labels: BTreeMap<String, String>,
-    /// Who set `compute_zone` and `node_group`; decides precedence over
-    /// configured defaults during finalization.
-    pub placement_origin: PlacementOrigin,
-}
-
-/// Precedence of an endpoint's own placement relative to configured defaults.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlacementOrigin {
-    /// Set per target by the operator; it overrides configured defaults.
-    #[default]
-    Configured,
-    /// Derived from provider metadata; configured defaults override it.
-    Discovered,
 }
 
 /// Longest name, placement, or label value accepted for a target.

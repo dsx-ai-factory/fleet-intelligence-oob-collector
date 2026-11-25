@@ -116,6 +116,8 @@ class NicoDiscoveryHelmTests(unittest.TestCase):
             {"endpointSource.nico.apiName": "carbide"},
             {"endpointSource.nico.siteId": "obsolete-site"},
             {"inventory.targets": [{"address": "192.0.2.1", "mac": "00:11:22:33:44:55"}]},
+            {"inventory.computeZone": "zone-a"},
+            {"inventory.nodeGroup": "group-a"},
             {"nicoHardwareHealth.enabled": True},
             {"otelGateway.enabled": True},
             {"bmcCollector.enabled": False},

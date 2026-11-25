@@ -45,7 +45,6 @@ nv-redfish = { version = "0.22.0", features = [
     "pcie-devices",
     "update-service",
 ] }
-oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
 nv-redfish-bmc-mock = "0.22.0"
 nv-redfish-dispatcher = "0.22.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "socks", "system-proxy"] }

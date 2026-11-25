@@ -27,7 +27,7 @@ use super::{NicoHealthSettings, TargetKind};
 use crate::endpoint::MAX_LABEL_VALUE_BYTES as MAX_NICO_LABEL_VALUE_BYTES;
 use crate::endpoint::nico::{NicoRestConfig, NicoRestEndpointSource};
 use crate::endpoint::normalize_value as normalize_config_value;
-use crate::endpoint::{Endpoint, EndpointSource, PlacementOrigin, StaticEndpointSource};
+use crate::endpoint::{Endpoint, EndpointSource, StaticEndpointSource};
 
 const MAX_NICO_LABELS: usize = 32;
 const OOB_LABEL_NAME: &str = "oob";
@@ -106,7 +106,6 @@ impl SourceConfig {
                     name,
                     compute_zone,
                     node_group,
-                    placement_origin: PlacementOrigin::Configured,
                     ..endpoint.clone()
                 })
             })
@@ -141,17 +140,19 @@ struct EndpointDefaults {
 }
 
 impl EndpointDefaults {
-    /// Effective compute zone and node group, chosen independently: per-target
-    /// configuration beats configured defaults, which beat discovered values.
+    /// Effective compute zone and node group, chosen independently: the
+    /// endpoint's own value, else the configured default. Discovery sources
+    /// reject configured defaults, so discovered placement is used as is.
     fn placement(&self, endpoint: &Endpoint) -> (Option<String>, Option<String>) {
-        let pick = |own: &Option<String>, default: &Option<String>| match endpoint.placement_origin
-        {
-            PlacementOrigin::Configured => own.clone().or_else(|| default.clone()),
-            PlacementOrigin::Discovered => default.clone().or_else(|| own.clone()),
-        };
         (
-            pick(&endpoint.compute_zone, &self.compute_zone),
-            pick(&endpoint.node_group, &self.node_group),
+            endpoint
+                .compute_zone
+                .clone()
+                .or_else(|| self.compute_zone.clone()),
+            endpoint
+                .node_group
+                .clone()
+                .or_else(|| self.node_group.clone()),
         )
     }
 
@@ -415,8 +416,15 @@ fn parse_raw_config(contents: &str, path: &str) -> Result<Config, Box<dyn Error>
 }
 
 fn prepare_config(mut config: Config, path: &str) -> Result<ParsedConfig, Box<dyn Error>> {
-    if matches!(config.endpoint_source, SourceSelection::Nico(_)) && !config.targets.is_empty() {
-        return Err("NICo REST endpoint_source cannot be combined with [[targets]]".into());
+    if matches!(config.endpoint_source, SourceSelection::Nico(_)) {
+        if !config.targets.is_empty() {
+            return Err("NICo REST endpoint_source cannot be combined with [[targets]]".into());
+        }
+        // Each discovered machine takes placement from its NICo site. A single
+        // configured value would put every site in one group.
+        if config.compute_zone.is_some() || config.node_group.is_some() {
+            return Err("NICo REST endpoint_source takes compute_zone and node_group from NICo sites; remove the top-level compute_zone and node_group".into());
+        }
     }
     config.nico_health.validate()?;
     validate_nico_labels("labels", &config.labels)?;
@@ -565,7 +573,6 @@ impl RawTargetConfig {
             mac,
             credentials_profile: self.credentials_profile,
             labels: self.labels,
-            placement_origin: PlacementOrigin::Configured,
         })
     }
 }
@@ -1489,7 +1496,6 @@ mod tests {
             mac: "00:11:22:33:44:55".parse().unwrap(),
             credentials_profile: Some("bmc".into()),
             labels: BTreeMap::from([("rack".into(), "rack-1".into())]),
-            placement_origin: PlacementOrigin::Configured,
         }
     }
 
@@ -1532,50 +1538,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_defaults_override_discovered_placement_independently() {
-        for (zone, group) in [
-            (None, None),
-            (Some("configured-zone"), None),
-            (None, Some("configured-group")),
-            (Some("configured-zone"), Some("configured-group")),
-        ] {
-            let mut contents = String::new();
-            for (key, value) in [("compute_zone", zone), ("node_group", group)] {
-                if let Some(value) = value {
-                    contents.push_str(&format!("{key} = {value:?}\n"));
-                }
-            }
-            let settings = parse_config_parts(&with_test_credentials(&contents), "config.toml")
-                .unwrap()
-                .settings;
-            let mut endpoint = provider_endpoint();
-            endpoint.compute_zone = Some("site-zone".into());
-            endpoint.node_group = Some("site-group".into());
-            endpoint.placement_origin = PlacementOrigin::Discovered;
-            let expected = (
-                Some(zone.unwrap_or("site-zone")),
-                Some(group.unwrap_or("site-group")),
-            );
-            // Collection and the discover command agree on effective placement.
-            let selected = SourceConfig {
-                source: Box::new(ProviderSource(vec![endpoint].into())),
-                settings,
-            };
-            let resolved = selected
-                .settings
-                .resolve_from(selected.source.as_ref())
-                .await
-                .unwrap();
-            let target = &resolved.targets[0];
+    async fn provider_placement_is_used_as_is_and_gaps_stay_unset() {
+        // NICo configuration has no defaults, so a site value passes through and
+        // a missing one stays unset instead of being filled.
+        let settings = parse_config_parts(&with_test_credentials(""), "config.toml")
+            .unwrap()
+            .settings;
+        let mut placed = provider_endpoint();
+        placed.compute_zone = Some(" site-zone ".into());
+        placed.node_group = Some("site-group".into());
+        let mut unplaced = provider_endpoint();
+        unplaced.mac = "00:11:22:33:44:66".parse().unwrap();
+        unplaced.ip = "192.0.2.2".parse().unwrap();
+        unplaced.compute_zone = None;
+        unplaced.node_group = None;
+        let selected = SourceConfig {
+            source: Box::new(ProviderSource(vec![placed, unplaced].into())),
+            settings,
+        };
+        let expected = [(Some("site-zone"), Some("site-group")), (None, None)];
+        // Collection and the discover command agree on effective placement.
+        let resolved = selected
+            .settings
+            .resolve_from(selected.source.as_ref())
+            .await
+            .unwrap();
+        let discovered = selected.discover().await.unwrap();
+        for (index, expected) in expected.into_iter().enumerate() {
+            let target = &resolved.targets[index];
             assert_eq!(
                 (target.compute_zone.as_deref(), target.node_group.as_deref()),
                 expected
             );
-            let discovered = selected.discover().await.unwrap();
             assert_eq!(
                 (
-                    discovered[0].compute_zone.as_deref(),
-                    discovered[0].node_group.as_deref()
+                    discovered[index].compute_zone.as_deref(),
+                    discovered[index].node_group.as_deref()
                 ),
                 expected
             );
@@ -1828,7 +1826,6 @@ mod tests {
         let _cleanup = TestDirectoryCleanup(directory.clone());
         let path = directory.join("config.toml");
         let input = r#"
-            compute_zone = "zone"
             [credentials]
             file = "missing-bmc-credentials.json"
             [endpoint_source]
@@ -1852,10 +1849,6 @@ mod tests {
         assert_eq!(config.client_id_file, directory.join("client_id"));
         assert_eq!(config.client_secret_file, directory.join("client_secret"));
         let selected = load_source_config(path).await.unwrap();
-        assert_eq!(
-            selected.settings.defaults.compute_zone.as_deref(),
-            Some("zone")
-        );
         let discovery_error = selected.source.discover().await.unwrap_err().to_string();
         assert!(discovery_error.contains("OAuth2 client credential files"));
         assert!(!discovery_error.contains("header-value"));
@@ -1901,6 +1894,14 @@ mod tests {
                 .to_string()
                 .contains("cannot be combined")
         );
+        // Placement for discovered machines comes only from NICo sites.
+        for placement in ["compute_zone='zone'\n", "node_group='group'\n"] {
+            let error = parse_config_parts(&format!("{placement}{nico}"), "config.toml")
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("from NICo sites"), "{error}");
+        }
         for invalid in [
             nico.replace("type='nico'", "type='netbox'"),
             nico.replace(
